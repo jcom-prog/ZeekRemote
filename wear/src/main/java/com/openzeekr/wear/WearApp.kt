@@ -196,7 +196,7 @@ fun WearApp() {
                     Spacer(Modifier.height(10.dp))
                     Text("Getting key from phone…", textAlign = TextAlign.Center, style = MaterialTheme.typography.caption1)
                     Text(
-                        syncStatus ?: "Open OpenZeekr on your phone",
+                        syncStatus ?: "Open ZeekRemote on your phone",
                         textAlign = TextAlign.Center, style = MaterialTheme.typography.caption3,
                         color = MaterialTheme.colors.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp),
                     )
