@@ -174,6 +174,9 @@ class ConfigStore private constructor(private val prefs: SharedPreferences) {
             password = incoming.password.ifBlank { cur.password },
             vin = incoming.vin.ifBlank { cur.vin },
             accessToken = incoming.accessToken.ifBlank { cur.accessToken },
+            userId = incoming.userId.ifBlank { cur.userId },
+            accountUuid = incoming.accountUuid.ifBlank { cur.accountUuid },
+            azureToken = incoming.azureToken.ifBlank { cur.azureToken },
             // NOTE: region/host fields are intentionally NOT merged here. Their defaults are
             // non-blank (EU), so an absent key in a plain zeekr_secrets.json would deserialize to
             // the EU default and silently clobber the user's selected region. Region is changed only
