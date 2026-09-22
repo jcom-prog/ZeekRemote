@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <!-- Permissions, the BLE feature and the ProximityService are declared in :core
          (com.openzeekr.core) and merged in, so both :app and :wear inherit them. -->
 
@@ -22,6 +24,18 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Restore only this installed package's Digital Key service after reboot. A package that
+             Android has disabled (the old com.openzeekr.test build) receives no boot broadcast. -->
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!-- Send-to-car: register as a navigation / location target. Picking OpenZeekr from a
              map pin's share, a geo: link, or a "navigate with" chooser pushes that POI to the
