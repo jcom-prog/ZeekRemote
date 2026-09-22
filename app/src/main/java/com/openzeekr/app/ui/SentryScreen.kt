@@ -162,7 +162,7 @@ private fun enqueueDownload(context: Context, url: String, name: String) {
         val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         val req = DownloadManager.Request(Uri.parse(url))
             .setTitle("$name.mp4")
-            .setDescription("OpenZeekr sentry clip")
+            .setDescription("ZeekRemote sentry clip")
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "$name.mp4")
         dm.enqueue(req)
