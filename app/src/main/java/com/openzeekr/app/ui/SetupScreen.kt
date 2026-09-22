@@ -225,7 +225,7 @@ fun SetupScreen(
                 Text(
                     when (cfg.proximitySensitivity) {
                         "veryclose" -> "Unlocks within arm's reach · most secure"
-                        "far" -> "Unlocks within ~3–4 m · most convenient"
+                        "far" -> "Unlocks while approaching at ~3–4 m · locks around ~3 m when leaving"
                         else -> "Unlocks within ~1–2 m · locks as you walk away"
                     },
                     color = Brand.faint, fontSize = 11.5.sp,

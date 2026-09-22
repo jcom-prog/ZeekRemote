@@ -265,12 +265,25 @@ data class SecretsConfig(
     val sensitivityUnlockRssi: Int
         get() = when (proximitySensitivity) {
             "veryclose" -> -58
-            "far" -> -74
+            // Field-calibrated on the Zeekr 7GT: -74 dBm was only reached at the door and
+            // resulted in a ~10 s wait at 0 m. Start the confirmed-unlock path while the
+            // phone is still a few metres away so the BLE command completes before arrival.
+            "far" -> -80
             else -> -66 // close
         }
 
-    /** Lock RSSI = unlock − 8 dB hysteresis for the preset. */
-    val sensitivityLockRssi: Int get() = sensitivityUnlockRssi - 8
+    /**
+     * Walk-away thresholds are deliberately calibrated independently from approach unlock.
+     * In particular, the 7GT locks correctly around 3 m at -82 dBm. Moving that threshold
+     * together with the earlier `far` unlock would make a proven-good walk-away lock occur
+     * too late. The controller's direction latch + cooldown provide the remaining hysteresis.
+     */
+    val sensitivityLockRssi: Int
+        get() = when (proximitySensitivity) {
+            "veryclose" -> -66
+            "far" -> -82
+            else -> -74 // close
+        }
 
     companion object {
         /** Unlock can never be set weaker (more negative) than this — safety floor. */
