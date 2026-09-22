@@ -65,11 +65,17 @@ class ProximityController(
         val source: Source = Source.NONE,
         val zone: Zone = Zone.UNKNOWN,
         val lastAction: String = "",
+        val diagnostics: String = "",
         val error: String? = null,
     )
 
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state
+
+    /** Service-level wake/recovery information for field diagnosis without logcat. */
+    fun updateDiagnostics(value: String) {
+        _state.value = _state.value.copy(diagnostics = value)
+    }
 
     // Smoothing + trend.
     private var gattEma: Double? = null
@@ -473,6 +479,7 @@ class ProximityController(
                 Logx.d("prox", "unlock attempt #$attempt -> $r")
                 _state.value = _state.value.copy(lastAction = "unlock #$attempt · $r")
                 if (r == ControlResult.CONFIRMED) {
+                    ble.noteUnlockConfirmed()
                     armedUnlocked = true
                     lastTriggerMs = System.currentTimeMillis() // cooldown before a walk-away lock
                     break
