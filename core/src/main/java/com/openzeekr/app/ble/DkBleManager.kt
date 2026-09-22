@@ -55,6 +55,20 @@ class DkBleManager(base: Context) : DkTransport {
     val state: StateFlow<State> = _state
     @Volatile var lastError: String? = null; private set
 
+    /** Until this time, keep the phone's DK link warm after an unlock. The car may ask for the
+     *  authenticated BLE key again when drive authorization starts; losing the link immediately after
+     *  opening the door is what produced the intermittent "key not present" symptom. */
+    @Volatile var driveAuthorizationUntilMs: Long = 0L
+        private set
+
+    fun noteUnlockConfirmed() {
+        driveAuthorizationUntilMs = System.currentTimeMillis() + DRIVE_AUTHORIZATION_WINDOW_MS
+        Logx.d("ble", "unlock confirmed - keeping DK presence ready for drive authorization")
+    }
+
+    val driveAuthorizationActive: Boolean
+        get() = System.currentTimeMillis() < driveAuthorizationUntilMs
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var inboundHandler: ((Int, ByteArray) -> Unit)? = null
 
@@ -813,6 +827,7 @@ class DkBleManager(base: Context) : DkTransport {
         private const val HANDSHAKE_FAIL_THRESHOLD = 3
         private const val HANDSHAKE_BACKOFF_BASE_MS = 30_000L
         private const val HANDSHAKE_BACKOFF_MAX_MS = 120_000L
+        private const val DRIVE_AUTHORIZATION_WINDOW_MS = 3 * 60_000L
         @Volatile private var INSTANCE: DkBleManager? = null
         fun get(context: Context): DkBleManager =
             INSTANCE ?: synchronized(this) {
