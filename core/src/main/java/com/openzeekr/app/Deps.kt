@@ -89,7 +89,11 @@ class Deps(context: Context) {
         id.credential()?.let { ble.setCredential(it) }
     }
     val provisioning = DkProvisioning(config, dkIdentity, ble)
-    val lock = DkLockController(ble.session) { ble.refreshSession() }
+    val lock = DkLockController(
+        session = ble.session,
+        refresh = { ble.refreshSession() },
+        onUnlockConfirmed = { ble.noteUnlockConfirmed() },
+    )
     val phoneStatus = PhoneStatusProvider(appCtx)
     val rpa = RpaController(ble.session, appScope, phoneStatus::stateByte, rssi = ble::pollRemoteRssi)
     /** BLE self-calibration test harness (0x0190-0x0199) + BLE lock/unlock, driven from the Parking tab.
