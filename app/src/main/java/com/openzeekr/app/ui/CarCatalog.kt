@@ -70,7 +70,9 @@ object CarCatalog {
         // 7GT: keep Crystal White first. Shared-account vehicle-info responses can omit colorName;
         // colorFor() then deliberately falls back to the first entry. Jan's 7GT is Crystal White,
         // so Mystic Lilac here would revive the previously fixed wrong-colour regression.
-        CarModel("7GT", "Zeekr 7GT", "cars/car_7gt.webp", listOf(
+        // This render is deliberately tracked with the app. Keeping it in the gitignored,
+        // optional press-render directory made CI builds silently ship an empty hero card.
+        CarModel("7GT", "Zeekr 7GT", "cars/car_7gt.png", listOf(
             PaintColor("Crystal White", c(0xF0F1F3), "Pearl", recolor = floatArrayOf(0.94f, 0.95f, 0.96f)),
             PaintColor("Mystic Lilac", c(0xB9A7C4), "Pearl", recolor = floatArrayOf(0.801f, 0.731f, 0.844f)),
             PaintColor("Glacier Silver", c(0xCED3D9), "Metallic", recolor = floatArrayOf(0.81f, 0.83f, 0.86f)),

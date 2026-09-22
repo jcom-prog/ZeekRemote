@@ -301,10 +301,11 @@ no API key, no Google Play Services.
 ### Car renders (not shipped)
 
 The home screen tints a paint "identity card" and lays the car's white render on top.
-Those renders are Zeekr press images, so they're **gitignored** (like the secrets) and
-never published. Drop your own transparent white PNG/WebP per model into
-`app/src/main/assets/cars/` as `car_{001,x,7x,7gt,9x}.webp`. If absent, the hero simply
-shows the coloured card with no car — the app still builds and runs.
+Most renders are Zeekr press images, so they're **gitignored** (like the secrets) and
+not published. The Crystal White 7GT render is bundled as `car_7gt.png` so the primary
+7GT screen cannot silently lose its vehicle image in CI builds. For other models, drop
+your own transparent white PNG/WebP into `app/src/main/assets/cars/` using the asset path
+listed in `CarCatalog.kt`. If absent, the hero shows the coloured card without a car.
 
 ## Signing (`X-SIGNATURE`)
 
