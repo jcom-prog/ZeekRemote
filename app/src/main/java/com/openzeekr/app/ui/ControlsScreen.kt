@@ -351,6 +351,9 @@ private fun ProximityCard(deps: Deps) {
                     if (prox.lastAction.isNotBlank())
                         Text("last: ${prox.lastAction}", style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (prox.diagnostics.isNotBlank())
+                        Text("diagnostics: ${prox.diagnostics}", style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                     prox.error?.let { Text("⚠ $it", color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall) }
                 }
