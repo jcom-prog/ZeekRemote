@@ -298,7 +298,7 @@ fun AppRoot(deps: Deps) {
             title = { Text("A quick hello 👋") },
             text = {
                 Text(
-                    "OpenZeekr is a free, non-commercial passion project — not affiliated with Zeekr. " +
+                    "ZeekRemote is a free, non-commercial passion project — not affiliated with Zeekr. " +
                         "Yes, a lot of it is vibe-coded, but it also took a solid week of sleepless nights " +
                         "to make your key connect and unlock cleanly.\n\n" +
                         "If it's useful to you, a small tip keeps development going. Totally optional — " +
