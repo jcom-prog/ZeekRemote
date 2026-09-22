@@ -153,7 +153,7 @@ fun SecurityScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
             })
         }
         Text(
-            "Send-to-car isn't a button — OpenZeekr registers as a share target, so a pin dropped in Maps goes straight to the car's nav.",
+            "Send-to-car isn't a button — ZeekRemote registers as a share target, so a pin dropped in Maps goes straight to the car's nav.",
             color = Brand.faint, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
         )
     }
