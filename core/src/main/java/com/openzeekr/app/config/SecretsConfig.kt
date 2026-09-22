@@ -265,10 +265,10 @@ data class SecretsConfig(
     val sensitivityUnlockRssi: Int
         get() = when (proximitySensitivity) {
             "veryclose" -> -58
-            // Field-calibrated on the Zeekr 7GT: -74 dBm was only reached at the door and
-            // resulted in a ~10 s wait at 0 m. Start the confirmed-unlock path while the
-            // phone is still a few metres away so the BLE command completes before arrival.
-            "far" -> -80
+            // Field-calibrated on the Zeekr 7GT. -80 dBm improved the first test but still
+            // opened too close to the car. -86 dBm starts the confirmed-unlock path roughly
+            // twice as far out, leaving time for the BLE command to finish before arrival.
+            "far" -> -86
             else -> -66 // close
         }
 
