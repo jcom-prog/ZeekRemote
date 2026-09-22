@@ -84,7 +84,9 @@ fun SettingsScreen(deps: Deps, modifier: Modifier = Modifier) {
     var verTaps by remember { mutableStateOf(0) }
 
     fun set(update: (SecretsConfig) -> SecretsConfig) { cfg = update(cfg) }
-    val loggedIn = liveCfg.accessToken.isNotBlank()
+    // A bearer token without the numeric userId is only a partial/stale imported session.
+    // Treat it as signed out so the user can perform a full login and Digital Key signing works.
+    val loggedIn = liveCfg.accessToken.isNotBlank() && liveCfg.userId.isNotBlank()
     val baked = SecretsConfig.SECRETS_BAKED
 
     if (showHeroLab) { HeroLabScreen(modifier, onBack = { showHeroLab = false }); return }
@@ -129,15 +131,14 @@ fun SettingsScreen(deps: Deps, modifier: Modifier = Modifier) {
                 PrimaryButton("Sign in", Modifier.fillMaxWidth()) {
                     scope.launch {
                         status = "Signing in…"
-                        store.replace(cfg).fold(
-                            onSuccess = {
-                                status = when (val r = deps.auth.login()) {
-                                    is CallResult.Ok -> { cfg = store.current(); "Signed in ✓" }
-                                    is CallResult.Err -> "Sign-in failed: ${r.message}"
-                                }
-                            },
-                            onFailure = { status = "Save failed: ${it.message}" }
-                        )
+                        // VIN and account metadata are obtained by login itself. Persist only the
+                        // entered credentials here; strict whole-config validation would reject a
+                        // correctly signed-out account because it does not have a VIN yet.
+                        store.update { it.copy(email = cfg.email, password = cfg.password) }
+                        status = when (val r = deps.auth.login()) {
+                            is CallResult.Ok -> { cfg = store.current(); "Signed in ✓" }
+                            is CallResult.Err -> "Sign-in failed: ${r.message}"
+                        }
                     }
                 }
             } else {
@@ -262,7 +263,7 @@ fun SettingsScreen(deps: Deps, modifier: Modifier = Modifier) {
             }, modifier = Modifier.fillMaxWidth()) { Text("Check for updates") }
             Spacer(Modifier.size(4.dp))
             Text(
-                "OpenZeekr is an independent clean-room research app for your own Zeekr. " +
+                "ZeekRemote is an independent clean-room research app for your own Zeekr. " +
                     "Not affiliated with Zeekr, Geely or ECARX. MIT licensed.",
                 color = Brand.muted, fontSize = 12.sp,
             )
@@ -563,8 +564,8 @@ private fun shareEncryptedLog(ctx: android.content.Context): String {
         val send = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(Intent.EXTRA_STREAM, uri)
-            putExtra(Intent.EXTRA_SUBJECT, "OpenZeekr encrypted log $stamp")
-            putExtra(Intent.EXTRA_TEXT, "OpenZeekr encrypted debug log attached (readable only by the developers).")
+            putExtra(Intent.EXTRA_SUBJECT, "ZeekRemote encrypted log $stamp")
+            putExtra(Intent.EXTRA_TEXT, "ZeekRemote encrypted debug log attached (readable only by the developers).")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         val chooser = Intent.createChooser(send, "Send encrypted log")
