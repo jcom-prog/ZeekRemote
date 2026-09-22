@@ -6,6 +6,9 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
+import android.bluetooth.BluetoothAdapter
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -59,12 +62,29 @@ class ProximityService : Service() {
     // When we last held a live/engaged link. Used to keep reconnecting aggressively (foreground) for a
     // short window after a drop while you're moving — the walk-up case — vs. the slow offloaded scan.
     private var lastEngagedMs = 0L
+    private var lastWakeProbeMs = 0L
+    private var wakeReceiverRegistered = false
+
+    private val wakeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val reason = when (intent?.action) {
+                Intent.ACTION_SCREEN_ON -> "screen-on"
+                BluetoothAdapter.ACTION_STATE_CHANGED ->
+                    if (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR) == BluetoothAdapter.STATE_ON)
+                        "bluetooth-on" else null
+                else -> null
+            } ?: return
+            val deps = (application as? DepsHolder)?.deps ?: return
+            scope.launch { recoveryProbe(deps, reason) }
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startInForeground()
         val deps = (application as? DepsHolder)?.deps ?: return START_STICKY
+        registerWakeReceiver()
 
         // Presence signals delivered by BleScanReceiver (offloaded scan woke us).
         when (intent?.action) {
@@ -92,6 +112,7 @@ class ProximityService : Service() {
                 launch { runApproach(deps) }
                 launch { onMotionEscalate(deps) }
                 launch { manageWakeLock(deps) }
+                launch { watchdog(deps) }
                 launch { pollCarMessages(deps) }
             }
         }
@@ -123,6 +144,8 @@ class ProximityService : Service() {
             runCatching { it.ble.disarmPresenceScan() }
         }
         releaseWakeLock()
+        if (wakeReceiverRegistered) runCatching { unregisterReceiver(wakeReceiver) }
+        wakeReceiverRegistered = false
         scope.cancel()
         super.onDestroy()
     }
@@ -180,7 +203,7 @@ class ProximityService : Service() {
                         // low-power scan once you're clearly gone.
                         val moving = deps.motion.state.value == MotionMonitor.Motion.MOVING
                         val recentlyEngaged = System.currentTimeMillis() - lastEngagedMs < AGGRESSIVE_RECONNECT_MS
-                        val aggressive = moving && recentlyEngaged
+                        val aggressive = (moving && recentlyEngaged) || deps.ble.driveAuthorizationActive
                         if (offload && !aggressive) {
                             // Zero-CPU idle: the offloaded scan watches for the car and wakes us via
                             // BleScanReceiver. manageWakeLock releases the wakelock (nothing to hold for).
@@ -212,6 +235,54 @@ class ProximityService : Service() {
                 }
             }
             delay(RECONNECT_INTERVAL_MS)
+        }
+    }
+
+    private fun registerWakeReceiver() {
+        if (wakeReceiverRegistered) return
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
+        }
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+                registerReceiver(wakeReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            else registerReceiver(wakeReceiver, filter)
+            wakeReceiverRegistered = true
+        }.onFailure { Logx.w("svc", "wake receiver registration failed: ${it.message}") }
+    }
+
+    /** One bounded foreground probe for explicit wake signals. It never runs while a session is live,
+     *  never steals the BLE slot from Wear, and is debounced so screen flicker cannot create scans. */
+    private suspend fun recoveryProbe(deps: Deps, reason: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastWakeProbeMs < WAKE_PROBE_DEBOUNCE_MS) return
+        if (!deps.ble.hasCredential || !deps.ble.bluetoothAvailable) return
+        if (com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value) {
+            deps.proximity.updateDiagnostics("$reason · deferred to Watch")
+            return
+        }
+        if (deps.ble.state.value !in setOf(DkBleManager.State.IDLE, DkBleManager.State.ERROR)) return
+        lastWakeProbeMs = now
+        deps.proximity.updateDiagnostics("$reason · recovery scan")
+        Logx.d("svc", "$reason: immediate bounded recovery scan")
+        runCatching { deps.ble.disarmPresenceScan(); deps.ble.connect(null) }
+    }
+
+    /** Low-frequency state watchdog. This does not scan continuously: it only repairs an idle/error
+     *  state while motion or the post-unlock drive window says the key is actively needed. */
+    private suspend fun watchdog(deps: Deps) {
+        while (scope.isActive) {
+            val state = deps.ble.state.value
+            val needed = deps.motion.state.value == MotionMonitor.Motion.MOVING || deps.ble.driveAuthorizationActive
+            deps.proximity.updateDiagnostics(
+                "BLE ${state.name.lowercase()} · motion ${deps.motion.source.name.lowercase()}" +
+                    if (deps.ble.driveAuthorizationActive) " · start-key guarded" else ""
+            )
+            if (needed && state in setOf(DkBleManager.State.IDLE, DkBleManager.State.ERROR)) {
+                recoveryProbe(deps, if (deps.ble.driveAuthorizationActive) "start-key watchdog" else "motion watchdog")
+            }
+            delay(WATCHDOG_INTERVAL_MS)
         }
     }
 
@@ -289,7 +360,7 @@ class ProximityService : Service() {
     private fun startInForeground() {
         createChannel()
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("OpenZeekr digital key active")
+            .setContentTitle("ZeekRemote digital key active")
             .setContentText("Keeping your key connected for lock/unlock")
             .setSmallIcon(R.drawable.ic_logo)
             .setOngoing(true)
@@ -321,6 +392,8 @@ class ProximityService : Service() {
         // moving, for this long since the last live session — covers a walk-up where the link dropped at
         // range; a genuine walk-away goes quiet (STILL) or ages out and falls back to the low-power scan.
         private const val AGGRESSIVE_RECONNECT_MS = 30_000L
+        private const val WAKE_PROBE_DEBOUNCE_MS = 5_000L
+        private const val WATCHDOG_INTERVAL_MS = 5_000L
         /** While yielded to the watch, poll faster so we notice resume/expiry promptly. */
         private const val WATCH_YIELD_POLL_MS = 1_000L
         /** Car message-centre poll cadence (no server push, so we pull). */
