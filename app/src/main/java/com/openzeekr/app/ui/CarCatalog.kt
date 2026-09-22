@@ -67,12 +67,12 @@ object CarCatalog {
             PaintColor("Tech Grey", c(0x868686), "Metallic"),
             PaintColor("Brookblue", c(0x677FA3), "Two-tone"),
         ), bodyAsset = "cars/7x_body.png", detailsAsset = "cars/7x_details.png"),
-        // 7GT: the six factory finishes with hexes calibrated against the studio renders (see the
-        // luminance-recolour matrices), plus Mystic Lilac (the reference car). The hero generates the
-        // recolour matrix from each hex at draw time.
+        // 7GT: keep Crystal White first. Shared-account vehicle-info responses can omit colorName;
+        // colorFor() then deliberately falls back to the first entry. Jan's 7GT is Crystal White,
+        // so Mystic Lilac here would revive the previously fixed wrong-colour regression.
         CarModel("7GT", "Zeekr 7GT", "cars/car_7gt.webp", listOf(
-            PaintColor("Mystic Lilac", c(0xB9A7C4), "Pearl", recolor = floatArrayOf(0.801f, 0.731f, 0.844f)),
             PaintColor("Crystal White", c(0xF0F1F3), "Pearl", recolor = floatArrayOf(0.94f, 0.95f, 0.96f)),
+            PaintColor("Mystic Lilac", c(0xB9A7C4), "Pearl", recolor = floatArrayOf(0.801f, 0.731f, 0.844f)),
             PaintColor("Glacier Silver", c(0xCED3D9), "Metallic", recolor = floatArrayOf(0.81f, 0.83f, 0.86f)),
             PaintColor("Tech Grey", c(0x84878B), "Metallic", recolor = floatArrayOf(0.585f, 0.596f, 0.613f)),
             PaintColor("Titanium Grey", c(0x524E54), "Metallic", recolor = floatArrayOf(0.377f, 0.361f, 0.387f)),
