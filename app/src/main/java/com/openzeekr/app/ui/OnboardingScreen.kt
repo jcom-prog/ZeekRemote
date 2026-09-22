@@ -69,7 +69,8 @@ fun OnboardingScreen(deps: Deps, onDone: () -> Unit) {
     var idx by remember { mutableIntStateOf(0) }
     val safeIdx = idx.coerceIn(0, steps.lastIndex)
     val step = steps[safeIdx]
-    val loggedIn = cfg.accessToken.isNotBlank()
+    // Digital Key signing needs both values. A token imported without userId must not bypass login.
+    val loggedIn = cfg.accessToken.isNotBlank() && cfg.userId.isNotBlank()
 
     fun next() { if (safeIdx < steps.lastIndex) idx = safeIdx + 1 else onDone() }
     fun back() { if (safeIdx > 0) idx = safeIdx - 1 }
@@ -83,7 +84,7 @@ fun OnboardingScreen(deps: Deps, onDone: () -> Unit) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 BrandBadge(size = 32)
                 Column {
-                    Text("OpenZeekr", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text("ZeekRemote", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                     Text("Setup ${safeIdx + 1} of ${steps.size}", style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -129,7 +130,7 @@ private fun WelcomeStep() {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Welcome", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text(
-            "This sets up OpenZeekr for your own Zeekr vehicle in three quick steps:",
+            "This sets up ZeekRemote for your own Zeekr vehicle in three quick steps:",
             style = MaterialTheme.typography.bodyLarge,
         )
         Bullet("1", "Log in", "Sign in with your Zeekr account to reach the cloud and your vehicle.")
