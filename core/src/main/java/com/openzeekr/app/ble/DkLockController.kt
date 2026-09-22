@@ -18,6 +18,9 @@ class DkLockController(
      * connection themselves. This is what turns a silent failure into a self-healing retry.
      */
     private val refresh: suspend () -> Boolean = { false },
+    /** Called only after the car confirms an unlock, so the service can preserve authenticated key
+     *  presence through the door-open -> vehicle-start transition. */
+    private val onUnlockConfirmed: () -> Unit = {},
 ) {
 
     /** VehicleCtrlCmd.UNLOCK over DK (confirmed, with one self-healing retry). */
@@ -39,7 +42,10 @@ class DkLockController(
         if (!ensureSession()) { Logx.w("lock", "$label: no live session (refresh failed)"); return false }
         var r = runCatching { session.control(ctrl, ACK_TIMEOUT_MS) }.getOrElse { ControlResult.WRITE_FAILED }
         Logx.d("lock", "$label -> $r")
-        if (r == ControlResult.CONFIRMED) return true
+        if (r == ControlResult.CONFIRMED) {
+            if (ctrl == DkOpcodes.CTRL_UNLOCK) onUnlockConfirmed()
+            return true
+        }
         if (r == ControlResult.REJECTED) { Logx.w("lock", "$label rejected by the car"); return false }
         // NO_RESPONSE / WRITE_FAILED: the session went stale (car timed out its handshake epoch while
         // the GATT stayed up). Rebuild a fresh session and retry once.
@@ -47,7 +53,9 @@ class DkLockController(
         if (!refresh()) { Logx.w("lock", "$label: session refresh failed"); return false }
         r = runCatching { session.control(ctrl, ACK_TIMEOUT_MS) }.getOrElse { ControlResult.WRITE_FAILED }
         Logx.d("lock", "$label (after refresh) -> $r")
-        return r == ControlResult.CONFIRMED
+        return (r == ControlResult.CONFIRMED).also { confirmed ->
+            if (confirmed && ctrl == DkOpcodes.CTRL_UNLOCK) onUnlockConfirmed()
+        }
     }
 
     /**
