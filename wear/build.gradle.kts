@@ -41,6 +41,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Must exactly match the phone debug id for Wear Data Layer delivery.
+            applicationIdSuffix = ".test"
+            versionNameSuffix = "-work"
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
