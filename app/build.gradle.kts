@@ -36,6 +36,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Test build installs beside the upstream release while phone and watch retain the same
+            // package id/signing identity required by the Wear Data Layer.
+            applicationIdSuffix = ".test"
+            versionNameSuffix = "-work"
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
