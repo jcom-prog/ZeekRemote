@@ -147,6 +147,9 @@ fun SettingsScreen(deps: Deps, modifier: Modifier = Modifier) {
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Sign out") }
             }
+            // Keep account feedback beside the action that produced it. Previously login errors
+            // appeared below Import / Export, several screens away from the Sign in button.
+            if (status.isNotBlank()) Text(status, color = Brand.muted, fontSize = 13.sp)
         }
 
         // -------- units --------
