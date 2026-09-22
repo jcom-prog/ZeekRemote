@@ -1,4 +1,4 @@
 <resources>
-    <string name="app_name">OpenZeekr</string>
+    <string name="app_name">ZeekRemote</string>
     <string name="send_to_car_label">Send to Zeekr</string>
 </resources>
