@@ -389,13 +389,13 @@ class ProximityController(
                     nextIntervalMs = if (steady) MONITOR_STILL_NOSENSOR_MS else blindInterval(dist)
                 }
                 motion.state.value == MotionMonitor.Motion.MOVING && withinApproachBackstop(now, dist) -> {
-                    // Sensor says you're walking (still within the walk-time backstop): approach. Poll at
-                    // dist / walking-speed but CAPPED at MONITOR_APPROACH_MAX_MS — the raw formula (e.g.
-                    // ~18 s at 25 m) is way too coarse to track the RSSI rising through NEAR or to notice
-                    // the marginal link dropping at range (both cost a missed unlock).
+                    // Sensor says you're walking (still within the walk-time backstop): approach. Sample
+                    // at full speed while movement is real. A 2–3 s cadence let a brisk walker cover the
+                    // entire 3–4 m unlock zone between samples (field tests: 3–5 s late at the door).
+                    // This reads RSSI on the live GATT link; it is NOT permanent BLE scanning. Motion
+                    // stopping or the bounded approach window expiring returns us to far-sleep.
                     _wakeLockNeeded.value = true; farAsleep = false
-                    nextIntervalMs = (dist / WALK_SPEED_MPS * 1000.0).toLong()
-                        .coerceIn(MONITOR_BLIND_MIN_MS, MONITOR_APPROACH_MAX_MS)
+                    nextIntervalMs = MONITOR_FAST_MS
                 }
                 else -> {
                     // Sensor says still (or the backstop expired): drop the wakelock and sleep until it fires.
@@ -724,7 +724,6 @@ class ProximityController(
         // says MOVING (bounded by the 5× walk-time backstop), released to sleep otherwise.
         private const val WALK_SPEED_MPS = 1.4           // avg human walking speed
         private const val MONITOR_BLIND_MIN_MS = 2_000L  // clamp floor: don't hammer when almost at the car
-        private const val MONITOR_APPROACH_MAX_MS = 3_000L // ceiling WHILE MOVING: track the walk + catch drops
         private const val MONITOR_STILL_NOSENSOR_MS = 30_000L // clamp ceiling / no-sensor idle
         private const val APPROACH_BACKSTOP_MIN_MS = 30_000L  // temp-wakelock min lifetime for an approach
         private const val APPROACH_BACKSTOP_MAX_MS = 300_000L // …and max, so a stall can't leak it
