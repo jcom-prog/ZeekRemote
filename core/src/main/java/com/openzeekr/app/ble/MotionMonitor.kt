@@ -13,6 +13,7 @@ import android.hardware.SensorManager
 import android.hardware.TriggerEvent
 import android.hardware.TriggerEventListener
 import android.os.Build
+import android.os.SystemClock
 import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
@@ -78,6 +79,11 @@ class MotionMonitor(context: Context) {
     @Volatile var onMovingEdge: (() -> Unit)? = null
 
     @Volatile private var running = false
+    /** Elapsed-realtime anchors used by the key-sleep security gate. Elapsed time is immune to the
+     * wall clock changing and includes deep sleep, which is exactly what "still for two minutes"
+     * needs. A zero value means that state has not been confirmed yet. */
+    @Volatile private var stillSinceElapsedMs = 0L
+    @Volatile private var movingSinceElapsedMs = 0L
     private var arPendingIntent: PendingIntent? = null
 
     private val onMotion = object : TriggerEventListener() {
@@ -142,16 +148,44 @@ class MotionMonitor(context: Context) {
         source = Source.NONE
         _state.value = Motion.UNKNOWN
         _inVehicle.value = false
+        stillSinceElapsedMs = 0L
+        movingSinceElapsedMs = 0L
     }
 
     private fun armMotion() { runCatching { motionDetect?.let { sensors?.requestTriggerSensor(onMotion, it) } } }
     private fun armStationary() { runCatching { stationaryDetect?.let { sensors?.requestTriggerSensor(onStationary, it) } } }
 
     private fun setMoving() {
-        if (_state.value != Motion.MOVING) { _state.value = Motion.MOVING; Logx.d("motion", "-> MOVING"); onMovingEdge?.invoke() }
+        stillSinceElapsedMs = 0L
+        if (_state.value != Motion.MOVING) {
+            movingSinceElapsedMs = SystemClock.elapsedRealtime()
+            _state.value = Motion.MOVING
+            Logx.d("motion", "-> MOVING")
+            onMovingEdge?.invoke()
+        }
     }
     private fun setStill() {
-        if (_state.value != Motion.STILL) { _state.value = Motion.STILL; _inVehicle.value = false; Logx.d("motion", "-> STILL") }
+        movingSinceElapsedMs = 0L
+        if (_state.value != Motion.STILL) {
+            stillSinceElapsedMs = SystemClock.elapsedRealtime()
+            _state.value = Motion.STILL
+            _inVehicle.value = false
+            Logx.d("motion", "-> STILL")
+        }
+    }
+
+    /** True only after a sensor-confirmed STILL state has continuously lasted [durationMs]. */
+    fun isStillFor(durationMs: Long): Boolean {
+        val since = stillSinceElapsedMs
+        return running && _state.value == Motion.STILL && since != 0L &&
+            SystemClock.elapsedRealtime() - since >= durationMs
+    }
+
+    /** Debounces a motion edge before waking the digital key. */
+    fun isMovingFor(durationMs: Long): Boolean {
+        val since = movingSinceElapsedMs
+        return running && _state.value == Motion.MOVING && since != 0L &&
+            SystemClock.elapsedRealtime() - since >= durationMs
     }
 
     // ---------------- Activity Recognition layer ----------------
