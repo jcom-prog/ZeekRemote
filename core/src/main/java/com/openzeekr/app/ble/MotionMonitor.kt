@@ -57,11 +57,14 @@ class MotionMonitor(context: Context) {
     private val sensors = appCtx.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
     private val motionDetect: Sensor? = sensors?.getDefaultSensor(Sensor.TYPE_MOTION_DETECT)
     private val stationaryDetect: Sensor? = sensors?.getDefaultSensor(Sensor.TYPE_STATIONARY_DETECT)
-    // Prefer the WAKE-UP step detector (wakes the AP in Doze without our wakelock); fall back to the
-    // ordinary one where only that exists (events then batch until the CPU is up — less useful).
-    private val stepDetector: Sensor? =
+    // A non-wake-up step detector MUST NOT be selected as the key's wake source: its events are only
+    // delivered after something else wakes the AP, which stranded the sleeping key on the Galaxy
+    // S24+. Keep it only as a low-cost latency assist while Activity Recognition owns Doze wake-up.
+    private val wakeStepDetector: Sensor? =
         sensors?.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR, true)
-            ?: sensors?.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
+            ?.takeIf { isWakeCapableStepDetector(it.isWakeUpSensor) }
+    private val nonWakeStepDetector: Sensor? =
+        sensors?.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)?.takeUnless { it.isWakeUpSensor }
 
     private val _state = MutableStateFlow(Motion.UNKNOWN)
     val state: StateFlow<Motion> = _state.asStateFlow()
@@ -97,7 +100,9 @@ class MotionMonitor(context: Context) {
     // timeout runs on the main looper — while moving the caller holds a wakelock so it fires on time; a
     // stop lets the CPU sleep and it fires on the next wake, which is fine (we just linger MOVING a bit).
     private val stillHandler = Handler(Looper.getMainLooper())
-    private val stepStillRunnable = Runnable { if (running && source == Source.STEP) setStill() }
+    private val stepStillRunnable = Runnable {
+        if (running && (source == Source.STEP || source == Source.ACTIVITY)) setStill()
+    }
     private val onStep = object : SensorEventListener {
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
         override fun onSensorChanged(event: SensorEvent) {
@@ -118,17 +123,26 @@ class MotionMonitor(context: Context) {
             Logx.d("motion", "started via trigger sensors")
             return
         }
-        // 2) Wake-up step detector (this Pixel's path): wakes the AP per step without our wakelock.
-        if (stepDetector != null) {
+        // 2) A genuine wake-up step detector wakes the AP per step without our wakelock.
+        if (wakeStepDetector != null) {
             source = Source.STEP
-            sensors?.registerListener(onStep, stepDetector, SensorManager.SENSOR_DELAY_NORMAL)
-            Logx.d("motion", "started via step detector (wakeUp=${stepDetector.isWakeUpSensor}, no trigger sensors)")
+            sensors?.registerListener(onStep, wakeStepDetector, SensorManager.SENSOR_DELAY_NORMAL)
+            Logx.d("motion", "started via wake-up step detector (no trigger sensors)")
             return
         }
-        // 3) Activity Recognition fallback (coarse/laggy).
+        // 3) Activity Recognition uses a PendingIntent and can wake the app in Doze. On phones such
+        // as the S24+ the available step detector is non-wake-up; register it only as a fast assist
+        // once the CPU is awake, never as the source that promises to wake the secured key.
         if (startActivityRecognition()) {
             source = Source.ACTIVITY
-            Logx.d("motion", "started via Activity Recognition (no step detector)")
+            nonWakeStepDetector?.let {
+                sensors?.registerListener(onStep, it, SensorManager.SENSOR_DELAY_NORMAL)
+            }
+            Logx.d(
+                "motion",
+                "started via Activity Recognition" +
+                    if (nonWakeStepDetector != null) " + non-wakeup step assist" else " (no step detector)",
+            )
             return
         }
         // 4) Nothing available.
@@ -251,6 +265,9 @@ class MotionMonitor(context: Context) {
     }
 
     companion object {
+        /** Regression policy: an ordinary step detector cannot wake a sleeping application processor. */
+        internal fun isWakeCapableStepDetector(isWakeUpSensor: Boolean): Boolean = isWakeUpSensor
+
         // Must match the <attribution android:tag> declared in the manifest.
         private const val ATTRIBUTION_TAG = "proximity"
         private const val STEP_STILL_TIMEOUT_MS = 5_000L // no step for this long ⇒ back to STILL
