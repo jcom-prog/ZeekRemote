@@ -11,7 +11,8 @@ import com.openzeekr.app.util.Logx
 /**
  * Receives the HARDWARE-OFFLOADED presence scan (see [DkBleManager.armPresenceScan]). The Bluetooth
  * controller fires this PendingIntent — with the CPU otherwise asleep — when the car's advert
- * enters range (FIRST_MATCH) or leaves it (MATCH_LOST). We hand the signal to [ProximityService],
+ * delivers a matching car advertisement (ALL_MATCHES; unlike FIRST_MATCH it cannot remain latched
+ * across a long parked sleep). We hand the signal to [ProximityService],
  * which acquires a short wakelock and connects (approach) or locks + re-idles (walk-away).
  *
  * This is the zero-CPU replacement for the always-on wakelock + continuous foreground scan: idle
@@ -47,8 +48,8 @@ class BleScanReceiver : BroadcastReceiver() {
                 ProximityService.notifyPresenceLost(context)
             }
             else -> {
-                // FIRST_MATCH (or ALL_MATCHES fallback): the car just came into range.
-                Logx.d("ble", "presence FIRST_MATCH mac=${mac ?: "?"} rssi=${rssi ?: "?"} — waking to connect")
+                // ALL_MATCHES: the next matching car advert wakes the app; service disarms immediately.
+                Logx.d("ble", "presence MATCH mac=${mac ?: "?"} rssi=${rssi ?: "?"} — waking to connect")
                 ProximityService.notifyPresent(context, mac)
             }
         }

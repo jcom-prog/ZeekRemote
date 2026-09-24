@@ -49,7 +49,7 @@
             android:foregroundServiceType="connectedDevice" />
 
         <!-- Receives the hardware-offloaded presence scan (PendingIntent from the BLE controller):
-             FIRST_MATCH wakes the app to connect, MATCH_LOST re-idles it. exported=false is fine —
+             ALL_MATCHES wakes the app on the next car advert. exported=false is fine —
              the system delivers our own PendingIntent to our own explicit component. -->
         <receiver
             android:name="com.openzeekr.app.ble.BleScanReceiver"

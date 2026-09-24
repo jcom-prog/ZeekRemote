@@ -136,7 +136,7 @@ data class SecretsConfig(
     /**
      * Hardware-offloaded presence scan: when idle (no live DK session), hand the car's
      * advert filter (0xFDFD / company 0x06FE) to the Bluetooth controller via a
-     * PendingIntent scan and let the CPU sleep. The controller wakes us with FIRST_MATCH
+     * PendingIntent scan and let the CPU sleep. The controller wakes us on the next ALL_MATCHES advert
      * when the car comes into range; we only hold a wakelock + a live GATT while actually
      * engaged. This removes the always-on PARTIAL_WAKE_LOCK that drained the battery while
      * parked at home. Off = legacy behavior (continuous foreground scan + held wakelock).

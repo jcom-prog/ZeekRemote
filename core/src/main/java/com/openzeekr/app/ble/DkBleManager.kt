@@ -491,31 +491,35 @@ class DkBleManager(base: Context) : DkTransport {
     /** True while a hardware-offloaded presence scan (PendingIntent) is registered. */
     @Volatile var presenceArmed: Boolean = false
         private set
+    @Volatile private var presenceApproachMode: Boolean = false
 
     /**
      * Arm a HARDWARE-OFFLOADED presence scan: the Bluetooth controller watches for the car's
      * advert (same [carScanFilters]) with the CPU asleep and wakes us via [BleScanReceiver] on
-     * FIRST_MATCH / MATCH_LOST. This is the zero-CPU idle path — no wakelock, no continuous
-     * foreground scan — for "parked at home for hours". Edge-triggered: FIRST_MATCH fires once when
-     * the car enters range (again only after a MATCH_LOST), so callers must ALSO do a one-shot
-     * foreground probe for the already-in-range case (started right next to the car).
+     * ALL_MATCHES. This is the zero-CPU idle path — no wakelock, no continuous foreground scan —
+     * for "parked at home for hours". ALL_MATCHES is used because FIRST_MATCH can remain latched
+     * across a long sleep/re-arm cycle and fail to wake the app when the user returns.
      *
      * Idempotent. Returns true if armed (or already armed).
      */
     @SuppressLint("MissingPermission")
-    fun armPresenceScan(): Boolean {
-        if (presenceArmed) return true
+    fun armPresenceScan(approachMode: Boolean = false): Boolean {
+        if (presenceArmed && presenceApproachMode == approachMode) return true
+        // Re-register when motion changes the desired duty cycle. This remains a filtered
+        // PendingIntent scan handled by the Bluetooth controller; it does not hold a CPU wakelock.
+        if (presenceArmed) disarmPresenceScan()
         val scanner = adapter?.bluetoothLeScanner ?: return false
         if (adapter?.isEnabled != true) return false
         val settings = ScanSettings.Builder()
-            // LOW_POWER + hardware match: the controller does the watching, not the CPU.
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_POWER)
+            // BALANCED while walking gives reliable short AND long approaches without a foreground
+            // scan running all day. Parked/still returns to LOW_POWER. Both stay hardware-filtered.
+            .setScanMode(if (approachMode) ScanSettings.SCAN_MODE_BALANCED else ScanSettings.SCAN_MODE_LOW_POWER)
             .apply {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    // Edge-triggered: notify once when found, once when lost (STICKY = must be seen a
-                    // few times before "found"/"lost" to debounce flapping at the range edge).
-                    setCallbackType(ScanSettings.CALLBACK_TYPE_FIRST_MATCH or ScanSettings.CALLBACK_TYPE_MATCH_LOST)
-                    setMatchMode(ScanSettings.MATCH_MODE_STICKY)
+                    // ALL_MATCHES is deliberate. FIRST_MATCH can remain latched across a long parked
+                    // sleep/re-arm cycle and then never wake the app on return. ALL_MATCHES guarantees
+                    // the next matching car advert is delivered; the receiver immediately disarms it.
+                    setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
                     setNumOfMatches(ScanSettings.MATCH_NUM_ONE_ADVERTISEMENT)
                 }
             }
@@ -523,7 +527,9 @@ class DkBleManager(base: Context) : DkTransport {
         val res = runCatching { scanner.startScan(carScanFilters(), settings, presencePendingIntent()) }
         return if (res.getOrDefault(-1) == 0) {
             presenceArmed = true
-            Logx.d("ble", "presence scan ARMED (offloaded 0xFDFD/0x06FE, FIRST_MATCH/MATCH_LOST, CPU may sleep)")
+            presenceApproachMode = approachMode
+            Logx.d("ble", "presence scan ARMED (offloaded 0xFDFD/0x06FE, " +
+                "${if (approachMode) "BALANCED approach" else "LOW_POWER idle"}, ALL_MATCHES, CPU may sleep)")
             true
         } else {
             Logx.e("ble", "presence scan arm failed (${res.exceptionOrNull()?.message ?: "startScan!=0"})")
@@ -538,6 +544,7 @@ class DkBleManager(base: Context) : DkTransport {
         val scanner = adapter?.bluetoothLeScanner
         runCatching { scanner?.stopScan(presencePendingIntent()) }
         presenceArmed = false
+        presenceApproachMode = false
         Logx.d("ble", "presence scan DISARMED")
     }
 
