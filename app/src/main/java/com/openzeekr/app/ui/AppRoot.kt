@@ -12,7 +12,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -100,7 +102,9 @@ fun AppRoot(deps: Deps) {
         return
     }
 
-    AppBootstrap(deps, serviceEnabled = loggedIn && provisioned)
+    // A revoked/ended share clears VIN; never leave the BLE key service active for a car that is
+    // no longer attached to this account.
+    AppBootstrap(deps, serviceEnabled = loggedIn && provisioned && cfg.vin.isNotBlank())
 
     // Account taken over on another device (TSP 079021): the interceptor already cleared the
     // token (so we're now on the signed-out flow) — just explain why. Mirrors the stock app,
@@ -136,9 +140,13 @@ fun AppRoot(deps: Deps) {
                 is com.openzeekr.app.remote.CallResult.Ok -> unread = r.value
                 is com.openzeekr.app.remote.CallResult.Err -> {}
             }
+            deps.refreshInvites()
         }
     }
     LaunchedEffect(loggedIn) { refreshUnread() }
+
+    val invites by deps.pendingInvites.collectAsState()
+    var inviteBusy by remember { mutableStateOf(false) }
 
     if (showInbox) {
         InboxScreen(deps, onBack = { showInbox = false; refreshUnread() }, snackbar = snackbar)
@@ -174,7 +182,7 @@ fun AppRoot(deps: Deps) {
                     Text(if (cfg.vin.isNotBlank()) "VIN ••••${cfg.vin.takeLast(3)}" else "Tap the pencil to name your car",
                         color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                // Notifications bell with unread badge.
+                // Notifications bell with an always-readable count badge.
                 Box {
                     Icon(
                         Icons.Filled.NotificationsNone, "Messages", tint = MaterialTheme.colorScheme.onSurface,
@@ -182,14 +190,18 @@ fun AppRoot(deps: Deps) {
                     )
                     if (unread > 0) {
                         Box(
-                            Modifier.align(Alignment.TopEnd).padding(3.dp)
-                                .size(if (unread > 9) 17.dp else 9.dp)
-                                .clip(CircleShape).background(Brand.crit),
+                            Modifier.align(Alignment.TopEnd)
+                                .offset(x = 3.dp, y = (-1).dp)
+                                .defaultMinSize(minWidth = 18.dp, minHeight = 18.dp)
+                                .clip(RoundedCornerShape(9.dp))
+                                .background(Brand.crit)
+                                .border(1.5.dp, MaterialTheme.colorScheme.surface, RoundedCornerShape(9.dp))
+                                .padding(horizontal = 4.dp),
                             contentAlignment = Alignment.Center,
                         ) {
-                            if (unread > 9) Text(
+                            Text(
                                 if (unread > 99) "99+" else "$unread",
-                                color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold,
+                                color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1,
                             )
                         }
                     }
@@ -289,6 +301,49 @@ fun AppRoot(deps: Deps) {
         )
     }
 
+    invites.firstOrNull()?.let { invite ->
+        val respond: (Boolean) -> Unit = { accept ->
+            inviteBusy = true
+            deps.appScope.launch {
+                when (val result = deps.share.respond(invite, accept)) {
+                    is com.openzeekr.app.remote.CallResult.Ok -> {
+                        snackbar(if (accept) "Shared car accepted" else "Invitation declined")
+                        deps.pendingInvites.value = deps.pendingInvites.value.drop(1)
+                        if (accept) deps.vehicleState.refresh()
+                        deps.refreshInvites()
+                    }
+                    is com.openzeekr.app.remote.CallResult.Err ->
+                        snackbar("Couldn't respond: ${result.message}")
+                }
+                inviteBusy = false
+            }
+        }
+        AlertDialog(
+            onDismissRequest = { if (!inviteBusy) deps.pendingInvites.value = deps.pendingInvites.value.drop(1) },
+            title = { Text("Car shared with you") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text(
+                        buildString {
+                            append(invite.model ?: "A Zeekr")
+                            invite.vin?.let { append(" · VIN …").append(it.takeLast(4)) }
+                        },
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    invite.ownerName?.let { Text("Shared by $it", fontSize = 13.sp, color = Brand.muted) }
+                    invite.functionNames?.let { Text("Access: $it", fontSize = 13.sp, color = Brand.muted) }
+                    invite.endTime?.let { Text("Until ${formatShareDate(it)}", fontSize = 13.sp, color = Brand.muted) }
+                    Text(
+                        "Accepting makes this the active ZeekRemote car. The Bluetooth Digital Key is set up separately.",
+                        fontSize = 12.sp, color = Brand.muted,
+                    )
+                }
+            },
+            confirmButton = { TextButton(enabled = !inviteBusy, onClick = { respond(true) }) { Text("Accept") } },
+            dismissButton = { TextButton(enabled = !inviteBusy, onClick = { respond(false) }) { Text("Decline") } },
+        )
+    }
+
     // One-time "this is a passion project" note. Shown once after onboarding; dismissing it (either
     // button) sets the persisted flag so it never appears again.
     if (!cfg.supportNoteShown) {
@@ -324,3 +379,9 @@ fun AppRoot(deps: Deps) {
 
 // Revolut tip link shown in the one-time support note. Replace with the real revolut.me handle.
 private const val REVOLUT_URL = "https://revolut.me/REPLACE_ME"
+
+private fun formatShareDate(epoch: Long): String {
+    val millis = if (epoch < 100_000_000_000L) epoch * 1000 else epoch
+    return java.text.SimpleDateFormat("d MMM yyyy", java.util.Locale.getDefault())
+        .format(java.util.Date(millis))
+}

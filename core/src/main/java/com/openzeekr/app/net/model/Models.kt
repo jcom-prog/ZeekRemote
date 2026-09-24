@@ -315,44 +315,104 @@ data class VehicleInfo(
     val vehicleId: String?,
     /** Whether the logged-in account owns this car (drives the provisioning path). */
     val isOwner: Boolean = false,
+    val vin: String? = null,
 )
 
 /** Tolerant parse of the (shape-varying) vehicle-list `data`. */
 object VehicleGarage {
-    fun parse(data: JsonElement?): VehicleInfo? {
-        val v = firstVehicle(data) ?: return null
+    fun parse(data: JsonElement?): VehicleInfo? = parseAll(data).firstOrNull()
+
+    fun parseAll(data: JsonElement?): List<VehicleInfo> = allVehicles(data).map { v ->
         fun s(k: String) = (v[k] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
         val ownerFlag = (v["isOwner"] as? JsonPrimitive)?.contentOrNull?.let {
             it.equals("true", ignoreCase = true) || it == "1"
         } ?: false
-        return VehicleInfo(
-            model = s("modelName") ?: s("seriesName") ?: s("innerCode") ?: s("seriesCode"),
-            colorName = s("colorName") ?: materialColor(v),
+        VehicleInfo(
+            model = s("modelName") ?: s("seriesName") ?: s("appModelCode") ?: s("appInnerCode")
+                ?: s("innerCode") ?: s("seriesCode"),
+            colorName = s("colorName") ?: s("appColorCode") ?: s("colorCode") ?: materialColor(v),
             nickName = s("nickName") ?: s("vehicleNickname") ?: s("vehNickname") ?: s("remark"),
             photoUrl = s("vehiclePhotoBig") ?: s("vehicleListImgUrl") ?: s("vehiclePhotoSmall"),
             vehicleId = s("id") ?: s("vehicleId") ?: s("relationId"),
             isOwner = ownerFlag,
+            vin = s("vin"),
         )
     }
 
-    private fun firstVehicle(data: JsonElement?): JsonObject? {
+    private fun allVehicles(data: JsonElement?): List<JsonObject> {
         when (data) {
-            is JsonArray -> return data.firstOrNull() as? JsonObject
+            is JsonArray -> return data.mapNotNull { it as? JsonObject }
             is JsonObject -> {
                 (data["list"] as? JsonArray ?: data["records"] as? JsonArray
-                    ?: data["vehicleList"] as? JsonArray)?.let { return it.firstOrNull() as? JsonObject }
-                if (data.containsKey("modelName") || data.containsKey("seriesName") || data.containsKey("vin")) return data
-                data.values.forEach { if (it is JsonArray) (it.firstOrNull() as? JsonObject)?.let { o -> return o } }
+                    ?: data["vehicleList"] as? JsonArray)?.let { return it.mapNotNull { e -> e as? JsonObject } }
+                if (data.containsKey("modelName") || data.containsKey("seriesName") || data.containsKey("vin")) return listOf(data)
+                data.values.forEach { if (it is JsonArray) return it.mapNotNull { e -> e as? JsonObject } }
             }
             else -> {}
         }
-        return null
+        return emptyList()
     }
 
     private fun materialColor(v: JsonObject): String? {
         val mats = v["vehicleMaterials"] as? JsonArray ?: return null
         return mats.mapNotNull { ((it as? JsonObject)?.get("materialName") as? JsonPrimitive)?.contentOrNull }
             .firstOrNull { it.isNotBlank() }
+    }
+}
+
+data class ShareInvite(
+    val shareId: String,
+    val vin: String?,
+    val model: String?,
+    val ownerName: String?,
+    val ownerContact: String?,
+    val functionNames: String?,
+    val startTime: Long?,
+    val endTime: Long?,
+    val expireTime: Long?,
+    val acceptTime: Long?,
+) {
+    fun isPending(nowMs: Long = System.currentTimeMillis()): Boolean {
+        fun millis(value: Long?) = value?.let { if (it < 100_000_000_000L) it * 1000 else it }
+        val expiry = millis(expireTime)
+        val end = millis(endTime)
+        return acceptTime == null && (expiry == null || expiry > nowMs) && (end == null || end > nowMs)
+    }
+}
+
+@Serializable
+data class ShareAcceptRequest(
+    val shareId: String,
+    val toUserId: String,
+    val isAccept: Boolean,
+)
+
+object ShareInviteParse {
+    fun parse(data: JsonElement?): List<ShareInvite> {
+        val array = when (data) {
+            is JsonArray -> data
+            is JsonObject -> data["data"] as? JsonArray ?: data["list"] as? JsonArray
+                ?: data["records"] as? JsonArray ?: data.values.firstOrNull { it is JsonArray } as? JsonArray
+            else -> null
+        } ?: return emptyList()
+        return array.mapNotNull { it as? JsonObject }.mapNotNull { o ->
+            fun s(k: String) = (o[k] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+            fun l(k: String) = (o[k] as? JsonPrimitive)?.contentOrNull?.toLongOrNull()
+            val id = s("id") ?: s("shareId") ?: return@mapNotNull null
+            val functions = (o["function"] as? JsonArray)
+                ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.replace('-', ' ') }
+                ?.filter { it.isNotBlank() }?.joinToString(", ")?.takeIf { it.isNotBlank() }
+            ShareInvite(
+                shareId = id,
+                vin = s("vin"),
+                model = s("modelName") ?: s("vehicleName") ?: s("modelCode"),
+                ownerName = s("ownerName"),
+                ownerContact = s("ownerEmail") ?: s("ownerPhone"),
+                functionNames = s("functionNames") ?: functions,
+                startTime = l("startTime"), endTime = l("endTime"), expireTime = l("expireTime"),
+                acceptTime = l("acceptTime"),
+            )
+        }
     }
 }
 
@@ -1033,6 +1093,9 @@ data class MaintenanceStatusVo(
     val tyreStatusDriverRear: String? = null,
     val tyreStatusPassenger: String? = null,
     val tyreStatusPassengerRear: String? = null,
+    val distanceToService: Int? = null,
+    val daysToService: Int? = null,
+    val lowVoltageBattery: Double? = null,
 )
 
 @Serializable
@@ -1147,6 +1210,9 @@ object VehicleStatus {
                             tyreStatusDriverRear = m.str("tyreStatusDriverRear"),
                             tyreStatusPassenger = m.str("tyreStatusPassenger"),
                             tyreStatusPassengerRear = m.str("tyreStatusPassengerRear"),
+                            distanceToService = m.intOf("distanceToService"),
+                            daysToService = m.intOf("daysToService"),
+                            lowVoltageBattery = m.obj("mainBatteryStatus")?.dblOf("voltage"),
                         )
                     },
                     runningStatus = a.obj("runningStatus")?.let { r ->

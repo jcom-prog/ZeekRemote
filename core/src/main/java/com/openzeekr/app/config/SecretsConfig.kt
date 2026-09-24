@@ -195,7 +195,8 @@ data class SecretsConfig(
         if (hmacSecretKey.isBlank()) add("hmac_secret_key is required")
         if (passwordPublicKey.isBlank()) add("password_public_key is required")
         if (prodSecret.isBlank()) add("prod_secret is required")
-        if (vin.isBlank()) add("vin is required")
+        // VIN is obtained from the vehicle-list during login; sign-out intentionally clears it.
+        // Features that need a car guard VIN at their own call site.
 
         // Overseas pair
         if (overseasAccessKey.isBlank() != overseasSecretKey.isBlank()) {

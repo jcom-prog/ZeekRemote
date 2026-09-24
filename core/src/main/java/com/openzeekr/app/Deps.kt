@@ -18,6 +18,7 @@ import com.openzeekr.app.remote.JourneyRepository
 import com.openzeekr.app.remote.NavRepository
 import com.openzeekr.app.remote.RemoteControlRepository
 import com.openzeekr.app.remote.SentryRepository
+import com.openzeekr.app.remote.ShareRepository
 import com.openzeekr.app.remote.VehicleStatusHolder
 import com.openzeekr.app.net.ReleaseInfo
 import com.openzeekr.app.net.UpdateChecker
@@ -66,6 +67,19 @@ class Deps(context: Context) {
     val journey = JourneyRepository(config, apiClient)
     /** Member message center (charging done, abnormal parking, alarms, OTA, …). */
     val inbox = InboxRepository(config, apiClient)
+    val share = ShareRepository(config, apiClient)
+    val pendingInvites = MutableStateFlow<List<com.openzeekr.app.net.model.ShareInvite>>(emptyList())
+    suspend fun refreshInvites() {
+        if (config.current().accessToken.isBlank()) {
+            pendingInvites.value = emptyList()
+            return
+        }
+        when (val result = share.pending()) {
+            is com.openzeekr.app.remote.CallResult.Ok -> pendingInvites.value = result.value
+            is com.openzeekr.app.remote.CallResult.Err ->
+                com.openzeekr.app.util.Logx.d("share", "refresh invitations failed: ${result.message}")
+        }
+    }
     /** Send-to-car: push a navigation POI to the car (also drives the geo:/nav intent handler). */
     val nav = NavRepository(config, apiClient)
     /** FCM push registrar: registers our device token with the message-centre so the car's pushes

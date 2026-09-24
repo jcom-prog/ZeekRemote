@@ -2,8 +2,6 @@ package com.openzeekr.app.ui
 
 import android.content.Intent
 import android.net.Uri
-import androidx.core.content.FileProvider
-import java.io.File
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -547,33 +545,4 @@ private fun LogViewer() {
             lines.takeLast(120).forEach { Text(it, fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = Brand.muted) }
         }
     }
-}
-
-/**
- * Encrypt the current log and hand it to the system share sheet as a FILE, so a non-technical
- * tester can email/attach it. The file is written under cacheDir/exports/ (the path the existing
- * FileProvider already exposes) and shared read-only via a content:// URI. Unlike a clipboard copy
- * this has no length cap, so long logs stay intact (and therefore decryptable). Returns a short
- * status string for the UI. Shares NOTHING on any crypto/IO failure - never the plaintext log.
- */
-private fun shareEncryptedLog(ctx: android.content.Context): String {
-    val blob = com.openzeekr.app.util.LogCrypto.encryptToBase64(Logx.dump())
-        ?: return "Share failed - nothing shared."
-    return runCatching {
-        val dir = File(ctx.cacheDir, "exports").apply { mkdirs() }
-        val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
-        val file = File(dir, "openzeekr-log-$stamp.txt").apply { writeText(blob) }
-        val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file)
-        val send = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            putExtra(Intent.EXTRA_SUBJECT, "ZeekRemote encrypted log $stamp")
-            putExtra(Intent.EXTRA_TEXT, "ZeekRemote encrypted debug log attached (readable only by the developers).")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        val chooser = Intent.createChooser(send, "Send encrypted log")
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)  // launched from a non-Activity context
-        ctx.startActivity(chooser)
-        "Encrypted log ready to send - pick your email app."
-    }.getOrElse { "Share failed: ${it.message}" }
 }

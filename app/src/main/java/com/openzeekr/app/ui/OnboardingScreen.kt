@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -24,6 +25,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -33,6 +35,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
@@ -41,6 +44,7 @@ import com.openzeekr.app.Deps
 import com.openzeekr.app.ble.DkProvisioning
 import com.openzeekr.app.config.SecretsConfig
 import com.openzeekr.app.remote.CallResult
+import com.openzeekr.app.util.Logx
 import kotlinx.coroutines.launch
 
 /**
@@ -231,7 +235,15 @@ private fun LoginStep(deps: Deps) {
     var password by remember { mutableStateOf(cfg.password) }
     var status by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var shareMsg by remember { mutableStateOf("") }
     val loggedIn = cfg.accessToken.isNotBlank()
+    val ctx = LocalContext.current
+
+    DisposableEffect(Unit) {
+        val previous = Logx.isHttpEnabled
+        Logx.setHttp(true)
+        onDispose { Logx.setHttp(previous) }
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Log in", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
@@ -269,10 +281,26 @@ private fun LoginStep(deps: Deps) {
                     }
                 },
             ) {
-                if (busy) CircularProgressIndicator(Modifier.height(16.dp), strokeWidth = 2.dp)
-                else Text("Log in")
+                if (busy) Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary)
+                    Text("Logging in…")
+                } else Text("Log in")
             }
             if (status.isNotBlank()) Text(status, style = MaterialTheme.typography.bodySmall)
+            if (status.startsWith("Login ✗")) {
+                OutlinedButton(onClick = { shareMsg = shareEncryptedLog(ctx) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Share diagnostic log")
+                }
+                Text(
+                    if (shareMsg.isNotBlank()) shareMsg
+                    else "Login failed? Send an encrypted diagnostic log to help identify the cause.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
         }
     }
 }

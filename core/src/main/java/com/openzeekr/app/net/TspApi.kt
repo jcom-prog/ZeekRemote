@@ -125,6 +125,19 @@ interface TspApi {
     @GET("ms-app-bff/api/v4.0/veh/vehicle-list")
     suspend fun vehicleList(@Query("needSharedCar") needSharedCar: Boolean = false): BaseResponse<kotlinx.serialization.json.JsonElement>
 
+    // ---- car-share invitations ----
+    @GET("ms-tsp-user-vehicle/api/v2/veh/authorize/acceptlist")
+    suspend fun shareAcceptList(
+        @Query("userId") userId: String,
+        @Query("current") current: Int = 1,
+        @Query("pageSize") pageSize: Int = 20,
+    ): BaseResponse<kotlinx.serialization.json.JsonElement>
+
+    @POST("ms-tsp-user-vehicle/api/v2/veh/authorize/accept")
+    suspend fun shareAccept(
+        @Body body: com.openzeekr.app.net.model.ShareAcceptRequest,
+    ): BaseResponse<kotlinx.serialization.json.JsonElement>
+
     // ---- rename the car (vehNickname) ----
     @POST("ms-tsp-user-vehicle/api/v1/veh/owner/relation/modify-vehicle")
     suspend fun modifyVehicle(@Body body: ModifyVehicleRequest): BaseResponse<JsonObject>

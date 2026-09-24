@@ -247,11 +247,13 @@ fun VehicleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = M
                 Ctl(Icons.Filled.Campaign, "Flash+Honk", modifier = Modifier.weight(1f)) { fire("Locate") { deps.vehicleControl.send(Command.FLASH_HORN) } }
                 Ctl(Icons.Filled.FlashOn, "Flash", modifier = Modifier.weight(1f)) { fire("Flash") { deps.vehicleControl.send(Command.FLASH) } }
                 Ctl(Icons.Filled.Luggage, if (trunkOpen) "Open" else "Trunk", tint = Brand.energy, active = trunkOpen, modifier = Modifier.weight(1f)) { showTrunk = true }
-            }
-            // Frunk only when the car reports a powered hood (per-VIN); its own row so the grid stays 4-wide.
-            if (caps.frunk) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Ctl(Icons.Filled.Inventory2, "Frunk", modifier = Modifier.weight(1f)) { fire("Frunk") { deps.vehicleControl.send(Command.FRONT_TRUNK) } }
-                Spacer(Modifier.weight(1f)); Spacer(Modifier.weight(1f)); Spacer(Modifier.weight(1f))
+                if (caps.frunk) {
+                    Ctl(Icons.Filled.Inventory2, "Frunk", modifier = Modifier.weight(1f)) {
+                        fire("Frunk") { deps.vehicleControl.send(Command.FRONT_TRUNK) }
+                    }
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
             }
         }
 
@@ -278,6 +280,29 @@ fun VehicleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = M
                     StatItem("Total", gb(total), MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
                     StatItem("Remaining", gb(remain),
                         if (remain != null && remain < 1f) Brand.energy else Brand.good, Modifier.weight(1f))
+                }
+            }
+        }
+
+        maint?.let { m ->
+            val odometer = m.odometer?.let { Units.distance(it.toDouble(), cfg.distanceUnit) }
+            val serviceDistance = m.distanceToService?.let { Units.distance(it.toDouble(), cfg.distanceUnit) }
+            val serviceTime = m.daysToService?.let { days -> if (days >= 60) "~${days / 30} mo" else "$days days" }
+            val batteryVoltage = m.lowVoltageBattery
+            val voltage = batteryVoltage?.let { "%.1f V".format(it) }
+            if (odometer != null || serviceDistance != null || serviceTime != null || voltage != null) {
+                SectionLabel("Vehicle")
+                Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    StatItem("Odometer", odometer ?: "—", MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
+                    StatItem(
+                        "12V battery", voltage ?: "—",
+                        if (batteryVoltage != null && batteryVoltage < 11.9) Brand.energy else Brand.good,
+                        Modifier.weight(1f),
+                    )
+                }
+                Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    StatItem("Service in", serviceDistance ?: "—", MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
+                    StatItem("Service due", serviceTime ?: "—", MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
                 }
             }
         }
@@ -380,7 +405,7 @@ private fun ChargeCtl(
                 modifier = Modifier.size(if (charging) 18.dp else 24.dp))
         }
         Text(
-            when { charging -> powerKw?.let { "${fmt1(it)} kW · 1-phase" } ?: "Charging"; plugged -> "Plugged in"; else -> "Charge port" },
+            when { charging -> powerKw?.let { "${fmt1(it)} kW · 1-phase" } ?: "Charging"; plugged -> "Plugged in"; else -> "Charge & more" },
             // Match the lightning-bolt colour while charging (energy amber); muted otherwise.
             color = if (charging) Brand.energy else Brand.muted, fontSize = 11.sp, textAlign = TextAlign.Center,
         )

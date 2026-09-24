@@ -68,6 +68,7 @@ class RemoteControlRepository(private val store: ConfigStore, private val client
 
     /** Last status key-structure we logged; used to dump the schema only when it changes (not per poll). */
     private var lastStatusKeyTree: String? = null
+    private var missingActiveVinCount = 0
 
     /** Fire a catalog command. Physical-actuation ids (RDU_2/RDL_2/RDO/RDC) route through
      *  the ecarx device-api transport (System B); everything else through /ms-remote-control. */
@@ -167,7 +168,25 @@ class RemoteControlRepository(private val store: ConfigStore, private val client
      *  even on a session that logged in before that flag was captured. */
     suspend fun vehicleInfo(): CallResult<VehicleInfo?> = withContext(Dispatchers.IO) {
         guarded {
-            VehicleGarage.parse(client.api.vehicleList().data)?.also { info ->
+            val cfg = store.current()
+            val response = client.api.vehicleList(needSharedCar = true)
+            val all = VehicleGarage.parseAll(response.data)
+            val info = all.firstOrNull { it.vin == cfg.vin } ?: all.firstOrNull()
+            // Single-car policy: never silently switch to another VIN. If the active shared car
+            // disappeared from a successful non-empty list, its share ended; deactivate it locally.
+            val listSucceeded = response.success || response.code == null || response.code == "000000"
+            if (cfg.vin.isNotBlank() && listSucceeded && all.none { it.vin == cfg.vin }) {
+                missingActiveVinCount++
+                // Require two independent successful refreshes: a single transient empty cloud reply
+                // must never disable a valid key, while a genuinely ended share is removed promptly.
+                if (missingActiveVinCount >= 2) {
+                    store.update { it.copy(vin = "", isOwner = false) }
+                    com.openzeekr.app.util.Logx.w("veh", "active shared car absent twice - VIN deactivated")
+                }
+                return@guarded null
+            }
+            missingActiveVinCount = 0
+            info?.also { info ->
                 if (info.isOwner != store.current().isOwner) store.update { it.copy(isOwner = info.isOwner) }
             }
         }
@@ -177,6 +196,51 @@ class RemoteControlRepository(private val store: ConfigStore, private val client
     suspend fun renameVehicle(name: String, vehicleId: String? = null): CallResult<Unit> = withContext(Dispatchers.IO) {
         guarded { client.api.modifyVehicle(ModifyVehicleRequest(id = vehicleId, vehNickname = name)); Unit }
     }
+}
+
+class ShareRepository(private val store: ConfigStore, private val client: ApiClient) {
+    suspend fun pending(): CallResult<List<com.openzeekr.app.net.model.ShareInvite>> = withContext(Dispatchers.IO) {
+        guarded {
+            val cfg = store.current()
+            val ids = listOf(cfg.userId, cfg.accountUuid).filter { it.isNotBlank() }.distinct()
+            if (ids.isEmpty()) return@guarded emptyList()
+            var invites = emptyList<com.openzeekr.app.net.model.ShareInvite>()
+            for (id in ids) {
+                invites = com.openzeekr.app.net.model.ShareInviteParse.parse(client.api.shareAcceptList(id).data)
+                if (invites.isNotEmpty()) break
+            }
+            invites.filter { it.isPending() }
+        }
+    }
+
+    suspend fun respond(invite: com.openzeekr.app.net.model.ShareInvite, accept: Boolean): CallResult<String?> =
+        withContext(Dispatchers.IO) {
+            guarded {
+                val cfg = store.current()
+                val uid = cfg.userId.ifBlank { error("account userId missing") }
+                val response = client.api.shareAccept(
+                    com.openzeekr.app.net.model.ShareAcceptRequest(invite.shareId, uid, accept)
+                )
+                if (!response.success && response.code != null && response.code != "000000")
+                    error(response.message ?: "share response failed (${response.code})")
+                if (!accept) return@guarded null
+
+                // No multi-car switcher by design: activate only the newly accepted VIN.
+                val all = VehicleGarage.parseAll(client.api.vehicleList(needSharedCar = true).data)
+                val accepted = invite.vin?.let { vin -> all.firstOrNull { it.vin == vin } }
+                    ?: all.singleOrNull()
+                    ?: error("shared car accepted, but its VIN is not available yet")
+                val vin = accepted.vin ?: error("accepted car has no VIN")
+                store.update {
+                    it.copy(
+                        vin = vin,
+                        isOwner = accepted.isOwner,
+                        carNickname = accepted.nickName ?: accepted.model ?: it.carNickname,
+                    )
+                }
+                vin
+            }
+        }
 }
 
 /**
