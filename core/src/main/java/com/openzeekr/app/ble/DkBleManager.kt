@@ -643,13 +643,20 @@ class DkBleManager(base: Context) : DkTransport {
                     wasReady -> _state.value = State.IDLE   // ready-link drop: liveness/keep-alive decides
                     // Unexpected mid-setup drop (status 19, car/stack contention) with a known device:
                     // retry FAST via reconnectLast instead of the ~20 s offloaded presence scan.
-                    !deliberate && lastDevice != null && setupRetries < MAX_SETUP_RETRIES -> {
+                    // Android status 133 commonly means the cached RPA/GATT route is stale after the
+                    // car slept. Reusing that same device just repeats 133; surface ERROR so the
+                    // bounded approach watchdog performs a fresh scan and obtains the current RPA.
+                    status != 133 && !deliberate && lastDevice != null && setupRetries < MAX_SETUP_RETRIES -> {
                         setupRetries++
                         _state.value = State.IDLE // reconnectLast requires a resting state
                         Logx.w("ble", "setup drop (status=$status) — fast reconnectLast retry #$setupRetries/$MAX_SETUP_RETRIES")
                         scope.launch { delay(SETUP_RETRY_DELAY_MS); reconnectLast() }
                     }
-                    else -> { setupRetries = 0; fail("disconnected (status=$status)") }
+                    else -> {
+                        setupRetries = 0
+                        if (status == 133) Logx.w("ble", "status 133 — discard cached route; fresh scan required")
+                        fail("disconnected (status=$status)")
+                    }
                 }
             }
         }

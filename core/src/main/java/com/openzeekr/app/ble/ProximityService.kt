@@ -63,6 +63,9 @@ class ProximityService : Service() {
     // short window after a drop while you're moving — the walk-up case — vs. the slow offloaded scan.
     private var lastEngagedMs = 0L
     private var lastWakeProbeMs = 0L
+    // A motion edge can happen before the car is in radio range. Keep a bounded approach-search
+    // window alive so a 20 s scan timing out halfway through a longer walk cannot strand the user.
+    private var motionSearchUntilMs = 0L
     private var wakeReceiverRegistered = false
 
     private val wakeReceiver = object : BroadcastReceiver() {
@@ -202,8 +205,9 @@ class ProximityService : Service() {
                         // AGGRESSIVE_RECONNECT_MS since the last session so walking AWAY falls back to the
                         // low-power scan once you're clearly gone.
                         val moving = deps.motion.state.value == MotionMonitor.Motion.MOVING
+                        val motionSearchActive = System.currentTimeMillis() < motionSearchUntilMs
                         val recentlyEngaged = System.currentTimeMillis() - lastEngagedMs < AGGRESSIVE_RECONNECT_MS
-                        val aggressive = (moving && recentlyEngaged) || deps.ble.driveAuthorizationActive
+                        val aggressive = motionSearchActive || (moving && recentlyEngaged) || deps.ble.driveAuthorizationActive
                         if (offload && !aggressive) {
                             // Zero-CPU idle: the offloaded scan watches for the car and wakes us via
                             // BleScanReceiver. manageWakeLock releases the wakelock (nothing to hold for).
@@ -219,7 +223,7 @@ class ProximityService : Service() {
                         } else {
                             // Legacy (offload off), OR aggressive reconnect while walking up: foreground
                             // scan-connect. manageWakeLock holds the wakelock across the connect + session.
-                            if (aggressive) Logx.d("svc", "keep-alive: moving + recent link — aggressive scan-connect (skip low-power offload)")
+                            if (aggressive) Logx.d("svc", "keep-alive: bounded approach recovery — aggressive scan-connect (skip low-power offload)")
                             else Logx.d("svc", "keep-alive: (re)connecting DK session")
                             runCatching { deps.ble.connect(null) }
                         }
@@ -274,13 +278,14 @@ class ProximityService : Service() {
     private suspend fun watchdog(deps: Deps) {
         while (scope.isActive) {
             val state = deps.ble.state.value
-            val needed = deps.motion.state.value == MotionMonitor.Motion.MOVING || deps.ble.driveAuthorizationActive
+            val approachRecovery = System.currentTimeMillis() < motionSearchUntilMs
+            val needed = approachRecovery || deps.motion.state.value == MotionMonitor.Motion.MOVING || deps.ble.driveAuthorizationActive
             deps.proximity.updateDiagnostics(
                 "BLE ${state.name.lowercase()} · motion ${deps.motion.source.name.lowercase()}" +
                     if (deps.ble.driveAuthorizationActive) " · start-key guarded" else ""
             )
             if (needed && state in setOf(DkBleManager.State.IDLE, DkBleManager.State.ERROR)) {
-                recoveryProbe(deps, if (deps.ble.driveAuthorizationActive) "start-key watchdog" else "motion watchdog")
+                recoveryProbe(deps, if (deps.ble.driveAuthorizationActive) "start-key watchdog" else "approach watchdog")
             }
             delay(WATCHDOG_INTERVAL_MS)
         }
@@ -301,8 +306,8 @@ class ProximityService : Service() {
      * FIRST_MATCH, so if we're idle (no live session) and Bluetooth is usable, briefly wake and run
      * the proven scan-connect probe. If the car isn't in range the scan times out and [keepConnected]
      * re-arms the offload scan + releases the wakelock on its next tick; if we're already engaged the
-     * controller handles cadence, so we do nothing. Only the still→moving EDGE fires, so a continuous
-     * walk is a single probe, not a storm.
+     * controller handles cadence, so we do nothing. The edge also opens a bounded recovery window:
+     * if this first scan ends before the car is in range, keepConnected/watchdog retry until it ends.
      */
     private suspend fun onMotionEscalate(deps: Deps) {
         var last = MotionMonitor.Motion.UNKNOWN
@@ -311,6 +316,7 @@ class ProximityService : Service() {
             last = m
             if (!became || !deps.ble.hasCredential || !deps.ble.bluetoothAvailable) return@collect
             if (com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value) return@collect
+            motionSearchUntilMs = System.currentTimeMillis() + MOTION_SEARCH_WINDOW_MS
             when (deps.ble.state.value) {
                 DkBleManager.State.IDLE, DkBleManager.State.ERROR -> {
                     Logx.d("svc", "motion: phone started moving — proactive scan-connect probe")
@@ -394,6 +400,8 @@ class ProximityService : Service() {
         private const val AGGRESSIVE_RECONNECT_MS = 30_000L
         private const val WAKE_PROBE_DEBOUNCE_MS = 5_000L
         private const val WATCHDOG_INTERVAL_MS = 5_000L
+        /** Maximum foreground recovery time after a real movement edge; never an always-on scan. */
+        private const val MOTION_SEARCH_WINDOW_MS = 3 * 60_000L
         /** While yielded to the watch, poll faster so we notice resume/expiry promptly. */
         private const val WATCH_YIELD_POLL_MS = 1_000L
         /** Car message-centre poll cadence (no server push, so we pull). */

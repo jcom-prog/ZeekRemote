@@ -100,6 +100,7 @@ class ProximityController(
     // phone subsequently reaches the car, only a sustained receding trend may lock it again. This
     // preserves the 7GT's good departure lock without immediately relocking during approach.
     private var arrivalPending = false
+    private var arrivalUnlockedAtMs = 0L
     private var farRecedingStreak = 0
     // Confirmed-unlock retry loop: true while actively trying to unlock; the job is the loop itself.
     @Volatile private var needToUnlock = false
@@ -151,7 +152,7 @@ class ProximityController(
         linkLostAtMs = 0L; walkAwayArmed = false; lostReceding = false; lostRssi = null; cloudNetFired = false
         // Keep armedUnlocked as-is across start/stop toggles within a session isn't meaningful;
         // reset so a fresh monitor starts from a known state.
-        armedUnlocked = false; arrivalPending = false; farRecedingStreak = 0
+        armedUnlocked = false; arrivalPending = false; arrivalUnlockedAtMs = 0L; farRecedingStreak = 0
         needToUnlock = false; unlockJob?.cancel(); unlockJob = null
         farAsleep = false; nearRefDist = null; nearStillSinceMs = 0L
         farApproachDeadline = 0L; farApproachRefDist = Double.MAX_VALUE
@@ -217,7 +218,7 @@ class ProximityController(
         motion.onMovingEdge = null; motionWake?.complete(Unit); motionWake = null
         motion.stop()
         gattEma = null; linkLostAtMs = 0L; walkAwayArmed = false; cloudNetFired = false
-        arrivalPending = false; farRecedingStreak = 0
+        arrivalPending = false; arrivalUnlockedAtMs = 0L; farRecedingStreak = 0
         inCarSinceMs = 0L; steadyRef = null; steadySinceMs = 0L; lastCadence = ""
         rssiNullStreak = 0; pingInFlight = false; pingFailStreak = 0; lastPingMs = 0L
         farAsleep = false; nearRefDist = null; _wakeLockNeeded.value = false
@@ -330,6 +331,7 @@ class ProximityController(
 
         if (armedUnlocked && arrivalPending && smoothed >= ARRIVAL_REACHED_RSSI) {
             arrivalPending = false
+            arrivalUnlockedAtMs = 0L
             farRecedingStreak = 0
             Logx.d("prox", "arrival reached (rssi=$smoothed) — normal walk-away lock armed")
         }
@@ -460,13 +462,17 @@ class ProximityController(
             needToUnlock = false
             unlockJob?.cancel(); unlockJob = null
         }
-        // Once arrival has completed, retain the field-proven -82 dBm walk-away lock. Because Far now
-        // unlocks earlier than that threshold, the short pre-arrival phase requires three consecutive
-        // receding samples; otherwise an approaching phone could unlock and immediately relock.
-        if (armedUnlocked && smoothed <= lockThresh &&
-            (!arrivalPending || farRecedingStreak >= FAR_RECEDING_CONFIRM_SAMPLES)) {
+        // Once arrival has completed, retain the field-proven -82 dBm walk-away lock. Before arrival,
+        // require a grace period, a materially weaker signal AND sustained receding samples. Brief body
+        // shadow while walking toward the door must never relock a car that just unlocked at 6 m.
+        val preArrivalWalkAway = arrivalPending &&
+            now - arrivalUnlockedAtMs >= PRE_ARRIVAL_GRACE_MS &&
+            smoothed <= unlockThresh - PRE_ARRIVAL_EXIT_DB &&
+            farRecedingStreak >= FAR_RECEDING_CONFIRM_SAMPLES
+        if (armedUnlocked && smoothed <= lockThresh && (!arrivalPending || preArrivalWalkAway)) {
             armedUnlocked = false
             arrivalPending = false
+            arrivalUnlockedAtMs = 0L
             farRecedingStreak = 0
             Logx.d("prox", "walk-away-lock (rssi=$smoothed ~${"%.1f".format(dist)}m)")
             startLockLoop("walk-away-lock")
@@ -504,6 +510,7 @@ class ProximityController(
                     ble.noteUnlockConfirmed()
                     armedUnlocked = true
                     arrivalPending = true
+                    arrivalUnlockedAtMs = System.currentTimeMillis()
                     farRecedingStreak = 0
                     lastTriggerMs = System.currentTimeMillis() // cooldown before a walk-away lock
                     break
@@ -530,7 +537,7 @@ class ProximityController(
         if (lockJob?.isActive == true) return
         // A pending unlock loop is now moot (we've decided you're leaving) — stop it fighting us.
         needToUnlock = false; unlockJob?.cancel(); unlockJob = null
-        arrivalPending = false; farRecedingStreak = 0
+        arrivalPending = false; arrivalUnlockedAtMs = 0L; farRecedingStreak = 0
         lockJob = scope.launch {
             lastTriggerMs = System.currentTimeMillis()   // start the action cooldown
             var confirmed = false
@@ -744,7 +751,9 @@ class ProximityController(
         private const val JUMP_DB = 4
         private const val TREND_DEADBAND = 0.6      // dB of smoothed change to count as moving
         private const val ARRIVAL_REACHED_RSSI = -78 // close enough to arm the proven departure rule
-        private const val FAR_RECEDING_CONFIRM_SAMPLES = 3
+        private const val PRE_ARRIVAL_GRACE_MS = 15_000L
+        private const val PRE_ARRIVAL_EXIT_DB = 6
+        private const val FAR_RECEDING_CONFIRM_SAMPLES = 10
         private const val ALPHA_FAST = 0.6
         private const val ALPHA_SLOW = 0.35
         private const val LINK_LOSS_LOCK_DELAY_MS = 5_000L
