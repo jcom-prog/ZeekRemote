@@ -24,7 +24,7 @@ fun bakedSecret(key: String): String =
 // NOTE: the RSA password_public_key is a PUBLIC key, so it stays in BuildConfig (see below) -
 //       nothing is gained by hiding a public key, matching the "leave public certs" rule.
 val nativeSecretKeys = listOf(
-    "HMAC_ACCESS_KEY", "HMAC_SECRET_KEY", "PROD_SECRET",
+    "HMAC_ACCESS_KEY", "HMAC_SECRET_KEY", "PROD_SECRET", "XCHANGER_SIGN_SECRET",
     "OVERSEAS_ACCESS_KEY", "OVERSEAS_SECRET_KEY", "INBOX_AUTH_SECRET", "VIN_KEY", "VIN_IV",
     // Per-region signing sets (only the 3 signing secrets differ by region; everything else is
     // shared). The bare keys above are the EU/default set. SEA is extracted; EM (LA/ME) is wired

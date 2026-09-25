@@ -3,6 +3,7 @@ package com.openzeekr.app.net
 import android.util.Base64
 import com.openzeekr.app.config.ConfigStore
 import com.openzeekr.app.util.Logx
+import com.openzeekr.app.util.NativeSecrets
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -171,12 +172,18 @@ class AccountLogin(private val store: ConfigStore) {
                     .copyOf(16).joinToString("") { "%02x".format(it) }
                 // HF signature (SignInterceptor / SignUtil.sign): HMAC-SHA1 over a canonical
                 // string using the official EU appSecret. Stock 3.0.7 obtains that value from
-                // getTSPSecretValue("EU", "ONLINE") and passes the SAME AppInfo.appSecret to
-                // NetworkConfig.Builder.setSignSecret(). There is no separate LINE key here.
+                // getTSPSecretValue("EU", "ONLINE") and passes it as AppInfo.appSecret to
+                // NetworkConfig.Builder.setSignSecret(). It is separate from cfg.prodSecret.
                 // Without X-SIGNATURE the server returns 1440; with the wrong key it returns 1445.
                 val bodyStr = buildJsonObject { put("authCode", xAuthCode) }.toString()
                 val ts = System.currentTimeMillis().toString()
-                val hfKey = requireOfficialAppSecret(cfg.prodSecret)
+                // The official app retrieves this independently through
+                // NativeSecretLib.getTSPSecretValue("EU", "ONLINE"). Do not reuse the
+                // unrelated SDK prod_secret: doing so produces xchanger error 1445.
+                val hfKey = requireOfficialAppSecret(
+                    bakedSecret = NativeSecrets.xchangerSignSecret(),
+                    configuredSecret = cfg.xchangerSignSecret,
+                )
                 val sig = officialHfSign(
                     signSecret = hfKey,
                     url = cfg.xchangerSessionUrl,
@@ -402,10 +409,11 @@ class AccountLogin(private val store: ConfigStore) {
     }
 }
 
-/** Stock EU 3.0.7 uses AppInfo.appSecret for both the SDK and session/secure signing. */
-internal fun requireOfficialAppSecret(prodSecret: String): String {
-    require(prodSecret.isNotBlank()) {
-        "prod_secret not set; this build cannot create a Digital Key session"
+/** Resolve the value returned by stock 3.0.7 getTSPSecretValue("EU", "ONLINE"). */
+internal fun requireOfficialAppSecret(bakedSecret: String, configuredSecret: String): String {
+    val secret = bakedSecret.ifBlank { configuredSecret }
+    require(secret.isNotBlank()) {
+        "xchanger signing secret not set; this build cannot create a Digital Key session"
     }
-    return prodSecret
+    return secret
 }
