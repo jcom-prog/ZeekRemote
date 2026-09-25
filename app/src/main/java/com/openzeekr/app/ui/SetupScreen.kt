@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.BluetoothConnected
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.AlertDialog
@@ -135,10 +136,10 @@ fun SetupScreen(
                 }
             } else {
                 SectionHeader("Provision this phone")
-                StepRow("Enrol certificate", prov.step, DkProvisioning.Step.CERT)
-                StepRow("Bind device to key", prov.step, DkProvisioning.Step.BIND)
-                StepRow("Fetch key list", prov.step, DkProvisioning.Step.KEY_LIST)
-                StepRow("Fetch key material", prov.step, DkProvisioning.Step.KEY_INFO)
+                StepRow("Enrol certificate", prov, DkProvisioning.Step.CERT)
+                StepRow("Bind device to key", prov, DkProvisioning.Step.BIND)
+                StepRow("Fetch key list", prov, DkProvisioning.Step.KEY_LIST)
+                StepRow("Fetch key material", prov, DkProvisioning.Step.KEY_INFO)
                 prov.message?.let { Text(it, color = Brand.muted, fontSize = 12.sp) }
                 Text(
                     if (owner) "This account owns the car — an owner key will be created."
@@ -254,16 +255,20 @@ fun SetupScreen(
 }
 
 @Composable
-private fun StepRow(label: String, current: DkProvisioning.Step, self: DkProvisioning.Step) {
+private fun StepRow(label: String, state: DkProvisioning.State, self: DkProvisioning.Step) {
+    val current = state.step
     val ord = DkProvisioning.Step.values()
-    val done = ord.indexOf(current) > ord.indexOf(self) || current == DkProvisioning.Step.DONE
+    val done = current == DkProvisioning.Step.DONE ||
+        (current != DkProvisioning.Step.ERROR && ord.indexOf(current) > ord.indexOf(self))
     val active = current == self
+    val failed = current == DkProvisioning.Step.ERROR && state.failedAt == self
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
         when {
             done -> Icon(Icons.Filled.CheckCircle, null, tint = Brand.good, modifier = Modifier.size(17.dp))
+            failed -> Icon(Icons.Filled.Error, null, tint = Brand.crit, modifier = Modifier.size(17.dp))
             active -> CircularProgressIndicator(Modifier.size(15.dp), color = Brand.accent, strokeWidth = 2.dp)
             else -> Box(Modifier.size(15.dp).clip(CircleShape).border(1.5.dp, Brand.line, CircleShape))
         }
-        Text(label, color = if (done || active) MaterialTheme.colorScheme.onSurface else Brand.muted, fontSize = 13.5.sp)
+        Text(label, color = if (done || active || failed) MaterialTheme.colorScheme.onSurface else Brand.muted, fontSize = 13.5.sp)
     }
 }

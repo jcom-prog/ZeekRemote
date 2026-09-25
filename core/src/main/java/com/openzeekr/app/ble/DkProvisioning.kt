@@ -3,6 +3,7 @@ package com.openzeekr.app.ble
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import com.openzeekr.app.config.ConfigStore
 import com.openzeekr.app.net.HeaderInterceptor
+import com.openzeekr.app.net.AccountLogin
 import com.openzeekr.app.net.SignInterceptor
 import com.openzeekr.app.util.Logx
 import kotlinx.coroutines.Dispatchers
@@ -40,15 +41,21 @@ class DkProvisioning(
     private val ble: DkBleManager,
 ) {
     enum class Step { IDLE, CERT, KEY_LIST, BIND, KEY_INFO, DONE, ERROR }
-    data class State(val step: Step = Step.IDLE, val message: String? = null)
+    data class State(
+        val step: Step = Step.IDLE,
+        val message: String? = null,
+        /** The actual step that threw when [step] is [Step.ERROR]. */
+        val failedAt: Step? = null,
+    )
 
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state
 
     private companion object {
-        // Gateway 429 backoff for create-owner-blu-key (mirrors the stock app's ~5s wait+retry).
+        // The live EU gateway can still reject a retry after 5s. Give its sliding window room to
+        // expire before sending a newly signed request.
         const val OWNER_CREATE_ATTEMPTS = 4
-        const val OWNER_CREATE_BACKOFF_MS = 5_000L
+        const val OWNER_CREATE_BACKOFF_MS = 10_000L
     }
 
     // encodeDefaults=true so request bodies include ALL fields the stock app sends (e.g. key-list
@@ -248,34 +255,59 @@ class DkProvisioning(
             Logx.d("provision", "=== provision DONE dkId=$dkId ===")
             _state.value = State(Step.DONE, "dkId=$dkId" + (shareStatus?.let { " shareStatus=$it" } ?: " (owner)"))
             Unit
-        }.onFailure { Logx.e("provision", "=== provision FAILED ===", it); _state.value = State(Step.ERROR, it.message) }
+        }.onFailure {
+            val failedAt = _state.value.step.takeUnless { step -> step == Step.DONE || step == Step.ERROR }
+            Logx.e("provision", "=== provision FAILED at ${failedAt ?: "unknown"} ===", it)
+            _state.value = State(Step.ERROR, it.message, failedAt)
+        }
     }
 
     /**
      * create-owner-blu-key, retrying the gateway rate-limit. The APISIX gateway 429s
      * (`00A29` "Requests are too frequent") the FIRST create-owner-blu-key when it lands right
      * after the cert/key-list burst — CONFIRMED identical in the stock app (frida capture
-     * 2026-09-15): stock's first call also 429s and it simply waits ~5s and retries → 200. It's a
+     * 2026-09-15). The production gateway has since needed more than 5s in a live retry, so use a
+     * 10s window before sending a newly signed request. It's a
      * short sliding window, not an account/daily cap, and no intervening call "clears" it (a
      * key-list preceded both stock's failed and successful create) — only time. So re-sign (fresh
      * ECDSA signature, like stock) and retry with a ~5s backoff.
      */
     private suspend fun createOwnerBluKeyWithRetry(deviceId: String, sign: () -> String): DkResp<KeyItem> {
         var last: retrofit2.HttpException? = null
+        var sessionRefreshed = false
         for (attempt in 1..OWNER_CREATE_ATTEMPTS) {
             try {
                 return api.createOwnerBluKey(OwnerKeyReq(deviceId = deviceId, proprietary = "", signature = sign()))
             } catch (e: retrofit2.HttpException) {
-                if (e.code() == 429) {
-                    last = e
-                    Logx.w("provision", "create-owner-blu-key 429 (gateway rate-limit 00A29) — " +
-                        "backoff ${OWNER_CREATE_BACKOFF_MS}ms, retry $attempt/$OWNER_CREATE_ATTEMPTS …")
-                    if (attempt < OWNER_CREATE_ATTEMPTS) kotlinx.coroutines.delay(OWNER_CREATE_BACKOFF_MS)
-                } else throw e
+                val errorBody = runCatching { e.response()?.errorBody()?.string().orEmpty() }.getOrDefault("")
+                val serverCode = Regex("\\\"code\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"")
+                    .find(errorBody)?.groupValues?.getOrNull(1)
+                when {
+                    e.code() == 429 -> {
+                        last = e
+                        Logx.w("provision", "create-owner-blu-key 429 (gateway rate-limit 00A29) — " +
+                            "backoff ${OWNER_CREATE_BACKOFF_MS}ms, retry $attempt/$OWNER_CREATE_ATTEMPTS …")
+                        if (attempt < OWNER_CREATE_ATTEMPTS) kotlinx.coroutines.delay(OWNER_CREATE_BACKOFF_MS)
+                    }
+                    e.code() == 401 && serverCode == "079001" && !sessionRefreshed -> {
+                        // Live EU behaviour: after the gateway's initial 00A29, the next attempt can
+                        // answer 079001 (SDK login/session expired) while the UI still says Cloud.
+                        // Refresh all account/TSP/xchanger tokens, then create a fresh ECDSA signature.
+                        Logx.w("provision", "create-owner-blu-key 079001 — refreshing login session")
+                        AccountLogin(store).login().getOrElse { cause ->
+                            throw IllegalStateException(
+                                "Digital-key session expired (079001) and automatic sign-in failed: " +
+                                    (cause.message ?: cause.javaClass.simpleName), cause)
+                        }
+                        sessionRefreshed = true
+                        kotlinx.coroutines.delay(1_500)
+                    }
+                    else -> throw e
+                }
             }
         }
         throw IllegalStateException(
-            "create-owner-blu-key kept returning 429 (gateway rate-limit). Wait ~10s and try again.", last)
+            "create-owner-blu-key kept returning 429 (gateway rate-limit). Wait and try again.", last)
     }
 
     /**
