@@ -45,6 +45,9 @@ android {
             // Must exactly match the phone debug id for Wear Data Layer delivery.
             applicationIdSuffix = ".test"
             versionNameSuffix = "-work"
+            // Must use the same permanent test identity as the phone; never fall back to AGP's
+            // per-run generated debug keystore in CI.
+            if (keystorePropsFile.exists()) signingConfig = signingConfigs.getByName("release")
         }
         release {
             isMinifyEnabled = true

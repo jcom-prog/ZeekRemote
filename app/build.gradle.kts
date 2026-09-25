@@ -41,6 +41,9 @@ android {
             // package id/signing identity required by the Wear Data Layer.
             applicationIdSuffix = ".test"
             versionNameSuffix = "-work"
+            // CI writes keystore.properties from the encrypted permanent test-key secret. Binding
+            // it explicitly prevents AGP from silently generating a new debug identity.
+            if (keystorePropsFile.exists()) signingConfig = signingConfigs.getByName("release")
         }
         release {
             isMinifyEnabled = true

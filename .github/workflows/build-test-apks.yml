@@ -37,6 +37,12 @@ jobs:
           mkdir -p ~/.android
           printf '%s' "$TEST_KEYSTORE_B64" | base64 --decode > ~/.android/debug.keystore
           chmod 600 ~/.android/debug.keystore
+          printf '%s\n' \
+            "storeFile=$HOME/.android/debug.keystore" \
+            'storePassword=android' \
+            'keyAlias=androiddebugkey' \
+            'keyPassword=android' \
+            'storeType=JKS' > keystore.properties
           ACTUAL=$(keytool -list -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey \
             | sed -n 's/^[[:space:]]*SHA256: //p')
           test "$ACTUAL" = "96:F1:62:7B:1D:A3:34:CB:44:35:96:B1:74:6B:CC:E3:90:75:0F:1D:B7:51:EC:2B:F3:71:E8:2D:32:3B:45:B9"
