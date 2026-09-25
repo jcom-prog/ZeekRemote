@@ -174,9 +174,9 @@ class AccountLogin(private val store: ConfigStore) {
                 // this SignInterceptor). Without X-SIGNATURE the server returns 1440 "验签签名不存在".
                 val bodyStr = buildJsonObject { put("authCode", xAuthCode) }.toString()
                 val ts = System.currentTimeMillis().toString()
-                val hfKey = cfg.xchangerSignSecret.ifBlank {
-                    Logx.w("login", "step 4b: xchanger_sign_secret not set — signature will fail (add it to secrets)")
-                    cfg.xchangerSignSecret
+                val hfKey = resolveXchangerSignSecret(cfg.xchangerSignSecret, cfg.prodSecret)
+                if (cfg.xchangerSignSecret.isBlank()) {
+                    Logx.d("login", "step 4b: xchanger_sign_secret not set — using prod_secret")
                 }
                 val sig = hfSign(
                     signSecret = hfKey,
@@ -441,3 +441,11 @@ class AccountLogin(private val store: ConfigStore) {
         }
     }
 }
+
+/**
+ * The stock EU app obtains both values from NativeSecretLib.getTSPSecretValue("EU", "ONLINE").
+ * Keep the separately configurable field for captures from other app/region variants, but make
+ * older six-secret imports work without requiring the same secret to be duplicated in JSON.
+ */
+internal fun resolveXchangerSignSecret(xchangerSignSecret: String, prodSecret: String): String =
+    xchangerSignSecret.ifBlank { prodSecret }
