@@ -1,9 +1,7 @@
 package com.openzeekr.app.net
 
-
 import org.junit.Assert.assertEquals
 import org.junit.Test
-
 
 class OfficialHfSigningTest {
     @Test
@@ -28,7 +26,6 @@ class OfficialHfSigningTest {
             timestamp = "1790366400000",
             accept = "application/json;responseformat=3",
         )
-
 
         assertEquals("J7fuipFEIRNJdFtXd+JWSUHMpkc=", signature)
     }
