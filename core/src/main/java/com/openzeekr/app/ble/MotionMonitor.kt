@@ -57,6 +57,11 @@ class MotionMonitor(context: Context) {
     private val sensors = appCtx.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
     private val motionDetect: Sensor? = sensors?.getDefaultSensor(Sensor.TYPE_MOTION_DETECT)
     private val stationaryDetect: Sensor? = sensors?.getDefaultSensor(Sensor.TYPE_STATIONARY_DETECT)
+    // Galaxy S24-class devices expose this older one-shot as a genuine wake-up sensor even though
+    // MOTION_DETECT/STATIONARY_DETECT and their step detector are not wake-capable.
+    private val significantMotion: Sensor? =
+        sensors?.getDefaultSensor(Sensor.TYPE_SIGNIFICANT_MOTION)
+            ?.takeIf { isWakeCapableSignificantMotion(it.isWakeUpSensor) }
     // A non-wake-up step detector MUST NOT be selected as the key's wake source: its events are only
     // delivered after something else wakes the AP, which stranded the sleeping key on the Galaxy
     // S24+. Keep it only as a low-cost latency assist while Activity Recognition owns Doze wake-up.
@@ -81,6 +86,9 @@ class MotionMonitor(context: Context) {
     /** Invoked once on each STILL→MOVING edge (any source). Lets the caller cancel a long idle sleep. */
     @Volatile var onMovingEdge: (() -> Unit)? = null
 
+    /** Lets the service bridge the 1.5 s security debounce with a short, bounded CPU wake. */
+    @Volatile var onHardwareWake: (() -> Unit)? = null
+
     @Volatile private var running = false
     /** Elapsed-realtime anchors used by the key-sleep security gate. Elapsed time is immune to the
      * wall clock changing and includes deep sleep, which is exactly what "still for two minutes"
@@ -94,6 +102,14 @@ class MotionMonitor(context: Context) {
     }
     private val onStationary = object : TriggerEventListener() {
         override fun onTrigger(event: TriggerEvent?) { if (running) { setStill(); armMotion() } }
+    }
+    private val onSignificant = object : TriggerEventListener() {
+        override fun onTrigger(event: TriggerEvent?) {
+            if (!running) return
+            if (_state.value != Motion.MOVING) onHardwareWake?.invoke()
+            setMoving()
+            armSignificantMotion()
+        }
     }
 
     // Step detector: each step = MOVING and re-arms a no-step timeout; the timeout firing = STILL. The
@@ -135,13 +151,15 @@ class MotionMonitor(context: Context) {
         // once the CPU is awake, never as the source that promises to wake the secured key.
         if (startActivityRecognition()) {
             source = Source.ACTIVITY
+            armSignificantMotion()
             nonWakeStepDetector?.let {
                 sensors?.registerListener(onStep, it, SensorManager.SENSOR_DELAY_NORMAL)
             }
             Logx.d(
                 "motion",
                 "started via Activity Recognition" +
-                    if (nonWakeStepDetector != null) " + non-wakeup step assist" else " (no step detector)",
+                    (if (significantMotion != null) " + wake-up significant motion" else "") +
+                    (if (nonWakeStepDetector != null) " + non-wakeup step assist" else " (no step detector)"),
             )
             return
         }
@@ -155,6 +173,7 @@ class MotionMonitor(context: Context) {
         running = false
         runCatching { motionDetect?.let { sensors?.cancelTriggerSensor(onMotion, it) } }
         runCatching { stationaryDetect?.let { sensors?.cancelTriggerSensor(onStationary, it) } }
+        runCatching { significantMotion?.let { sensors?.cancelTriggerSensor(onSignificant, it) } }
         runCatching { sensors?.unregisterListener(onStep) }
         stillHandler.removeCallbacks(stepStillRunnable)
         stopActivityRecognition()
@@ -168,6 +187,9 @@ class MotionMonitor(context: Context) {
 
     private fun armMotion() { runCatching { motionDetect?.let { sensors?.requestTriggerSensor(onMotion, it) } } }
     private fun armStationary() { runCatching { stationaryDetect?.let { sensors?.requestTriggerSensor(onStationary, it) } } }
+    private fun armSignificantMotion() {
+        runCatching { significantMotion?.let { sensors?.requestTriggerSensor(onSignificant, it) } }
+    }
 
     private fun setMoving() {
         stillSinceElapsedMs = 0L
@@ -267,6 +289,8 @@ class MotionMonitor(context: Context) {
     companion object {
         /** Regression policy: an ordinary step detector cannot wake a sleeping application processor. */
         internal fun isWakeCapableStepDetector(isWakeUpSensor: Boolean): Boolean = isWakeUpSensor
+
+        internal fun isWakeCapableSignificantMotion(isWakeUpSensor: Boolean): Boolean = isWakeUpSensor
 
         // Must match the <attribution android:tag> declared in the manifest.
         private const val ATTRIBUTION_TAG = "proximity"

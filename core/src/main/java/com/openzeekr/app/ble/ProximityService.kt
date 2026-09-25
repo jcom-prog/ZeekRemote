@@ -87,6 +87,10 @@ class ProximityService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startInForeground()
         val deps = (application as? DepsHolder)?.deps ?: return START_STICKY
+        // A wake-up sensor only guarantees CPU time for delivery of its callback. Hold a short,
+        // bounded bridge across the 1.5 s motion-confirmation window; scan/connect owns the normal
+        // wakelock after recovery begins. This is never a standing idle wakelock.
+        deps.motion.onHardwareWake = { acquireWakeLock(HARDWARE_WAKE_BRIDGE_MS) }
         registerWakeReceiver()
 
         // Presence signals delivered by BleScanReceiver (offloaded scan woke us).
@@ -149,6 +153,7 @@ class ProximityService : Service() {
     override fun onDestroy() {
         loops?.cancel(); loops = null
         (application as? DepsHolder)?.deps?.let {
+            it.motion.onHardwareWake = null
             it.proximity.stop()
             runCatching { it.ble.disarmPresenceScan() }
         }
@@ -159,12 +164,12 @@ class ProximityService : Service() {
         super.onDestroy()
     }
 
-    private fun acquireWakeLock() {
+    private fun acquireWakeLock(timeoutMs: Long? = null) {
         if (wakeLock?.isHeld == true) return
         val pm = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager ?: return
         wakeLock = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, WAKELOCK_TAG).apply {
             setReferenceCounted(false)
-            runCatching { acquire() }  // no timeout: released explicitly in onDestroy
+            runCatching { if (timeoutMs != null) acquire(timeoutMs) else acquire() }
         }
         Logx.d("svc", "wakelock acquired (CPU stays awake for screen-off keep-alive/proximity)")
     }
@@ -468,6 +473,7 @@ class ProximityService : Service() {
         private const val KEY_WAKE_MOTION_CONFIRM_MS = 1_500L
         private const val KEY_SLEEP_LOCK_GRACE_MS = 15_000L
         private const val KEY_SLEEP_POLL_MS = 500L
+        private const val HARDWARE_WAKE_BRIDGE_MS = 5_000L
         /** While yielded to the watch, poll faster so we notice resume/expiry promptly. */
         private const val WATCH_YIELD_POLL_MS = 1_000L
         /** Car message-centre poll cadence (no server push, so we pull). */

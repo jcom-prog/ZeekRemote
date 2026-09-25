@@ -373,7 +373,10 @@ class DkBleManager(base: Context) : DkTransport {
             }
             // The DK broadcast-random rides a separate manufacturer-data PDU; capture it per-MAC
             // from every advert so it's ready whichever PDU triggers the name match.
-            if (rndByMac[addr] == null) parseBroadcastRnd(rec?.bytes)?.let {
+            if (rndByMac[addr] == null) DkAdvertParser.parseBroadcastRnd(
+                rawRecord = rec?.bytes,
+                manufacturerData = rec?.manufacturerSpecificData?.get(DK_MFR_COMPANY_ID),
+            )?.let {
                 rndByMac[addr] = it
                 Logx.d("ble", "broadcastRnd[$addr]=${it.joinToString("") { b -> "%02x".format(b) }}")
             }
@@ -439,30 +442,6 @@ class DkBleManager(base: Context) : DkTransport {
                     "for the car's name/MAC, then connect by MAC")
             }
         }
-    }
-
-    /**
-     * Extract the 8-byte broadcast-random from a raw BLE advertisement, matching
-     * `o0/a.a` + `BroadCastPacket.fromBin` in the stock app:
-     *   walk AD structures [len][type][payload]; the DK advert is len=0x15, type=0xFF
-     *   (manufacturer-specific). Its 20-byte packet has cryptedId at [8:20]; the
-     *   broadcast-random = cryptedId[4:12] = packet[12:20].
-     */
-    private fun parseBroadcastRnd(record: ByteArray?): ByteArray? {
-        if (record == null) return null
-        var i = 0
-        while (i < record.size) {
-            val len = record[i].toInt() and 0xFF
-            if (len == 0) break
-            if (i + 1 + len > record.size) break            // need [type + (len-1) payload]
-            val type = record[i + 1].toInt() and 0xFF
-            if (len == 0x15 && type == 0xFF) {
-                val packet = record.copyOfRange(i + 2, i + 1 + len)   // 20 bytes after the type
-                if (packet.size >= 20) return packet.copyOfRange(12, 20)
-            }
-            i += len + 1
-        }
-        return null
     }
 
     @SuppressLint("MissingPermission")

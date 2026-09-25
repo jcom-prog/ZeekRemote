@@ -14,4 +14,14 @@ class MotionMonitorPolicyTest {
     fun `wake-up step detector remains an accepted wake source`() {
         assertTrue(MotionMonitor.isWakeCapableStepDetector(isWakeUpSensor = true))
     }
+
+    @Test
+    fun `non wake-up significant motion is rejected`() {
+        assertFalse(MotionMonitor.isWakeCapableSignificantMotion(isWakeUpSensor = false))
+    }
+
+    @Test
+    fun `wake-up significant motion is accepted`() {
+        assertTrue(MotionMonitor.isWakeCapableSignificantMotion(isWakeUpSensor = true))
+    }
 }
