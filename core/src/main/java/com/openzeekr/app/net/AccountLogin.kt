@@ -170,12 +170,14 @@ class AccountLogin(private val store: ConfigStore) {
                     .digest(cfg.deviceIdentifier.ifBlank { "openzeekr" }.toByteArray())
                     .copyOf(16).joinToString("") { "%02x".format(it) }
                 // HF signature (SignInterceptor / SignUtil.sign): HMAC-SHA1 over a canonical
-                // string using xchanger's dedicated LINE secret. It is NOT prod_secret.
+                // string using the official EU appSecret. Stock 3.0.7 obtains that value from
+                // getTSPSecretValue("EU", "ONLINE") and passes the SAME AppInfo.appSecret to
+                // NetworkConfig.Builder.setSignSecret(). There is no separate LINE key here.
                 // Without X-SIGNATURE the server returns 1440; with the wrong key it returns 1445.
                 val bodyStr = buildJsonObject { put("authCode", xAuthCode) }.toString()
                 val ts = System.currentTimeMillis().toString()
-                val hfKey = requireXchangerSignSecret(cfg.xchangerSignSecret)
-                val sig = hfSign(
+                val hfKey = requireOfficialAppSecret(cfg.prodSecret)
+                val sig = officialHfSign(
                     signSecret = hfKey,
                     url = cfg.xchangerSessionUrl,
                     method = "POST",
@@ -358,53 +360,6 @@ class AccountLogin(private val store: ConfigStore) {
         return Base64.encodeToString(cipher.doFinal(password.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP)
     }
 
-    /**
-     * Replicates `com/baselinelibrary/sign/SignUtil.sign` (the HF/xchanger `SignInterceptor`).
-     * HMAC-SHA1, keyed by xchanger's dedicated LINE secret (not TSP prod_secret).
-     * stringToSign = getHeaders + "\n" + getParam + "\n" + getMD5(body) + timestamp + "\n"
-     *                + method + "\n" + getUrl   ; result = Base64(HMAC).trim().
-     * getMD5 uses android Base64.DEFAULT (keeps a trailing '\n') — matched exactly here.
-     * We send only X-api-* headers (no Accept), so getHeaders is just those two lines.
-     */
-    private fun hfSign(
-        signSecret: String, url: String, method: String, body: String,
-        nonce: String, sigVersion: String, timestamp: String, accept: String,
-    ): String {
-        // getHeaders: FIRST the "Accept" header's trimmed VALUE + '\n' (if present), THEN every
-        // request header whose name startsWith "X-api", TreeMap-sorted by name, emitted as
-        // name.lowercase() + ':' + value.trim() + '\n' (nonce sorts before version).
-        val headerLines = sortedMapOf(
-            "X-api-signature-nonce" to nonce,
-            "X-api-signature-version" to sigVersion,
-        )
-        val headersPart = buildString {
-            if (accept.isNotEmpty()) { append(accept.trim()); append('\n') }
-            for ((k, v) in headerLines) { append(k.lowercase()); append(':'); append(v.trim()); append('\n') }
-        }
-        // getParam: query params sorted "k=v&k2=v2" (leading '&' dropped), value replacements.
-        val query = url.substringAfter('?', "")
-        val params = sortedMapOf<String, String>()
-        if (query.isNotEmpty()) for (pair in query.split("&")) {
-            val i = pair.indexOf('='); if (i >= 0) params[pair.substring(0, i)] = pair.substring(i + 1)
-        }
-        val paramsPart = params.entries.joinToString("&") { (k, v) ->
-            val ev = v.replace("+", "%20").replace("*", "%2A").replace("%7E", "~").replace(",", "%2C")
-            "$k=$ev"
-        }
-        // getMD5(body): android Base64.DEFAULT of MD5(utf-8) — DEFAULT appends a trailing '\n'.
-        val md5 = java.security.MessageDigest.getInstance("MD5").digest(body.toByteArray(Charsets.UTF_8))
-        val md5Part = Base64.encodeToString(md5, Base64.DEFAULT)
-        // getUrl: path only (strip scheme+host, up to '?').
-        val afterScheme = url.substringAfter("://")
-        val slash = afterScheme.indexOf('/')
-        val path = if (slash < 0) "" else afterScheme.substring(slash).substringBefore('?')
-
-        val stringToSign = headersPart + "\n" + paramsPart + "\n" + md5Part + timestamp + "\n" + method + "\n" + path
-        val mac = javax.crypto.Mac.getInstance("HmacSHA1")
-        mac.init(javax.crypto.spec.SecretKeySpec(signSecret.toByteArray(Charsets.UTF_8), "HmacSHA1"))
-        return Base64.encodeToString(mac.doFinal(stringToSign.toByteArray(Charsets.UTF_8)), Base64.DEFAULT).trim()
-    }
-
     private fun ucPost(url: String, body: JsonObject?): JsonObject? =
         exec(ucClient, Request.Builder().url(url).post((body?.toString() ?: "{}").toRequestBody(jsonMedia)).build())
     private fun ucGet(url: String): JsonObject? =
@@ -447,10 +402,10 @@ class AccountLogin(private val store: ConfigStore) {
     }
 }
 
-/** Never substitute prod_secret: xchanger uses its own LINE signing secret. */
-internal fun requireXchangerSignSecret(xchangerSignSecret: String): String {
-    require(xchangerSignSecret.isNotBlank()) {
-        "xchanger_sign_secret not set; this build cannot create a Digital Key session"
+/** Stock EU 3.0.7 uses AppInfo.appSecret for both the SDK and session/secure signing. */
+internal fun requireOfficialAppSecret(prodSecret: String): String {
+    require(prodSecret.isNotBlank()) {
+        "prod_secret not set; this build cannot create a Digital Key session"
     }
-    return xchangerSignSecret
+    return prodSecret
 }

@@ -35,7 +35,6 @@ object NativeSecrets {
     fun hmacAccessKey(): String = guarded { nHmacAccessKey() }
     fun hmacSecretKey(): String = guarded { nHmacSecretKey() }
     fun prodSecret(): String = guarded { nProdSecret() }
-    fun xchangerSignSecret(): String = guarded { nXchangerSignSecret() }
     fun overseasAccessKey(): String = guarded { nOverseasAccessKey() }
     fun overseasSecretKey(): String = guarded { nOverseasSecretKey() }
     fun inboxAuthSecret(): String = guarded { nInboxAuthSecret() }
@@ -61,7 +60,6 @@ object NativeSecrets {
     private external fun nHmacAccessKey(): String
     private external fun nHmacSecretKey(): String
     private external fun nProdSecret(): String
-    private external fun nXchangerSignSecret(): String
     private external fun nOverseasAccessKey(): String
     private external fun nOverseasSecretKey(): String
     private external fun nInboxAuthSecret(): String

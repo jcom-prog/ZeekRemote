@@ -35,7 +35,8 @@ data class SecretsConfig(
     @SerialName("prod_secret") val prodSecret: String = "",
     @SerialName("vin_key") val vinKey: String = "",
     @SerialName("vin_iv") val vinIv: String = "",
-    /** HF/xchanger (ECARX) HMAC-SHA1 LINE signing key; distinct from TSP prod_secret. */
+    /** Legacy field retained only so older JSON imports remain compatible. Stock EU 3.0.7 uses
+     * [prodSecret] (AppInfo.appSecret) for the HF/xchanger HMAC-SHA1 signature as well. */
     @SerialName("xchanger_sign_secret") val xchangerSignSecret: String = "",
 
     /** Overseas-app (Azure gateway) HMAC AK/SK — ONLY for the message inbox on
@@ -321,7 +322,6 @@ data class SecretsConfig(
             prodSecret = NativeSecrets.prodSecret(),
             vinKey = NativeSecrets.vinKey(),
             vinIv = NativeSecrets.vinIv(),
-            xchangerSignSecret = NativeSecrets.xchangerSignSecret(),
             overseasAccessKey = NativeSecrets.overseasAccessKey(),
             overseasSecretKey = NativeSecrets.overseasSecretKey(),
             inboxAuthSecret = NativeSecrets.inboxAuthSecret(),

@@ -6,13 +6,13 @@ import org.junit.Test
 
 class AccountLoginSecretTest {
     @Test
-    fun `xchanger-specific secret takes precedence`() {
-        assertEquals("xchanger", requireXchangerSignSecret("xchanger"))
+    fun `official app secret is used directly for xchanger signing`() {
+        assertEquals("official-app-secret", requireOfficialAppSecret("official-app-secret"))
     }
 
     @Test
-    fun `blank xchanger secret fails instead of using another key`() {
-        assertThrows(IllegalArgumentException::class.java) { requireXchangerSignSecret("") }
-        assertThrows(IllegalArgumentException::class.java) { requireXchangerSignSecret("   ") }
+    fun `blank official app secret fails closed`() {
+        assertThrows(IllegalArgumentException::class.java) { requireOfficialAppSecret("") }
+        assertThrows(IllegalArgumentException::class.java) { requireOfficialAppSecret("   ") }
     }
 }

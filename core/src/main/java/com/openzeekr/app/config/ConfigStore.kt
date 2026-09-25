@@ -59,7 +59,6 @@ class ConfigStore private constructor(private val prefs: SharedPreferences) {
             prodSecret = cfg.prodSecret.ifBlank { d.prodSecret },
             vinKey = cfg.vinKey.ifBlank { d.vinKey },
             vinIv = cfg.vinIv.ifBlank { d.vinIv },
-            xchangerSignSecret = cfg.xchangerSignSecret.ifBlank { d.xchangerSignSecret },
         )
     }
 
