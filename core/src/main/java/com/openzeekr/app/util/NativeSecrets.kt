@@ -1,6 +1,5 @@
 package com.openzeekr.app.util
 
-
 /**
  * App-global secret accessors backed by a small JNI native library (libozsecrets.so).
  *
@@ -21,22 +20,17 @@ package com.openzeekr.app.util
  */
 object NativeSecrets {
 
-
     @Volatile private var available: Boolean = false
-
 
     init {
         available = runCatching { System.loadLibrary("ozsecrets") }.isSuccess
     }
 
-
     /** True when the native lib loaded (i.e. on a real device build). */
     val isAvailable: Boolean get() = available
 
-
     private inline fun guarded(block: () -> String): String =
         if (available) runCatching(block).getOrDefault("") else ""
-
 
     fun hmacAccessKey(): String = guarded { nHmacAccessKey() }
     fun hmacSecretKey(): String = guarded { nHmacSecretKey() }
@@ -47,7 +41,6 @@ object NativeSecrets {
     fun inboxAuthSecret(): String = guarded { nInboxAuthSecret() }
     fun vinKey(): String = guarded { nVinKey() }
     fun vinIv(): String = guarded { nVinIv() }
-
 
     // ---- Per-region signing secrets (EU / EM / SEA). Only these 3 differ by region; everything
     //      else is shared. A region whose set isn't baked falls back to the EU/default set - so
@@ -60,10 +53,8 @@ object NativeSecrets {
     fun prodSecret(region: String): String =
         regionValue(region, { nProdSecretSea() }, { nProdSecretEm() }).ifBlank { prodSecret() }
 
-
     private inline fun regionValue(region: String, sea: () -> String, em: () -> String): String =
         when (region.uppercase()) { "SEA" -> guarded(sea); "EM" -> guarded(em); else -> "" }
-
 
     // ---- JNI bindings (implemented in ozsecrets.c). Names must not be renamed/stripped;
     //      see the -keep rule for com.openzeekr.app.util.NativeSecrets in proguard-rules.pro. ----
