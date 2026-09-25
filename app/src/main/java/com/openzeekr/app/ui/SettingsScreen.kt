@@ -423,7 +423,6 @@ private fun SecretsSection(cfg: SecretsConfig, set: ((SecretsConfig) -> SecretsC
             Field("prod_secret", cfg.prodSecret, secret = true, supportingText = if (cfg.prodSecret.isBlank()) "Required" else null) { v -> set { it.copy(prodSecret = v) } }
             Field("vin_key", cfg.vinKey, secret = true, supportingText = if (cfg.vinKey.isNotEmpty() && cfg.vinKey.length != 16) "Error: must be exactly 16 chars" else "16-character AES key") { v -> set { it.copy(vinKey = v) } }
             Field("vin_iv", cfg.vinIv, secret = true, supportingText = if (cfg.vinIv.isNotEmpty() && cfg.vinIv.length != 16) "Error: must be exactly 16 chars" else "16-character AES IV") { v -> set { it.copy(vinIv = v) } }
-            Field("xchanger_sign_secret", cfg.xchangerSignSecret, secret = true) { v -> set { it.copy(xchangerSignSecret = v) } }
             val overseasErr = if (cfg.overseasAccessKey.isBlank() != cfg.overseasSecretKey.isBlank()) "Error: both overseas keys must be set" else null
             Field("overseas_access_key (notifications)", cfg.overseasAccessKey, secret = true, supportingText = overseasErr) { v -> set { it.copy(overseasAccessKey = v) } }
             Field("overseas_secret_key (notifications)", cfg.overseasSecretKey, secret = true, supportingText = overseasErr) { v -> set { it.copy(overseasSecretKey = v) } }
