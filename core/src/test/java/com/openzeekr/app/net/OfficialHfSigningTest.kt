@@ -1,9 +1,21 @@
 package com.openzeekr.app.net
 
+
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
+
 class OfficialHfSigningTest {
+    @Test
+    fun `baked official secret wins over stale imported value`() {
+        assertEquals("official", requireOfficialAppSecret("official", "stale"))
+    }
+
+    @Test
+    fun `configured official secret is used by clean builds`() {
+        assertEquals("configured", requireOfficialAppSecret("", "configured"))
+    }
+
     @Test
     fun `matches independently calculated stock SignUtil vector`() {
         val signature = officialHfSign(
@@ -16,6 +28,7 @@ class OfficialHfSigningTest {
             timestamp = "1790366400000",
             accept = "application/json;responseformat=3",
         )
+
 
         assertEquals("J7fuipFEIRNJdFtXd+JWSUHMpkc=", signature)
     }
