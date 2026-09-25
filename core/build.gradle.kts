@@ -1,10 +1,12 @@
 import java.util.Properties
 
+
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.serialization")
 }
+
 
 // Baked secrets now live in :core (SecretsConfig moved here). Same gitignored
 // secrets.properties at the repo root; missing file -> all values empty. The
@@ -16,6 +18,7 @@ val secretsProps = Properties().apply {
 fun bakedSecret(key: String): String =
     (secretsProps.getProperty(key) ?: "").replace("\\", "\\\\").replace("\"", "\\\"")
 
+
 // ---- JNI native secrets: inject the genuinely-secret VALUES into a gitignored C header at
 //      build time, so they live in libozsecrets.so instead of a BuildConfig DEX string.
 // The committed C (src/main/cpp/ozsecrets.c) #includes this generated header; the header is
@@ -24,7 +27,7 @@ fun bakedSecret(key: String): String =
 // NOTE: the RSA password_public_key is a PUBLIC key, so it stays in BuildConfig (see below) -
 //       nothing is gained by hiding a public key, matching the "leave public certs" rule.
 val nativeSecretKeys = listOf(
-    "HMAC_ACCESS_KEY", "HMAC_SECRET_KEY", "PROD_SECRET",
+    "HMAC_ACCESS_KEY", "HMAC_SECRET_KEY", "PROD_SECRET", "XCHANGER_SIGN_SECRET",
     "OVERSEAS_ACCESS_KEY", "OVERSEAS_SECRET_KEY", "INBOX_AUTH_SECRET", "VIN_KEY", "VIN_IV",
     // Per-region signing sets (only the 3 signing secrets differ by region; everything else is
     // shared). The bare keys above are the EU/default set. SEA is extracted; EM (LA/ME) is wired
@@ -52,17 +55,21 @@ run {
     if (!header.exists() || header.readText() != text) header.writeText(text)
 }
 
+
 android {
     namespace = "com.openzeekr.core"
     compileSdk = 34
+
 
     // Build the native secrets lib (libozsecrets.so). NOTE: ndkVersion must match an NDK installed
     // under the SDK (Android Studio > SDK Manager > NDK), or change it to your installed version /
     // remove this line to use AGP's default. An unavailable NDK version fails the native build.
     ndkVersion = "27.0.12077973"
 
+
     defaultConfig {
         minSdk = 26
+
 
         // The genuinely-secret app-global values now live in the JNI native lib (libozsecrets.so),
         // injected at build time from secrets.properties (see the header generation above and
@@ -72,12 +79,14 @@ android {
         buildConfigField("String", "SEC_PASSWORD_PUBLIC_KEY", "\"${bakedSecret("PASSWORD_PUBLIC_KEY")}\"")
     }
 
+
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
             version = "3.22.1"
         }
     }
+
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -86,15 +95,18 @@ android {
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { buildConfig = true }
 
+
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
 }
 
+
 dependencies {
     // Exposed to :app and :wear (they use these types directly), hence `api`.
     api("androidx.core:core-ktx:1.13.1")
     api("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
 
     // Networking (cloud TSP)
     api("com.squareup.okhttp3:okhttp:4.12.0")
@@ -103,11 +115,14 @@ dependencies {
     api("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
     api("com.jakewharton.retrofit:retrofit2-kotlinx-serialization-converter:1.0.0")
 
+
     // Encrypted config storage
     api("androidx.security:security-crypto:1.1.0-alpha06")
 
+
     // Activity Recognition (proximity motion fallback when there's no hardware motion sensor)
     api("com.google.android.gms:play-services-location:21.3.0")
+
 
     // FCM push (car message-centre alarms while the screen is off). NO google-services plugin /
     // google-services.json — the default FirebaseApp auto-inits from the stock project's string
@@ -116,9 +131,11 @@ dependencies {
     api(platform("com.google.firebase:firebase-bom:33.5.1"))
     api("com.google.firebase:firebase-messaging")
 
+
     // DK BLE crypto
     api("org.bouncycastle:bcprov-jdk18on:1.78.1")
     api("org.bouncycastle:bcpkix-jdk18on:1.78.1")
+
 
     // Offline crypto unit tests (RPA CMAC / ECIES key unwrap)
     testImplementation("junit:junit:4.13.2")
