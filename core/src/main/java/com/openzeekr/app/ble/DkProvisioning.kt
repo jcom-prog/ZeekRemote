@@ -102,7 +102,15 @@ class DkProvisioning(
             val vin = cfg.vin.ifBlank { error("VIN not set (fetch after login)") }
             val deviceId = identity.deviceId
             Logx.d("provision", "userId=$userId vin=$vin deviceId=$deviceId")
-            val sig = { identity.signDkMessage(userId, vin) }   // userId+deviceId+vin, re-signed per call
+            // Resolve userId/VIN for every signature. A 079001 response asks the official app to
+            // refresh its vehicle list; that refresh can replace either value. Capturing the values
+            // from provision() here made the retry sign stale identity data forever.
+            val sig = {
+                signWithCurrentDkContext(
+                    context = { store.current().let { it.userId to it.vin } },
+                    signer = identity::signDkMessage,
+                )
+            }
 
             // 1. enrol our cert. The account allows only ONE active device/app at a time; if the
             //    stock Zeekr app is active, TSP returns 401 {"code":"079021","The account is
@@ -290,13 +298,13 @@ class DkProvisioning(
                         if (attempt < OWNER_CREATE_ATTEMPTS) kotlinx.coroutines.delay(OWNER_CREATE_BACKOFF_MS)
                     }
                     e.code() == 401 && serverCode == "079001" && !sessionRefreshed -> {
-                        // Live EU behaviour: after the gateway's initial 00A29, the next attempt can
-                        // answer 079001 (SDK login/session expired) while the UI still says Cloud.
-                        // Refresh all account/TSP/xchanger tokens, then create a fresh ECDSA signature.
-                        Logx.w("provision", "create-owner-blu-key 079001 — refreshing login session")
+                        // Stock 3.0.7 maps 079001 to action_refresh_vehicle_list. AccountLogin's
+                        // final phase refreshes that list as well as the associated account context;
+                        // the next loop iteration then signs with the newly stored userId/VIN.
+                        Logx.w("provision", "create-owner-blu-key 079001 — refreshing vehicle/account context")
                         AccountLogin(store).login().getOrElse { cause ->
                             throw IllegalStateException(
-                                "Digital-key session expired (079001) and automatic sign-in failed: " +
+                                "Digital-key vehicle context expired (079001) and refresh failed: " +
                                     (cause.message ?: cause.javaClass.simpleName), cause)
                         }
                         sessionRefreshed = true
@@ -359,6 +367,17 @@ class DkProvisioning(
             Logx.d("provision", "=== key removed (cloud best-effort, local fully wiped) ===")
         }
     }
+}
+
+/** Build a DK signature from values read at call time, never from pre-refresh snapshots. */
+internal fun signWithCurrentDkContext(
+    context: () -> Pair<String, String>,
+    signer: (userId: String, vin: String) -> String,
+): String {
+    val (userId, vin) = context()
+    require(userId.isNotBlank()) { "account userId missing after refresh" }
+    require(vin.isNotBlank()) { "VIN missing after vehicle-list refresh" }
+    return signer(userId, vin)
 }
 
 // ---------------- DK cloud API (relative to baseUrl) ----------------
