@@ -110,6 +110,7 @@ object HttpLog {
         "openId", "deviceIdentifier", "deviceId",
         "cmacKey", "digitalKey", "privateKey", "priKey", "csr", "cert",
         "phoneNumber", "mobile", "vin",
+        "email", "authCode", "identifier", "proprietary",
         "sk", "ak",
     )
 
@@ -120,12 +121,18 @@ object HttpLog {
     private val jsonScalar = Regex("(\"(?:$keyAlt)[A-Za-z0-9_]*\"\\s*:\\s*)(?!\")[^,}\\]\\s]+", RegexOption.IGNORE_CASE)
     // key=value (form body / query string)  ->  key=***
     private val formKv = Regex("\\b((?:$keyAlt)[A-Za-z0-9_]*)=[^&\\s\"]*", RegexOption.IGNORE_CASE)
+    // Defense in depth for auth responses whose bearer is a bare value or nested in an
+    // unexpected field name: redact JWTs and explicit Bearer credentials regardless of key.
+    private val jwt = Regex("\\beyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\b")
+    private val bearer = Regex("(?i)(Bearer\\s+)[A-Za-z0-9._~+/-]+=*")
 
     /** Scrub secret VALUES out of a single log line before it is logged. */
     fun scrub(line: String): String {
         var s = jsonQuoted.replace(line) { m -> m.groupValues[1] + "***" + m.groupValues[2] }
         s = jsonScalar.replace(s) { m -> m.groupValues[1] + "***" }
         s = formKv.replace(s) { m -> m.groupValues[1] + "=***" }
+        s = jwt.replace(s, "***")
+        s = bearer.replace(s) { m -> m.groupValues[1] + "***" }
         return s
     }
 

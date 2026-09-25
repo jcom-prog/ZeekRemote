@@ -1,17 +1,18 @@
 package com.openzeekr.app.net
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class AccountLoginSecretTest {
     @Test
     fun `xchanger-specific secret takes precedence`() {
-        assertEquals("xchanger", resolveXchangerSignSecret("xchanger", "prod"))
+        assertEquals("xchanger", requireXchangerSignSecret("xchanger"))
     }
 
     @Test
-    fun `blank xchanger secret falls back to prod secret`() {
-        assertEquals("prod", resolveXchangerSignSecret("", "prod"))
-        assertEquals("prod", resolveXchangerSignSecret("   ", "prod"))
+    fun `blank xchanger secret fails instead of using another key`() {
+        assertThrows(IllegalArgumentException::class.java) { requireXchangerSignSecret("") }
+        assertThrows(IllegalArgumentException::class.java) { requireXchangerSignSecret("   ") }
     }
 }

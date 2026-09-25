@@ -50,6 +50,14 @@ jobs:
       - name: Make Gradle wrapper executable
         run: chmod +x gradlew
 
+      - name: Install xchanger signing secret
+        env:
+          XCHANGER_SIGN_SECRET: ${{ secrets.ZEEKREMOTE_XCHANGER_SIGN_SECRET }}
+        run: |
+          test -n "$XCHANGER_SIGN_SECRET"
+          printf 'XCHANGER_SIGN_SECRET=%s\n' "$XCHANGER_SIGN_SECRET" > secrets.properties
+          chmod 600 secrets.properties
+
       - name: Test and build phone and watch APKs
         run: ./gradlew :core:test :app:assembleDebug :wear:assembleDebug --stacktrace
 

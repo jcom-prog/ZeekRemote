@@ -97,7 +97,7 @@ class AccountLogin(private val store: ConfigStore) {
         runCatching {
             val cfg = store.current()
             Logx.d("login", "=== login start ===")
-            Logx.d("login", "email=${cfg.email.ifBlank { "(blank)" }} deviceId=${cfg.deviceIdentifier}")
+            Logx.d("login", "email=${if (cfg.email.isBlank()) "(blank)" else "(set)"} deviceId=${Logx.preview(cfg.deviceIdentifier)}")
             Logx.d("login", "hmacAccessKey=${Logx.preview(cfg.hmacAccessKey)} hmacSecretKey=${Logx.preview(cfg.hmacSecretKey)}")
             Logx.d("login", "passwordPublicKey=${Logx.preview(cfg.passwordPublicKey)} prodSecret=${Logx.preview(cfg.prodSecret)}")
             Logx.d("login", "region=${cfg.regionCode} usercenter=${cfg.usercenterUrl} tsp=${cfg.baseUrl}")
@@ -138,7 +138,7 @@ class AccountLogin(private val store: ConfigStore) {
             val userId = info?.get("userId")?.jsonPrimitive?.contentOrNull
                 ?: info?.get("id")?.jsonPrimitive?.contentOrNull
             val accountUuid = info?.get("uuid")?.jsonPrimitive?.contentOrNull
-            Logx.d("login", "step 3/6 user/info OK, userId=${userId ?: "(none)"} uuid=${accountUuid ?: "(none)"}")
+            Logx.d("login", "step 3/6 user/info OK, userId=${Logx.preview(userId)} uuid=${Logx.preview(accountUuid)}")
 
             // 4. tsp code
             Logx.d("login", "step 4/6 tspCode …")
@@ -151,8 +151,9 @@ class AccountLogin(private val store: ConfigStore) {
             //     login; this is the registration path that makes the VEHICLE accept our device
             //     for BLE DK. Without it the car answers 0x0102 with EEC_confirmFailed (0x1010)
             //     instead of EEC_notAuthenticated (0x1011). Uses a SECOND OAuth client
-            //     (app-authorization 1009). Best-effort — never blocks TSP login.
-            runCatching {
+            //     (app-authorization 1009). This is REQUIRED: continuing after failure only leaves
+            //     a healthy-looking cloud session that can never provision a Digital Key.
+            run {
                 Logx.d("login", "step 4b xchanger tspCode (client ${ZeekrConst.XCHANGER_CLIENT_ID}) …")
                 val xCodeData = exec(ucClient, Request.Builder()
                     .url("$uc${ZeekrConst.TSPCODE_URL}?tspClientId=${ZeekrConst.XCHANGER_CLIENT_ID}")
@@ -169,15 +170,11 @@ class AccountLogin(private val store: ConfigStore) {
                     .digest(cfg.deviceIdentifier.ifBlank { "openzeekr" }.toByteArray())
                     .copyOf(16).joinToString("") { "%02x".format(it) }
                 // HF signature (SignInterceptor / SignUtil.sign): HMAC-SHA1 over a canonical
-                // string, keyed by getSignSecret()==appSecret==NativeSecretLib.getTSPSecretValue
-                // ("EU","ONLINE") — the SAME value as our prod_secret (both TSP + HF stacks share
-                // this SignInterceptor). Without X-SIGNATURE the server returns 1440 "验签签名不存在".
+                // string using xchanger's dedicated LINE secret. It is NOT prod_secret.
+                // Without X-SIGNATURE the server returns 1440; with the wrong key it returns 1445.
                 val bodyStr = buildJsonObject { put("authCode", xAuthCode) }.toString()
                 val ts = System.currentTimeMillis().toString()
-                val hfKey = resolveXchangerSignSecret(cfg.xchangerSignSecret, cfg.prodSecret)
-                if (cfg.xchangerSignSecret.isBlank()) {
-                    Logx.d("login", "step 4b: xchanger_sign_secret not set — using prod_secret")
-                }
+                val hfKey = requireXchangerSignSecret(cfg.xchangerSignSecret)
                 val sig = hfSign(
                     signSecret = hfKey,
                     url = cfg.xchangerSessionUrl,
@@ -188,7 +185,7 @@ class AccountLogin(private val store: ConfigStore) {
                     timestamp = ts,
                     accept = ZeekrConst.XCHANGER_ACCEPT,
                 )
-                Logx.d("login", "step 4b xchanger session (X-DEVICE-IDENTIFIER=$devId) X-SIGNATURE=${Logx.preview(sig)} ts=$ts key=${Logx.preview(hfKey)} …")
+                Logx.d("login", "step 4b xchanger session (X-DEVICE-IDENTIFIER=${Logx.preview(devId)}) X-SIGNATURE=${Logx.preview(sig)} ts=$ts key=${Logx.preview(hfKey)} …")
                 // xchanger uses its own envelope {code:1000, data:{…}} (not the 000000/success one),
                 // so read the raw root and accept 1000 as success.
                 // Header set mirrors stock's HFOkHttpClientUtil$RequestInterceptor for ZEEKR.
@@ -223,14 +220,23 @@ class AccountLogin(private val store: ConfigStore) {
                 val xCode = xRoot?.get("code")?.jsonPrimitive?.contentOrNull
                 val xData = xRoot?.get("data")?.let { if (it is JsonObject) it else null }
                 if (xCode != "1000" || xData == null) {
-                    val xErr = xRoot?.get("error")?.let { if (it is JsonObject) it else null }
-                    error("xchanger session code=$xCode err=${xErr?.get("code")?.jsonPrimitive?.contentOrNull} ${xErr?.get("message")?.jsonPrimitive?.contentOrNull ?: ""}")
+                    val xErr = xRoot?.get("error") as? JsonObject
+                    val detailCode = xErr?.get("code")?.jsonPrimitive?.contentOrNull
+                    val message = xErr?.get("message")?.jsonPrimitive?.contentOrNull
+                        ?: xRoot?.get("message")?.jsonPrimitive?.contentOrNull
+                        ?: xRoot?.get("msg")?.jsonPrimitive?.contentOrNull
+                    error("xchanger session rejected: code=$xCode" +
+                        (detailCode?.let { " error=$it" } ?: "") +
+                        (message?.let { " message=$it" } ?: ""))
                 }
                 val xClientId = xData["clientId"]?.jsonPrimitive?.contentOrNull
                 val xToken = xData["accessToken"]?.jsonPrimitive?.contentOrNull
-                store.update { it.copy(xchangerClientId = xClientId ?: "", xchangerToken = xToken ?: "") }
-                Logx.d("login", "step 4b xchanger session OK clientId=$xClientId token=${Logx.preview(xToken ?: "")}")
-            }.onFailure { Logx.w("login", "step 4b xchanger session FAILED: ${it.message}") }
+                require(!xClientId.isNullOrBlank() && !xToken.isNullOrBlank()) {
+                    "xchanger session returned no clientId/accessToken"
+                }
+                store.update { it.copy(xchangerClientId = xClientId, xchangerToken = xToken) }
+                Logx.d("login", "step 4b xchanger session OK clientId=${Logx.preview(xClientId)} token=${Logx.preview(xToken)}")
+            }
 
             // 4c. Register THIS device as the account's active push endpoint (zom-message-core).
             //     Stock does this on login; it is what claims the single-device session — logging
@@ -283,7 +289,7 @@ class AccountLogin(private val store: ConfigStore) {
             // in user/info (that returns only the uuid) — it's a claim in the TSP
             // bearer JWT. Extract it from there.
             val jwtUserId = jwtClaim(bearer, "userId")
-            Logx.d("login", "userId from JWT=${jwtUserId ?: "(none)"}")
+            Logx.d("login", "userId from JWT=${Logx.preview(jwtUserId)}")
 
             // persist token+userId (+ account openId for the inbox HS256 token, see
             // InboxAuthToken) BEFORE the vehicle-list call (it needs auth)
@@ -302,7 +308,7 @@ class AccountLogin(private val store: ConfigStore) {
                 val isOwner = first?.get("isOwner")?.jsonPrimitive?.booleanOrNull ?: false
                 if (!vin.isNullOrBlank()) {
                     store.update { it.copy(vin = vin, isOwner = isOwner) }
-                    Logx.d("login", "step 6/6 vehicle-list OK, vin=$vin isOwner=$isOwner")
+                    Logx.d("login", "step 6/6 vehicle-list OK, vin=${Logx.preview(vin)} isOwner=$isOwner")
                 } else {
                     Logx.w("login", "step 6/6 vehicle-list returned no vin (enter it manually if needed)")
                 }
@@ -333,7 +339,7 @@ class AccountLogin(private val store: ConfigStore) {
             put("hbType", 3); put("ts", System.currentTimeMillis())
         }
         tspPost("${tsp}ms-app-online-manager/api/v1.0/app/hb", body)
-        Logx.d("login", "app/hb online OK (deviceId=${cfg.appInstanceId})")
+        Logx.d("login", "app/hb online OK (deviceId=${Logx.preview(cfg.appInstanceId)})")
     }
 
     /** Extract a string claim from a JWT bearer token ("Bearer <header>.<payload>.<sig>"). */
@@ -354,8 +360,7 @@ class AccountLogin(private val store: ConfigStore) {
 
     /**
      * Replicates `com/baselinelibrary/sign/SignUtil.sign` (the HF/xchanger `SignInterceptor`).
-     * HMAC-SHA1, keyed by getSignSecret() == appSecret == NativeSecretLib.getTSPSecretValue
-     * ("EU","ONLINE") == our prod_secret (TSP + HF stacks share this one SignInterceptor).
+     * HMAC-SHA1, keyed by xchanger's dedicated LINE secret (not TSP prod_secret).
      * stringToSign = getHeaders + "\n" + getParam + "\n" + getMD5(body) + timestamp + "\n"
      *                + method + "\n" + getUrl   ; result = Base64(HMAC).trim().
      * getMD5 uses android Base64.DEFAULT (keeps a trailing '\n') — matched exactly here.
@@ -442,10 +447,10 @@ class AccountLogin(private val store: ConfigStore) {
     }
 }
 
-/**
- * The stock EU app obtains both values from NativeSecretLib.getTSPSecretValue("EU", "ONLINE").
- * Keep the separately configurable field for captures from other app/region variants, but make
- * older six-secret imports work without requiring the same secret to be duplicated in JSON.
- */
-internal fun resolveXchangerSignSecret(xchangerSignSecret: String, prodSecret: String): String =
-    xchangerSignSecret.ifBlank { prodSecret }
+/** Never substitute prod_secret: xchanger uses its own LINE signing secret. */
+internal fun requireXchangerSignSecret(xchangerSignSecret: String): String {
+    require(xchangerSignSecret.isNotBlank()) {
+        "xchanger_sign_secret not set; this build cannot create a Digital Key session"
+    }
+    return xchangerSignSecret
+}

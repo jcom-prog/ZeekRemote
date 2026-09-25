@@ -35,7 +35,7 @@ data class SecretsConfig(
     @SerialName("prod_secret") val prodSecret: String = "",
     @SerialName("vin_key") val vinKey: String = "",
     @SerialName("vin_iv") val vinIv: String = "",
-    /** HF/xchanger (ECARX) HMAC-SHA1 signing key = NativeSecretLib.getTSPSecretValue("EU","ONLINE"). */
+    /** HF/xchanger (ECARX) HMAC-SHA1 LINE signing key; distinct from TSP prod_secret. */
     @SerialName("xchanger_sign_secret") val xchangerSignSecret: String = "",
 
     /** Overseas-app (Azure gateway) HMAC AK/SK — ONLY for the message inbox on
