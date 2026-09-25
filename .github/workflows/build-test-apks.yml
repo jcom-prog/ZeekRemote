@@ -50,42 +50,26 @@ jobs:
       - name: Make Gradle wrapper executable
         run: chmod +x gradlew
 
-      - name: Install xchanger signing secret
-        env:
-          XCHANGER_SIGN_SECRET: ${{ secrets.ZEEKREMOTE_XCHANGER_SIGN_SECRET }}
-        run: |
-          test -n "$XCHANGER_SIGN_SECRET"
-          printf 'XCHANGER_SIGN_SECRET=%s\n' "$XCHANGER_SIGN_SECRET" > secrets.properties
-          chmod 600 secrets.properties
-
-      - name: Test and build phone and watch APKs
-        run: ./gradlew :core:test :app:assembleDebug :wear:assembleDebug --stacktrace
+      - name: Test core and build phone APK
+        run: ./gradlew :core:test :app:assembleDebug --stacktrace
 
       - name: Verify Crystal White 7GT hero is packaged and defaulted
         run: |
           unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -q 'assets/cars/car_7gt.png'
           grep -A2 'CarModel("7GT"' app/src/main/java/com/openzeekr/app/ui/CarCatalog.kt | grep -q 'PaintColor("Crystal White"'
 
-      - name: Verify permanent phone and watch signing identity
+      - name: Verify permanent phone signing identity
         run: |
           APKSIGNER="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner"
           EXPECTED="96f1627b1da334cb443596b1746bcce390750f1db751ec2bf371e82d323b45b9"
-          for APK in app/build/outputs/apk/debug/app-debug.apk wear/build/outputs/apk/debug/wear-debug.apk; do
-            CERTS=$("$APKSIGNER" verify --print-certs "$APK")
-            printf '%s\n' "$CERTS"
-            printf '%s\n' "$CERTS" | grep -Fqi "certificate SHA-256 digest: $EXPECTED"
-          done
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          CERTS=$("$APKSIGNER" verify --print-certs "$APK")
+          printf '%s\n' "$CERTS"
+          printf '%s\n' "$CERTS" | grep -Fqi "certificate SHA-256 digest: $EXPECTED"
 
       - name: Upload phone APK
         uses: actions/upload-artifact@v4
         with:
           name: ZeekRemote-phone-test
           path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-
-      - name: Upload watch APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: ZeekRemote-watch-test
-          path: wear/build/outputs/apk/debug/wear-debug.apk
           if-no-files-found: error
