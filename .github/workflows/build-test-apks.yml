@@ -27,6 +27,20 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # The private TEST key lives only in the encrypted GitHub Actions secret below. Never replace
+      # that secret: doing so forces users to uninstall and destroys the provisioned Digital Key.
+      - name: Install permanent ZeekRemote test signing key
+        env:
+          TEST_KEYSTORE_B64: ${{ secrets.ZEEKREMOTE_TEST_KEYSTORE_B64 }}
+        run: |
+          test -n "$TEST_KEYSTORE_B64"
+          mkdir -p ~/.android
+          printf '%s' "$TEST_KEYSTORE_B64" | base64 --decode > ~/.android/debug.keystore
+          chmod 600 ~/.android/debug.keystore
+          ACTUAL=$(keytool -list -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey \
+            | sed -n 's/^[[:space:]]*SHA256: //p')
+          test "$ACTUAL" = "96:F1:62:7B:1D:A3:34:CB:44:35:96:B1:74:6B:CC:E3:90:75:0F:1D:B7:51:EC:2B:F3:71:E8:2D:32:3B:45:B9"
+
       - name: Make Gradle wrapper executable
         run: chmod +x gradlew
 
@@ -37,6 +51,16 @@ jobs:
         run: |
           unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -q 'assets/cars/car_7gt.png'
           grep -A2 'CarModel("7GT"' app/src/main/java/com/openzeekr/app/ui/CarCatalog.kt | grep -q 'PaintColor("Crystal White"'
+
+      - name: Verify permanent phone and watch signing identity
+        run: |
+          APKSIGNER="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner"
+          EXPECTED="96f1627b1da334cb443596b1746bcce390750f1db751ec2bf371e82d323b45b9"
+          for APK in app/build/outputs/apk/debug/app-debug.apk wear/build/outputs/apk/debug/wear-debug.apk; do
+            ACTUAL=$("$APKSIGNER" verify --print-certs "$APK" \
+              | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+            test "$ACTUAL" = "$EXPECTED"
+          done
 
       - name: Upload phone APK
         uses: actions/upload-artifact@v4
