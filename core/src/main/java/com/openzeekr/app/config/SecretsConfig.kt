@@ -1,10 +1,12 @@
 package com.openzeekr.app.config
 
+
 import android.annotation.SuppressLint
 import com.openzeekr.app.util.NativeSecrets
 import com.openzeekr.core.BuildConfig
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+
 
 /**
  * All runtime configuration for the app.
@@ -35,9 +37,9 @@ data class SecretsConfig(
     @SerialName("prod_secret") val prodSecret: String = "",
     @SerialName("vin_key") val vinKey: String = "",
     @SerialName("vin_iv") val vinIv: String = "",
-    /** Legacy field retained only so older JSON imports remain compatible. Stock EU 3.0.7 uses
-     * [prodSecret] (AppInfo.appSecret) for the HF/xchanger HMAC-SHA1 signature as well. */
+    /** HF/xchanger secret returned by stock getTSPSecretValue(region, environment). */
     @SerialName("xchanger_sign_secret") val xchangerSignSecret: String = "",
+
 
     /** Overseas-app (Azure gateway) HMAC AK/SK — ONLY for the message inbox on
      *  gateway-pub-azure.zeekr.eu (separate auth from TSP). Native libenv.so
@@ -45,12 +47,14 @@ data class SecretsConfig(
     @SerialName("overseas_access_key") val overseasAccessKey: String = "",
     @SerialName("overseas_secret_key") val overseasSecretKey: String = "",
 
+
     /** Baked HS256 secret that signs the client-minted `Authorization` token for the message
      *  inbox on the overseas-app host (see [com.openzeekr.app.net.InboxAuthToken]). A THIRD credential,
      *  separate from the TSP bearer and the overseas X-HMAC AK/SK. Not a plaintext constant in
      *  the stock APK — Frida-dumped at runtime and supplied here. Blank = fall back to the bearer
      *  on inbox requests (which the gateway rejects with 401). */
     @SerialName("inbox_auth_secret") val inboxAuthSecret: String = "",
+
 
     // ---- account / vehicle ----
     val email: String = "",
@@ -75,6 +79,7 @@ data class SecretsConfig(
     val xchangerToken: String = "",
     val xchangerClientId: String = "",
 
+
     // ---- endpoint / environment ----
     /** EU TSP gateway by default (see dk-real-eu-api notes). */
     val baseUrl: String = "https://eu-snc-tsp-api-gw.zeekrlife.com",
@@ -93,6 +98,7 @@ data class SecretsConfig(
     /** AWS SNS region the message-centre registers the push endpoint under (EU→eu-central-1). */
     val snsRegion: String = "eu-central-1",
 
+
     // ---- device headers (plain, server-logged, none attested) ----
     val appId: String = "ZEEKRCNCH001M0001",
     val clientId: String = "",
@@ -109,6 +115,7 @@ data class SecretsConfig(
     val envType: String = "prod",
     val appVersion: String = "3.0.7",
     val sigVersion: String = "1.0",
+
 
     // ---- proximity (RSSI-based approach-unlock / walk-away-lock) ----
     val proximityEnabled: Boolean = false,
@@ -144,6 +151,7 @@ data class SecretsConfig(
      */
     val presenceOffloadEnabled: Boolean = true,
 
+
     // ---- app-local UI state (not part of zeekr_secrets.json) ----
     /** First-run onboarding wizard completed (login → key provisioning). */
     val onboardingDone: Boolean = false,
@@ -165,6 +173,7 @@ data class SecretsConfig(
      *  name. The cloud rename API (modify-vehicle / vehNickname) is wired separately. */
     val carNickname: String = "",
 
+
     // ---- display units (UI only) ----
     /** Tyre-pressure unit: "bar" | "psi" | "kpa". */
     val pressureUnit: String = "bar",
@@ -172,6 +181,7 @@ data class SecretsConfig(
     val tempUnit: String = "c",
     /** Distance / range unit: "km" | "mi". */
     val distanceUnit: String = "km",
+
 
     // ---- remembered set-points (UI note, like stock) ----
     /** Last charge-limit target the user set (%). The car exposes no reliable limit-read
@@ -189,6 +199,7 @@ data class SecretsConfig(
         return true
     }
 
+
     /** Validates constraints on the configuration. Returns a list of error messages (empty if valid). */
     fun validate(): List<String> = buildList {
         // Mandatory fields
@@ -199,10 +210,12 @@ data class SecretsConfig(
         // VIN is obtained from the vehicle-list during login; sign-out intentionally clears it.
         // Features that need a car guard VIN at their own call site.
 
+
         // Overseas pair
         if (overseasAccessKey.isBlank() != overseasSecretKey.isBlank()) {
             add("Both overseas_access_key and overseas_secret_key must be set (or both blank)")
         }
+
 
         // AES length constraints (AES-128 requires 16 bytes). Note: we check byte length, not char
         // length, to catch multi-byte characters or bad ASCII lengths (see reversing notes).
@@ -214,19 +227,23 @@ data class SecretsConfig(
             add("vin_iv must be exactly 16 bytes (got $viLen)")
     }
 
+
     /** Throws IllegalArgumentException if the configuration is invalid. */
     fun check() {
         val errors = validate()
         if (errors.isNotEmpty()) throw IllegalArgumentException(errors.first())
     }
 
+
     /** True when the minimum needed to talk to the cloud is present. */
     val cloudReady: Boolean
         get() = baseUrl.isNotBlank() && prodSecret.isNotBlank() &&
             (accessToken.isNotBlank() || (email.isNotBlank() && password.isNotBlank()))
 
+
     /** The secret used for X-SIGNATURE. prodSecret per the reversing notes. */
     val signSecret: String get() = prodSecret
+
 
     // ---- region-derived hosts (all hang off [azureHost] / [xchangerHost], seeded per region) ----
     private val azureBase: String get() = azureHost.trimEnd('/')
@@ -242,13 +259,16 @@ data class SecretsConfig(
     val xchangerSessionUrl: String get() =
         "${xchangerHost.trimEnd('/')}/auth/account/session/secure?identity_type=zeekr"
 
+
     /** True once the overseas-app HMAC AK/SK are present, i.e. the message inbox can auth. */
     val overseasReady: Boolean get() = overseasAccessKey.isNotBlank() && overseasSecretKey.isNotBlank()
+
 
     /** True once the inbox `Authorization` HS256 token can actually be minted (openId captured
      *  at login + the baked inbox HS256 secret present). Without both, inbox calls fall back to
      *  the bearer and the gateway returns 401. */
     val inboxAuthReady: Boolean get() = accountUuid.isNotBlank() && inboxAuthSecret.isNotBlank()
+
 
     /**
      * Effective unlock threshold (dBm): the user's [unlockRssi] clamped so it can
@@ -257,11 +277,13 @@ data class SecretsConfig(
      */
     val effectiveUnlockRssi: Int get() = unlockRssi.coerceAtLeast(UNLOCK_RSSI_FLOOR)
 
+
     /**
      * Effective lock threshold (dBm) = unlock − [LOCK_RSSI_GAP_DB], always this many
      * dB weaker than unlock (fixed hysteresis). Lock fires when RSSI falls at/below.
      */
     val effectiveLockRssi: Int get() = effectiveUnlockRssi - LOCK_RSSI_GAP_DB
+
 
     /** Unlock RSSI for the chosen sensitivity preset (hidden from the user). */
     val sensitivityUnlockRssi: Int
@@ -273,6 +295,7 @@ data class SecretsConfig(
             "far" -> -86
             else -> -66 // close
         }
+
 
     /**
      * Walk-away thresholds are deliberately calibrated independently from approach unlock.
@@ -287,6 +310,7 @@ data class SecretsConfig(
             else -> -74 // close
         }
 
+
     companion object {
         /** Unlock can never be set weaker (more negative) than this — safety floor. */
         const val UNLOCK_RSSI_FLOOR = -65
@@ -299,6 +323,7 @@ data class SecretsConfig(
          */
         const val CONNECT_RSSI_FAR = -90
 
+
         /**
          * True when the app-global secrets were BAKED IN at build time (a private build
          * from a populated `secrets.properties`). Used to lock down the Settings screen:
@@ -307,6 +332,7 @@ data class SecretsConfig(
          */
         val SECRETS_BAKED: Boolean =
             NativeSecrets.prodSecret().isNotBlank() && NativeSecrets.hmacSecretKey().isNotBlank()
+
 
         /**
          * Initial config seeded from the gitignored `secrets.properties`. The genuinely-secret
@@ -320,6 +346,7 @@ data class SecretsConfig(
             hmacSecretKey = NativeSecrets.hmacSecretKey(),
             passwordPublicKey = BuildConfig.SEC_PASSWORD_PUBLIC_KEY,
             prodSecret = NativeSecrets.prodSecret(),
+            xchangerSignSecret = NativeSecrets.xchangerSignSecret(),
             vinKey = NativeSecrets.vinKey(),
             vinIv = NativeSecrets.vinIv(),
             overseasAccessKey = NativeSecrets.overseasAccessKey(),
