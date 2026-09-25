@@ -14,12 +14,14 @@
  */
 #include <jni.h>
 
+
 /* Pull in the build-time-generated values if present (robust to a missing file). */
 #if defined(__has_include)
 #  if __has_include("secrets_generated.h")
 #    include "secrets_generated.h"
 #  endif
 #endif
+
 
 /* Fallbacks so the source always compiles even without the generated header. */
 #ifndef OZ_SEC_HMAC_ACCESS_KEY
@@ -30,6 +32,9 @@
 #endif
 #ifndef OZ_SEC_PROD_SECRET
 #define OZ_SEC_PROD_SECRET ""
+#endif
+#ifndef OZ_SEC_XCHANGER_SIGN_SECRET
+#define OZ_SEC_XCHANGER_SIGN_SECRET ""
 #endif
 #ifndef OZ_SEC_OVERSEAS_ACCESS_KEY
 #define OZ_SEC_OVERSEAS_ACCESS_KEY ""
@@ -66,6 +71,7 @@
 #define OZ_SEC_EM_PROD_SECRET ""
 #endif
 
+
 /*
  * JNI method names must match com.openzeekr.app.util.NativeSecrets exactly, so the
  * corresponding Kotlin class + native methods must be kept (see proguard-rules.pro).
@@ -78,9 +84,11 @@
         return (*env)->NewStringUTF(env, value);                                         \
     }
 
+
 OZ_SECRET_FN(nHmacAccessKey,      OZ_SEC_HMAC_ACCESS_KEY)
 OZ_SECRET_FN(nHmacSecretKey,      OZ_SEC_HMAC_SECRET_KEY)
 OZ_SECRET_FN(nProdSecret,         OZ_SEC_PROD_SECRET)
+OZ_SECRET_FN(nXchangerSignSecret, OZ_SEC_XCHANGER_SIGN_SECRET)
 OZ_SECRET_FN(nOverseasAccessKey,  OZ_SEC_OVERSEAS_ACCESS_KEY)
 OZ_SECRET_FN(nOverseasSecretKey,  OZ_SEC_OVERSEAS_SECRET_KEY)
 OZ_SECRET_FN(nInboxAuthSecret,    OZ_SEC_INBOX_AUTH_SECRET)
