@@ -57,9 +57,9 @@ jobs:
           APKSIGNER="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner"
           EXPECTED="96f1627b1da334cb443596b1746bcce390750f1db751ec2bf371e82d323b45b9"
           for APK in app/build/outputs/apk/debug/app-debug.apk wear/build/outputs/apk/debug/wear-debug.apk; do
-            ACTUAL=$("$APKSIGNER" verify --print-certs "$APK" \
-              | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
-            test "$ACTUAL" = "$EXPECTED"
+            CERTS=$("$APKSIGNER" verify --print-certs "$APK")
+            printf '%s\n' "$CERTS"
+            printf '%s\n' "$CERTS" | grep -Fqi "certificate SHA-256 digest: $EXPECTED"
           done
 
       - name: Upload phone APK
