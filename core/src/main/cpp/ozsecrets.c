@@ -14,14 +14,12 @@
  */
 #include <jni.h>
 
-
 /* Pull in the build-time-generated values if present (robust to a missing file). */
 #if defined(__has_include)
 #  if __has_include("secrets_generated.h")
 #    include "secrets_generated.h"
 #  endif
 #endif
-
 
 /* Fallbacks so the source always compiles even without the generated header. */
 #ifndef OZ_SEC_HMAC_ACCESS_KEY
@@ -71,7 +69,6 @@
 #define OZ_SEC_EM_PROD_SECRET ""
 #endif
 
-
 /*
  * JNI method names must match com.openzeekr.app.util.NativeSecrets exactly, so the
  * corresponding Kotlin class + native methods must be kept (see proguard-rules.pro).
@@ -83,7 +80,6 @@
         (void) thiz;                                                                     \
         return (*env)->NewStringUTF(env, value);                                         \
     }
-
 
 OZ_SECRET_FN(nHmacAccessKey,      OZ_SEC_HMAC_ACCESS_KEY)
 OZ_SECRET_FN(nHmacSecretKey,      OZ_SEC_HMAC_SECRET_KEY)
