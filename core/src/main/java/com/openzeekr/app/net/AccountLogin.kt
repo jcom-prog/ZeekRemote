@@ -1,6 +1,5 @@
 package com.openzeekr.app.net
 
-
 import android.util.Base64
 import com.openzeekr.app.config.ConfigStore
 import com.openzeekr.app.util.Logx
@@ -28,7 +27,6 @@ import java.security.KeyFactory
 import java.security.spec.X509EncodedKeySpec
 import javax.crypto.Cipher
 
-
 /**
  * The real Zeekr account login, ported from `zeekr_ev_api` (EU). Runs the
  * multi-step flow across the user-center host (X-HMAC signed) and the TSP
@@ -42,14 +40,11 @@ import javax.crypto.Cipher
  */
 class AccountLogin(private val store: ConfigStore) {
 
-
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private val jsonMedia = "application/json; charset=UTF-8".toMediaType()
 
-
     /** user-center session token (from loginByEmailEncrypt), added to later UC calls. */
     @Volatile private var ucToken: String = ""
-
 
     // Pipe OkHttp's HEADERS-level log into our on-device ring buffer too. Level is flipped to
     // NONE when debug logging is off (via httpLogGate below), so nothing is formatted/logged then.
@@ -61,7 +56,6 @@ class AccountLogin(private val store: ConfigStore) {
             else okhttp3.logging.HttpLoggingInterceptor.Level.NONE
         chain.proceed(chain.request())
     }
-
 
     // user-center client: DEFAULT_HEADERS + X-HMAC-* (key = hmac_access/secret)
     private val ucClient = OkHttpClient.Builder()
@@ -82,7 +76,6 @@ class AccountLogin(private val store: ConfigStore) {
         .addInterceptor(httpLog)
         .build()
 
-
     private inner class UcInterceptor : Interceptor {
         override fun intercept(chain: Interceptor.Chain): Response {
             val cfg = store.current()
@@ -101,7 +94,6 @@ class AccountLogin(private val store: ConfigStore) {
         }
     }
 
-
     suspend fun login(): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val cfg = store.current()
@@ -111,13 +103,11 @@ class AccountLogin(private val store: ConfigStore) {
             Logx.d("login", "passwordPublicKey=${Logx.preview(cfg.passwordPublicKey)} prodSecret=${Logx.preview(cfg.prodSecret)}")
             Logx.d("login", "region=${cfg.regionCode} usercenter=${cfg.usercenterUrl} tsp=${cfg.baseUrl}")
 
-
             require(cfg.email.isNotBlank() && cfg.password.isNotBlank()) { "email/password not set (enter them in Settings → Account)" }
             require(cfg.hmacAccessKey.isNotBlank() && cfg.hmacSecretKey.isNotBlank()) { "hmac keys not set" }
             require(cfg.prodSecret.isNotBlank()) { "prod_secret not set" }
             val uc = cfg.usercenterUrl
             val tsp = cfg.baseUrl.trimEnd('/') + "/"
-
 
             // 1. check user exists (CANARY: validates the user-center HMAC before
             //    any password is ever submitted, so a transport bug can't cause a
@@ -127,7 +117,6 @@ class AccountLogin(private val store: ConfigStore) {
                 put("email", cfg.email); put("checkType", "1")
             })
             Logx.d("login", "step 1/6 checkUserV2 OK")
-
 
             // 2. login (RSA-encrypted password) -> user-center token
             Logx.d("login", "step 2/6 loginByEmailEncrypt …")
@@ -144,7 +133,6 @@ class AccountLogin(private val store: ConfigStore) {
             store.update { it.copy(azureToken = tokenValue) }
             Logx.d("login", "step 2/6 login OK, ucToken=${Logx.preview(tokenValue)}")
 
-
             // 3. user info -> numeric userId
             Logx.d("login", "step 3/6 user/info …")
             val info = ucPost("$uc${ZeekrConst.USERINFO_URL}", null)
@@ -153,14 +141,12 @@ class AccountLogin(private val store: ConfigStore) {
             val accountUuid = info?.get("uuid")?.jsonPrimitive?.contentOrNull
             Logx.d("login", "step 3/6 user/info OK, userId=${Logx.preview(userId)} uuid=${Logx.preview(accountUuid)}")
 
-
             // 4. tsp code
             Logx.d("login", "step 4/6 tspCode …")
             val tspCodeData = ucGet("$uc${ZeekrConst.TSPCODE_URL}?tspClientId=${ZeekrConst.CLIENT_ID}")
             val tspCode = tspCodeData?.get("code")?.jsonPrimitive?.contentOrNull
                 ?: error("no tsp code")
             Logx.d("login", "step 4/6 tspCode OK=${Logx.preview(tspCode)}")
-
 
             // 4b. xchanger (ECARX) DK-backend session. The stock app authenticates here after
             //     login; this is the registration path that makes the VEHICLE accept our device
@@ -261,7 +247,6 @@ class AccountLogin(private val store: ConfigStore) {
                 Logx.d("login", "step 4b xchanger session OK clientId=${Logx.preview(xClientId)} token=${Logx.preview(xToken)}")
             }
 
-
             // 4c. Register THIS device as the account's active push endpoint (zom-message-core).
             //     Stock does this on login; it is what claims the single-device session — logging
             //     the app on any OTHER device out. We believe "active device" is also what the
@@ -288,7 +273,6 @@ class AccountLogin(private val store: ConfigStore) {
                     "endpoint=${(eqRoot?.get("data") as? JsonObject)?.get("endpoint")?.jsonPrimitive?.contentOrNull ?: "-"}")
             }.onFailure { Logx.w("login", "step 4c equipment register FAILED: ${it.message}") }
 
-
             // 5. bearer login (TSP) -> accessToken
             Logx.d("login", "step 5/6 bearer_login (TSP) …")
             // The device-session fields MUST be in the stock format "brand-model-sdkInt-release"
@@ -310,13 +294,11 @@ class AccountLogin(private val store: ConfigStore) {
                 ?: error("no bearer token")
             Logx.d("login", "step 5/6 bearer OK=${Logx.preview(bearer)}")
 
-
             // The numeric userId (needed for DK signing = userId+deviceId+vin) is NOT
             // in user/info (that returns only the uuid) — it's a claim in the TSP
             // bearer JWT. Extract it from there.
             val jwtUserId = jwtClaim(bearer, "userId")
             Logx.d("login", "userId from JWT=${Logx.preview(jwtUserId)}")
-
 
             // persist token+userId (+ account openId for the inbox HS256 token, see
             // InboxAuthToken) BEFORE the vehicle-list call (it needs auth)
@@ -325,7 +307,6 @@ class AccountLogin(private val store: ConfigStore) {
                 userId = jwtUserId ?: userId ?: it.userId,
                 accountUuid = accountUuid ?: it.accountUuid,
             ) }
-
 
             // 6. vehicle list -> VIN (first vehicle)
             Logx.d("login", "step 6/6 vehicle-list …")
@@ -342,21 +323,17 @@ class AccountLogin(private val store: ConfigStore) {
                 }
             }.onFailure { Logx.w("login", "step 6/6 vehicle-list failed: ${it.message}") }
 
-
             // 7. app online heartbeat — marks THIS device (app-instance UUID) as the account's
             //    ONLINE device in ms-app-online-manager. Stock heartbeats this continuously; being
             //    the online device is very likely what makes the vehicle route/accept its DK to us.
             runCatching { heartbeat() }.onFailure { Logx.w("login", "step 7 app/hb failed: ${it.message}") }
-
 
             Logx.d("login", "=== login SUCCESS ===")
             Unit
         }.onFailure { Logx.e("login", "=== login FAILED ===", it) }
     }
 
-
     // ---- helpers ----
-
 
     /**
      * Mark this device as the account's ONLINE device (ms-app-online-manager/app/hb). Uses the
@@ -374,7 +351,6 @@ class AccountLogin(private val store: ConfigStore) {
         Logx.d("login", "app/hb online OK (deviceId=${Logx.preview(cfg.appInstanceId)})")
     }
 
-
     /** Extract a string claim from a JWT bearer token ("Bearer <header>.<payload>.<sig>"). */
     private fun jwtClaim(token: String, claim: String): String? = runCatching {
         val jwt = token.removePrefix("Bearer ").trim()
@@ -383,7 +359,6 @@ class AccountLogin(private val store: ConfigStore) {
         json.parseToJsonElement(decoded).jsonObject[claim]?.jsonPrimitive?.contentOrNull
     }.getOrNull()
 
-
     private fun encryptPassword(password: String, pubKeyB64: String): String {
         if (pubKeyB64.isBlank()) return password
         val key = KeyFactory.getInstance("RSA")
@@ -391,7 +366,6 @@ class AccountLogin(private val store: ConfigStore) {
         val cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding").apply { init(Cipher.ENCRYPT_MODE, key) }
         return Base64.encodeToString(cipher.doFinal(password.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP)
     }
-
 
     private fun ucPost(url: String, body: JsonObject?): JsonObject? =
         exec(ucClient, Request.Builder().url(url).post((body?.toString() ?: "{}").toRequestBody(jsonMedia)).build())
@@ -405,14 +379,12 @@ class AccountLogin(private val store: ConfigStore) {
         return root["data"]?.jsonArray
     }
 
-
     /** Execute, require success, return the `data` object. */
     private fun exec(client: OkHttpClient, req: Request): JsonObject? {
         val root = execRoot(client, req) ?: error("empty response: ${req.url}")
         requireSuccess(root, req.url.toString())
         return root["data"]?.let { if (it is JsonObject) it else null }
     }
-
 
     private fun execRoot(client: OkHttpClient, req: Request): JsonObject? {
         val ep = req.url.encodedPath.substringAfterLast('/')
@@ -426,7 +398,6 @@ class AccountLogin(private val store: ConfigStore) {
         }
     }
 
-
     private fun requireSuccess(root: JsonObject, url: String) {
         val success = root["success"]?.jsonPrimitive?.let { runCatching { it.contentOrNull == "true" }.getOrDefault(false) }
             ?: false
@@ -437,7 +408,6 @@ class AccountLogin(private val store: ConfigStore) {
         }
     }
 }
-
 
 /** Resolve the value returned by stock 3.0.7 getTSPSecretValue("EU", "ONLINE"). */
 internal fun requireOfficialAppSecret(bakedSecret: String, configuredSecret: String): String {
