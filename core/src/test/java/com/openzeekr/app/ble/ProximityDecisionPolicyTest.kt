@@ -214,4 +214,31 @@ class ProximityDecisionPolicyTest {
         assertFalse(policy.shouldUnlock(35_001L, -81, true, -86))
         assertFalse(policy.shouldUnlock(35_401L, -78, true, -86))
     }
+
+    @Test
+    fun departureLatchBlocksEverySameSessionUnlockAndNeedsFreshPresence() {
+        val policy = ProximityDecisionPolicy()
+        policy.onDepartureLockStarted()
+
+        // Exact rebound shape that emitted an unwanted CTRL_UNLOCK five seconds after the confirmed
+        // lock in 0.1.29 fast test 1. No connected-RSSI sample may rearm the same session.
+        var now = 0L
+        listOf(-95, -96, -98, -96, -95, -94, -93, -92, -91, -90, -88, -86,
+            -86, -85, -84, -84, -84, -87, -89, -91).forEach { rssi ->
+            assertFalse("post-lock rebound must stay blocked; rssi=$rssi",
+                policy.shouldUnlock(now, rssi, true, -86))
+            now += 200
+        }
+
+        // A presence hit before the old link ends is still the same departure and cannot rearm.
+        policy.onPresenceMatch(now, -90, true, -86)
+        assertFalse(policy.shouldUnlock(now + 200, -82, true, -86))
+
+        // Only link end plus a new edge-range hardware presence event creates a new arrival epoch.
+        policy.onLinkEnded()
+        policy.onPresenceMatch(now + 400, -90, true, -86)
+        assertFalse(policy.shouldUnlock(now + 400, -85, true, -86))
+        assertFalse(policy.shouldUnlock(now + 600, -82, true, -86))
+        assertTrue(policy.shouldUnlock(now + 800, -81, true, -86))
+    }
 }

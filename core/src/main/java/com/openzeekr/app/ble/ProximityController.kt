@@ -246,6 +246,7 @@ class ProximityController(
     private fun onSessionDown() {
         val now = System.currentTimeMillis()
         if (linkLostAtMs == 0L) {
+            decisionPolicy.onLinkEnded()
             linkLostAtMs = now
             // Any drop WHILE UNLOCKED arms the walk-away lock: because the unlocked activity-watch stops
             // polling RSSI, a stale "near" sample can't be trusted, and a lost link that won't come back
@@ -554,7 +555,9 @@ class ProximityController(
         if (lockJob?.isActive == true) return
         // A pending unlock loop is now moot (we've decided you're leaving) — stop it fighting us.
         needToUnlock = false; unlockJob?.cancel(); unlockJob = null
-        decisionPolicy.resetLocked()
+        // Terminal for this BLE session: a post-lock RSSI rebound must never emit CTRL_UNLOCK.
+        // A genuine later arrival is rearmed only by link-down + a fresh hardware presence hit.
+        decisionPolicy.onDepartureLockStarted()
         lockJob = scope.launch {
             lastTriggerMs = System.currentTimeMillis()   // start the action cooldown
             var confirmed = false

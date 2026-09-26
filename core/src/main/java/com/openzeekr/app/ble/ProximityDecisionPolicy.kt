@@ -32,6 +32,11 @@ internal class ProximityDecisionPolicy {
     private var walkAwayFarSinceMs = UNSET_MS
     private var walkAwayFarStartRssi = 0
     private var walkAwayWeakestRssi = 0
+    // A confirmed departure decision is terminal for the current BLE session. RSSI multipath can
+    // rebound immediately after the lock (captured in the first 0.1.29 fast-walk test), but that is
+    // not a new arrival. Rearming requires both a link end and a fresh offloaded presence event.
+    private var departureLatched = false
+    private var departureLinkEnded = false
 
     fun resetLocked() {
         sawStrongNearWhileLocked = false
@@ -45,11 +50,22 @@ internal class ProximityDecisionPolicy {
         arrivalStrongSinceMs = UNSET_MS
         arrivalConfirmed = false
         resetWalkAwayCandidate()
+        departureLatched = false
+        departureLinkEnded = false
     }
 
     /** Records hardware-offloaded arrival evidence before connect/handshake timing can erase it. */
     fun onPresenceMatch(nowMs: Long, rssi: Int, moving: Boolean, unlockThreshold: Int) {
         expirePresenceApproach(nowMs)
+        if (departureLatched) {
+            if (!departureLinkEnded || !moving || rssi > unlockThreshold + PRESENCE_ENTRY_MARGIN_DB) {
+                return
+            }
+            // This is the first eligible presence event after the departure session ended: it owns a
+            // new arrival epoch. Merely reconnecting or seeing an RSSI rebound cannot clear the latch.
+            departureLatched = false
+            departureLinkEnded = false
+        }
         if (presenceApproachAtMs != UNSET_MS) {
             presencePeakRssi = maxOf(presencePeakRssi, rssi)
             return
@@ -67,6 +83,7 @@ internal class ProximityDecisionPolicy {
 
     /** Returns true only for a qualified approach or a fresh, stable session already at the door. */
     fun shouldUnlock(nowMs: Long, rssi: Int, moving: Boolean, unlockThreshold: Int): Boolean {
+        if (departureLatched) return false
         expirePresenceApproach(nowMs)
         if (presenceApproachAtMs != UNSET_MS) {
             presencePeakRssi = maxOf(presencePeakRssi, rssi)
@@ -126,6 +143,25 @@ internal class ProximityDecisionPolicy {
         arrivalStrongSinceMs = UNSET_MS
         arrivalConfirmed = false
         resetWalkAwayCandidate()
+    }
+
+    /** Suppress every unlock decision from the moment walk-away locking starts. */
+    fun onDepartureLockStarted() {
+        departureLatched = true
+        departureLinkEnded = false
+        sawStrongNearWhileLocked = false
+        departureObserved = true
+        farSinceMs = UNSET_MS
+        farQualified = false
+        nearCandidateSinceMs = UNSET_MS
+        unlockQualifiedAtMs = UNSET_MS
+        clearPresenceApproach()
+        resetWalkAwayCandidate()
+    }
+
+    /** A later arrival may rearm only through [onPresenceMatch], never from connected RSSI alone. */
+    fun onLinkEnded() {
+        if (departureLatched) departureLinkEnded = true
     }
 
     /**
