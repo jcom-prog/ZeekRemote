@@ -91,6 +91,7 @@ class ProximityController(
     private var rssiNullStreak = 0
     // App-layer ping bookkeeping (approach state only).
     @Volatile private var pingInFlight = false
+    private var pingJob: Job? = null
     private var pingFailStreak = 0
     private var lastPingMs = 0L
 
@@ -145,7 +146,8 @@ class ProximityController(
         if (_state.value.running) return
         gattEma = null; nextIntervalMs = MONITOR_MID_MS
         inCarSinceMs = 0L; steadyRef = null; steadySinceMs = 0L; lastCadence = ""
-        rssiNullStreak = 0; pingInFlight = false; pingFailStreak = 0; lastPingMs = 0L
+        rssiNullStreak = 0; pingJob?.cancel(); pingJob = null
+        pingInFlight = false; pingFailStreak = 0; lastPingMs = 0L
         linkLostAtMs = 0L; walkAwayArmed = false; lostReceding = false; lostRssi = null; cloudNetFired = false
         // Keep armedUnlocked as-is across start/stop toggles within a session isn't meaningful;
         // reset so a fresh monitor starts from a known state.
@@ -218,7 +220,8 @@ class ProximityController(
         gattEma = null; linkLostAtMs = 0L; walkAwayArmed = false; cloudNetFired = false
         decisionPolicy.resetLocked()
         inCarSinceMs = 0L; steadyRef = null; steadySinceMs = 0L; lastCadence = ""
-        rssiNullStreak = 0; pingInFlight = false; pingFailStreak = 0; lastPingMs = 0L
+        rssiNullStreak = 0; pingJob?.cancel(); pingJob = null
+        pingInFlight = false; pingFailStreak = 0; lastPingMs = 0L
         farAsleep = false; nearRefDist = null; _wakeLockNeeded.value = false
         _state.value = _state.value.copy(running = false, phase = Phase.PASSIVE, zone = Zone.UNKNOWN)
     }
@@ -433,15 +436,6 @@ class ProximityController(
             Logx.d("prox", "cadence -> $cadence (~${"%.1f".format(dist)}m rssi=$smoothed motion=${motion.state.value} wl=${_wakeLockNeeded.value})")
         }
 
-        // Approach-only liveness ping (0x0110): keep the control path verified while you close in, so
-        // the imminent unlock is instant. Never in the in-car/still/far states — and ONLY once the DK
-        // session is fully up: pinging during the connect/handshake window just "fails" (not
-        // established) and would force-reconnect in a loop, never letting the handshake finish.
-        // ...but NOT while the confirmed-unlock loop is running — it already exercises the control
-        // path directly (and both hammering 0x0110 + both triggering reconnects would collide).
-        if (approachState && !needToUnlock && ble.state.value == DkBleManager.State.SESSION_READY) maybePing()
-        else pingFailStreak = 0
-
         Logx.d("prox", "rssi=$rssi ema=$smoothed ~${"%.1f".format(dist)}m " +
             "trend=${"%+.1f".format(trend)} zone=$zone armed=$armedUnlocked " +
             "thr(u/l)=$unlockThresh/$lockThresh motion=${motion.state.value} next=${nextIntervalMs}ms")
@@ -461,7 +455,9 @@ class ProximityController(
         // latch still guarantees a single unlock per approach (reconnects while parked won't re-fire).
         if (!armedUnlocked && !needToUnlock && unlockQualified) {
             needToUnlock = true
-            Logx.d("prox", "approach-unlock ARM (rssi=$smoothed ~${"%.1f".format(dist)}m prevZone=$prevZone) — confirmed-unlock loop")
+            pingJob?.cancel(); pingJob = null; pingInFlight = false
+            Logx.d("prox", "approach-unlock ARM evidence=${decisionPolicy.currentUnlockEvidence()} " +
+                "(rssi=$smoothed ~${"%.1f".format(dist)}m prevZone=$prevZone) — confirmed-unlock loop")
             startUnlockLoop()
             return
         }
@@ -482,7 +478,14 @@ class ProximityController(
             armedUnlocked = false
             Logx.d("prox", "walk-away-lock (rssi=$smoothed ~${"%.1f".format(dist)}m)")
             startLockLoop("walk-away-lock")
+            return
         }
+
+        // Ping is deliberately last. Once this sample qualifies an unlock, the function returns
+        // before a liveness command can race the unlock coroutine. RealDkSession also serializes all
+        // 0x0110 commands as a second line of defence.
+        if (approachState && !needToUnlock && ble.state.value == DkBleManager.State.SESSION_READY) maybePing()
+        else pingFailStreak = 0
     }
 
     /**
@@ -521,7 +524,8 @@ class ProximityController(
                         cfg.sensitivityUnlockRssi,
                     )
                 ) {
-                    Logx.d("prox", "unlock pre-send guard rejected stale/receding evidence")
+                    Logx.d("prox", "unlock pre-send guard rejected evidence=${decisionPolicy.currentUnlockEvidence()} " +
+                        "rssi=$current moving=${motion.state.value}")
                     needToUnlock = false
                     break
                 }
@@ -695,13 +699,17 @@ class ProximityController(
         val now = System.currentTimeMillis()
         if (pingInFlight || now - lastPingMs < PING_INTERVAL_MS) return
         lastPingMs = now; pingInFlight = true
-        scope.launch {
-            val ok = runCatching { ble.session.ping(PING_TIMEOUT_MS) }.getOrDefault(false)
-            pingInFlight = false
-            if (ok) { pingFailStreak = 0; return@launch }
-            pingFailStreak++
-            Logx.w("prox", "liveness ping failed (streak=$pingFailStreak/$PING_FAIL_STREAK)")
-            if (pingFailStreak >= PING_FAIL_STREAK) { pingFailStreak = 0; forceReconnect() }
+        pingJob = scope.launch {
+            try {
+                val ok = runCatching { ble.session.ping(PING_TIMEOUT_MS) }.getOrDefault(false)
+                if (ok) { pingFailStreak = 0; return@launch }
+                pingFailStreak++
+                Logx.w("prox", "liveness ping failed (streak=$pingFailStreak/$PING_FAIL_STREAK)")
+                if (pingFailStreak >= PING_FAIL_STREAK) { pingFailStreak = 0; forceReconnect() }
+            } finally {
+                pingInFlight = false
+                pingJob = null
+            }
         }
     }
 

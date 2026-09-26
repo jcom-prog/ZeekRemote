@@ -7,6 +7,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayInputStream
 import java.security.KeyPair
@@ -63,6 +65,8 @@ class RealDkSession(
     private var appHandler: ((Int, ByteArray) -> Unit)? = null
 
     private val pending = ConcurrentHashMap<Int, CompletableDeferred<ByteArray>>()
+    /** Exactly one encrypted 0x0110 command may own the shared 0x0111/0x0112 waiters at a time. */
+    private val controlMutex = Mutex()
 
     /** Fire-and-forget scope for the transport ACK (onRawInbound is not a coroutine). */
     private val ackScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -302,7 +306,7 @@ class RealDkSession(
         return send(cmd, payload)
     }
 
-    override suspend fun ping(timeoutMs: Long): Boolean {
+    override suspend fun ping(timeoutMs: Long): Boolean = controlMutex.withLock {
         if (!isEstablished || !cryptoReady) return false
         val waiter = CompletableDeferred<Int>()
         pingWaiter = waiter
@@ -312,6 +316,7 @@ class RealDkSession(
             // REJECTS it (RPA gated behind DK3.0, EEC 0x100a) — nothing actuates. A bare 0x0120 gets NO
             // reply at all (car ignores it), so 0x0110 is the working probe. ANY frame back = the
             // app-layer link (the exact path unlock uses) is alive.
+            Logx.d("dk", "wire PING sub=0x0a")
             val ok = send(DkProtocol.CMD_A2V_CONTROL, byteArrayOf(DkProtocol.CTRL_RPA_START))
             if (!ok) { Logx.w("dk", "ping: 0x0110 write failed"); return false }
             val reply = withTimeoutOrNull(timeoutMs) { waiter.await() }
@@ -324,13 +329,20 @@ class RealDkSession(
         }
     }
 
-    override suspend fun control(ctrl: Byte, timeoutMs: Long): ControlResult {
+    override suspend fun control(ctrl: Byte, timeoutMs: Long): ControlResult = controlMutex.withLock {
         if (!isEstablished || !cryptoReady) return ControlResult.WRITE_FAILED
         val recv = CompletableDeferred<ByteArray>()
         val result = CompletableDeferred<ByteArray>()
         pending[DkProtocol.CMD_V2A_CMD_RECEIVED] = recv   // 0x0111
         pending[DkProtocol.CMD_V2A_RESULT] = result       // 0x0112
         return try {
+            val label = when (ctrl) {
+                DkProtocol.CTRL_UNLOCK -> "UNLOCK"
+                DkProtocol.CTRL_LOCK -> "LOCK"
+                DkProtocol.CTRL_RPA_START -> "PING"
+                else -> "CONTROL"
+            }
+            Logx.d("dk", "wire $label sub=0x%02x".format(ctrl))
             if (!send(DkProtocol.CMD_A2V_CONTROL, byteArrayOf(ctrl))) {
                 Logx.w("dk", "control 0x%02x: write failed".format(ctrl)); return ControlResult.WRITE_FAILED
             }
@@ -358,7 +370,7 @@ class RealDkSession(
         }
     }
 
-    override suspend fun probeControl(ctrl: Byte, windowMs: Long): String {
+    override suspend fun probeControl(ctrl: Byte, windowMs: Long): String = controlMutex.withLock {
         if (!isEstablished || !cryptoReady) return "session not ready"
         val seen = java.util.Collections.synchronizedList(mutableListOf<String>())
         probeSink = { cmd, body ->
@@ -367,6 +379,7 @@ class RealDkSession(
             seen.add("${hex(cmd)}[${hexOf(tail).take(64)}]")
         }
         return try {
+            Logx.d("dk", "wire PROBE sub=0x%02x".format(ctrl))
             val ok = send(DkProtocol.CMD_A2V_CONTROL, byteArrayOf(ctrl))
             Logx.d("dk", "probe: sent 0x0110 ctrl=0x%02x write=$ok — listening ${windowMs}ms".format(ctrl))
             delay(windowMs)

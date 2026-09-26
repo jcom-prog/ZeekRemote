@@ -236,6 +236,33 @@ class ProximityDecisionPolicyTest {
             now += 200
         }
     }
+
+    @Test
+    fun captured0126FreshMovingDoorSessionPassesFinalWireGuard() {
+        val policy = ProximityDecisionPolicy()
+        var now = 0L
+
+        // Exact decisive 0.1.26 trace after the status-133 recovery: the car reconnects at -64 dBm
+        // while Activity Recognition still reports MOVING. Two CONNECTED samples qualify a fresh,
+        // strong door arrival; SESSION_READY must be allowed to send UNLOCK without inventing a
+        // second +3 dB gain that is physically impossible this close to the car.
+        assertFalse(policy.shouldUnlock(now, -64, true, -86, freshSessionHandshake = true)); now += 200
+        assertTrue(policy.shouldUnlock(now, -64, true, -86, freshSessionHandshake = true)); now += 200
+        assertEquals(ProximityDecisionPolicy.UnlockEvidence.FRESH_STRONG_CONNECTION,
+            policy.currentUnlockEvidence())
+        assertTrue("0.1.26 regression: qualified moving door arrival must reach the wire",
+            policy.canSendUnlock(now, -64, true, -86))
+    }
+
+    @Test
+    fun freshDoorEvidenceCannotUnlockAfterMovingAwayFromDoorRange() {
+        val policy = ProximityDecisionPolicy()
+        var now = 0L
+        repeat(2) { policy.shouldUnlock(now, -64, true, -86, freshSessionHandshake = true); now += 200 }
+
+        assertFalse("fresh-door exception is bounded to strong door range while moving",
+            policy.canSendUnlock(now, -73, true, -86))
+    }
 }
 
 class UnlockRetryPolicyTest {

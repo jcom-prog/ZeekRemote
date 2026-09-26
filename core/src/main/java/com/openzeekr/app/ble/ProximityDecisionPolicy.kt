@@ -9,6 +9,7 @@ package com.openzeekr.app.ble
  */
 internal class ProximityDecisionPolicy {
     enum class ArmedDecision { NONE, ARRIVAL_CONFIRMED, LOCK }
+    enum class UnlockEvidence { NONE, DIRECTIONAL_APPROACH, FRESH_STRONG_CONNECTION }
 
     private var sawStrongNearWhileLocked = false
     private var departureObserved = false
@@ -17,6 +18,7 @@ internal class ProximityDecisionPolicy {
     private var nearCandidateSinceMs = UNSET_MS
     private var strongNearSamples = 0
     private var unlockQualifiedAtMs = UNSET_MS
+    private var unlockEvidence = UnlockEvidence.NONE
     private var wasMoving = false
     private var movingStartRssi = 0
     private var movingBestRssi = 0
@@ -36,6 +38,7 @@ internal class ProximityDecisionPolicy {
         nearCandidateSinceMs = UNSET_MS
         strongNearSamples = 0
         unlockQualifiedAtMs = UNSET_MS
+        unlockEvidence = UnlockEvidence.NONE
         wasMoving = false
         movingStartRssi = 0
         movingBestRssi = 0
@@ -78,6 +81,7 @@ internal class ProximityDecisionPolicy {
             nearCandidateSinceMs = UNSET_MS
             strongNearSamples = 0
             unlockQualifiedAtMs = UNSET_MS
+            unlockEvidence = UnlockEvidence.NONE
             return false
         }
 
@@ -101,6 +105,8 @@ internal class ProximityDecisionPolicy {
             }
             if (qualified && unlockQualifiedAtMs == UNSET_MS) {
                 unlockQualifiedAtMs = nowMs
+                unlockEvidence = if (qualifiedApproach) UnlockEvidence.DIRECTIONAL_APPROACH
+                    else UnlockEvidence.FRESH_STRONG_CONNECTION
             }
         } else {
             nearCandidateSinceMs = UNSET_MS
@@ -113,6 +119,7 @@ internal class ProximityDecisionPolicy {
         // close-range observation from unlocking on a later reconnect.
         if (unlockQualifiedAtMs != UNSET_MS && nowMs - unlockQualifiedAtMs > UNLOCK_EVIDENCE_TTL_MS) {
             unlockQualifiedAtMs = UNSET_MS
+            unlockEvidence = UnlockEvidence.NONE
         }
         return unlockQualifiedAtMs != UNSET_MS
     }
@@ -124,10 +131,19 @@ internal class ProximityDecisionPolicy {
             rssi <= unlockThreshold - FAR_MARGIN_DB
         ) return false
 
-        // A stationary phone at door range is safe. If it is moving, require the same positive
-        // direction evidence as the approach decision; movement away can never pass this check.
-        return !moving || movingBestRssi >= movingStartRssi + APPROACH_GAIN_DB
+        return when (unlockEvidence) {
+            UnlockEvidence.DIRECTIONAL_APPROACH ->
+                !moving || movingBestRssi >= movingStartRssi + APPROACH_GAIN_DB
+            UnlockEvidence.FRESH_STRONG_CONNECTION ->
+                // The offloaded presence hit plus two strong GATT samples already proved arrival.
+                // Keep that proof valid while moving only at true door range. If body shadow weakens
+                // it, stationary is still safe; moving without direction evidence is not.
+                !moving || rssi >= STRONG_NEAR_RSSI
+            UnlockEvidence.NONE -> false
+        }
     }
+
+    internal fun currentUnlockEvidence(): UnlockEvidence = unlockEvidence
 
     fun onUnlockConfirmed(nowMs: Long) {
         unlockConfirmedAtMs = nowMs
