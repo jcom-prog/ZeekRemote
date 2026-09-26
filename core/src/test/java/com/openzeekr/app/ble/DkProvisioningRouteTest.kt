@@ -1,7 +1,7 @@
 package com.openzeekr.app.ble
 
-import kotlin.test.Test
-import kotlin.test.assertEquals
+import org.junit.Assert.assertEquals
+import org.junit.Test
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import retrofit2.http.POST
