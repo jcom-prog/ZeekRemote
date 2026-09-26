@@ -21,10 +21,11 @@ class DkProvisioningRouteTest {
 
     @Test
     fun `retrofit interface keeps owner and shared endpoints distinct`() {
-        fun postPath(method: String): String = DkApi::class.java.methods
-            .single { it.name == method }
-            .getAnnotation(POST::class.java)
-            .value
+        fun postPath(method: String): String = requireNotNull(
+            DkApi::class.java.methods
+                .single { it.name == method }
+                .getAnnotation(POST::class.java),
+        ).value
 
         assertEquals(
             "ms-tsp-dkbs-geely/api/v1.0/app/digital-key-center/create-owner-blu-key",
@@ -38,7 +39,7 @@ class DkProvisioningRouteTest {
 
     @Test
     fun `shared create body matches official RequestShareKeyBean fields`() {
-        val body = Json.encodeToString(
+        val body = Json { encodeDefaults = true }.encodeToString(
             OwnerKeyReq(deviceId = "device", proprietary = "", signature = "signature"),
         )
         assertEquals(
