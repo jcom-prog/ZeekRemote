@@ -54,6 +54,8 @@ class DkBleManager(base: Context) : DkTransport {
     private val _state = MutableStateFlow(State.IDLE)
     val state: StateFlow<State> = _state
     @Volatile var lastError: String? = null; private set
+    /** Service-owned recovery hook: status 133 must return to the screen-off-safe offloaded route. */
+    @Volatile var onStatus133Recovery: (() -> Unit)? = null
 
     /** Until this time, keep the phone's DK link warm after an unlock. The car may ask for the
      *  authenticated BLE key again when drive authorization starts; losing the link immediately after
@@ -702,7 +704,10 @@ class DkBleManager(base: Context) : DkTransport {
                         fail("disconnected (status=$status)")
                         if (status == 133 && !deliberate) scope.launch {
                             delay(STATUS_133_RESCAN_DELAY_MS)
-                            if (_state.value == State.ERROR) connect(null)
+                            if (_state.value == State.ERROR) {
+                                val recover = onStatus133Recovery
+                                if (recover != null) recover() else connect(null)
+                            }
                         }
                     }
                 }

@@ -95,6 +95,19 @@ class ProximityService : Service() {
         // bounded bridge across the 1.5 s motion-confirmation window; scan/connect owns the normal
         // wakelock after recovery begins. This is never a standing idle wakelock.
         deps.motion.onHardwareWake = { acquireWakeLock(HARDWARE_WAKE_BRIDGE_MS) }
+        deps.ble.onStatus133Recovery = {
+            scope.launch {
+                val offload = deps.config.config.value.presenceOffloadEnabled
+                val armed = offload && deps.ble.armPresenceScan(approachMode = true)
+                if (armed) {
+                    motionPresenceRecoveryUntilMs = System.currentTimeMillis() + MOTION_PRESENCE_RECOVERY_MS
+                    Logx.d("svc", "status 133: hardware presence re-armed; preserving arrival epoch")
+                } else {
+                    Logx.w("svc", "status 133: offload unavailable; bounded foreground fallback")
+                    runCatching { deps.ble.connect(null) }
+                }
+            }
+        }
         registerWakeReceiver()
 
         // Presence signals delivered by BleScanReceiver (offloaded scan woke us).
@@ -113,6 +126,9 @@ class ProximityService : Service() {
                 }
                 val mac = scanResult?.device?.address ?: intent.getStringExtra(EXTRA_MAC)
                 Logx.d("svc", "presence: car in range (saw $mac) — engaging from preserved scan result")
+                if (deps.config.config.value.proximityEnabled) {
+                    scanResult?.let { deps.proximity.onPresenceMatch(it.rssi) }
+                }
                 deps.ble.disarmPresenceScan()
                 // A ScanResult carries the BluetoothDevice's RANDOM/RPA address type. Never rebuild
                 // that device with getRemoteDevice(mac): Android then treats it as PUBLIC and the
@@ -165,6 +181,7 @@ class ProximityService : Service() {
         loops?.cancel(); loops = null
         (application as? DepsHolder)?.deps?.let {
             it.motion.onHardwareWake = null
+            it.ble.onStatus133Recovery = null
             it.proximity.stop()
             runCatching { it.ble.disarmPresenceScan() }
         }

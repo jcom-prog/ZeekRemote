@@ -193,4 +193,25 @@ class ProximityDecisionPolicyTest {
         assertFalse("old arrival evidence must not unlock a later session",
             policy.shouldUnlock(now, -84, false, -86))
     }
+
+    @Test
+    fun strongPresenceAtDoorCannotCreateDepartureUnlock() {
+        val policy = ProximityDecisionPolicy()
+        var now = 0L
+        policy.onPresenceMatch(now, -58, true, -86)
+        val departure = listOf(-58, -67, -71, -78, -82, -86, -89, -92, -88, -82)
+        departure.forEach { rssi ->
+            assertFalse("strong first presence is ambiguous and must not arm; rssi=$rssi",
+                policy.shouldUnlock(now, rssi, true, -86))
+            now += 200
+        }
+    }
+
+    @Test
+    fun expiredPresenceEpochCannotUnlockOnLaterMotion() {
+        val policy = ProximityDecisionPolicy()
+        policy.onPresenceMatch(0L, -84, true, -86)
+        assertFalse(policy.shouldUnlock(35_001L, -81, true, -86))
+        assertFalse(policy.shouldUnlock(35_401L, -78, true, -86))
+    }
 }

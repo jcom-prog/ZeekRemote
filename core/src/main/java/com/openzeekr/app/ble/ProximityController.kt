@@ -226,6 +226,21 @@ class ProximityController(
         _state.value = _state.value.copy(running = false, phase = Phase.PASSIVE, zone = Zone.UNKNOWN)
     }
 
+    /** Preserve the motion + edge-RSSI evidence delivered by the offloaded presence receiver. */
+    fun onPresenceMatch(rssi: Int) {
+        // A PendingIntent can recreate the service/process. Start before recording evidence so the
+        // normal runApproach loop cannot subsequently reset the just-created arrival epoch.
+        if (!_state.value.running) start()
+        val cfg = store.current()
+        decisionPolicy.onPresenceMatch(
+            nowMs = System.currentTimeMillis(),
+            rssi = rssi,
+            moving = motion.state.value == MotionMonitor.Motion.MOVING,
+            unlockThreshold = cfg.sensitivityUnlockRssi,
+        )
+        Logx.d("prox", "arrival epoch: presence rssi=$rssi motion=${motion.state.value}")
+    }
+
     // ---------------- no live session ----------------
 
     private fun onSessionDown() {

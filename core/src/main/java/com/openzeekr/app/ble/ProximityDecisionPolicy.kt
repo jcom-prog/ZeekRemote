@@ -17,6 +17,15 @@ internal class ProximityDecisionPolicy {
     private var nearCandidateSinceMs = UNSET_MS
     private var unlockQualifiedAtMs = UNSET_MS
 
+    // An offloaded presence hit is the earliest reliable proof that a sleeping phone entered the
+    // car's radio range. Keep this evidence independent from the instantaneous motion state: a fast
+    // walker can be STILL by the time GATT has connected and the DK handshake is ready. The candidate
+    // is created only from an edge-range hit while moving, then needs a sustained RSSI improvement.
+    private var presenceApproachAtMs = UNSET_MS
+    private var presenceEntryRssi = 0
+    private var presencePeakRssi = Int.MIN_VALUE
+    private var presenceNearSinceMs = UNSET_MS
+
     private var unlockConfirmedAtMs = UNSET_MS
     private var arrivalStrongSinceMs = UNSET_MS
     private var arrivalConfirmed = false
@@ -31,14 +40,48 @@ internal class ProximityDecisionPolicy {
         farQualified = false
         nearCandidateSinceMs = UNSET_MS
         unlockQualifiedAtMs = UNSET_MS
+        clearPresenceApproach()
         unlockConfirmedAtMs = UNSET_MS
         arrivalStrongSinceMs = UNSET_MS
         arrivalConfirmed = false
         resetWalkAwayCandidate()
     }
 
+    /** Records hardware-offloaded arrival evidence before connect/handshake timing can erase it. */
+    fun onPresenceMatch(nowMs: Long, rssi: Int, moving: Boolean, unlockThreshold: Int) {
+        expirePresenceApproach(nowMs)
+        if (presenceApproachAtMs != UNSET_MS) {
+            presencePeakRssi = maxOf(presencePeakRssi, rssi)
+            return
+        }
+        // A first hit already strong at the door is ambiguous: it can be the start of a departure.
+        // Only a moving, edge-range hit starts an arrival epoch. 0.1.24 began at -58 and is rejected;
+        // both real 0.1.28 arrivals began at -83/-84 and are retained across the handshake/status 133.
+        if (moving && rssi <= unlockThreshold + PRESENCE_ENTRY_MARGIN_DB) {
+            presenceApproachAtMs = nowMs
+            presenceEntryRssi = rssi
+            presencePeakRssi = rssi
+            presenceNearSinceMs = UNSET_MS
+        }
+    }
+
     /** Returns true only for a qualified approach or a fresh, stable session already at the door. */
     fun shouldUnlock(nowMs: Long, rssi: Int, moving: Boolean, unlockThreshold: Int): Boolean {
+        expirePresenceApproach(nowMs)
+        if (presenceApproachAtMs != UNSET_MS) {
+            presencePeakRssi = maxOf(presencePeakRssi, rssi)
+            val improved = presencePeakRssi >= presenceEntryRssi + PRESENCE_RISE_DB
+            val crossedApproachBand = rssi >= unlockThreshold + PRESENCE_READY_MARGIN_DB
+            if (improved && crossedApproachBand) {
+                if (presenceNearSinceMs == UNSET_MS) presenceNearSinceMs = nowMs
+                if (nowMs - presenceNearSinceMs >= PRESENCE_CONFIRM_MS &&
+                    unlockQualifiedAtMs == UNSET_MS) {
+                    unlockQualifiedAtMs = nowMs
+                }
+            } else {
+                presenceNearSinceMs = UNSET_MS
+            }
+        }
         if (rssi >= STRONG_NEAR_RSSI) sawStrongNearWhileLocked = true
 
         if (rssi <= unlockThreshold - FAR_MARGIN_DB) {
@@ -78,6 +121,7 @@ internal class ProximityDecisionPolicy {
     }
 
     fun onUnlockConfirmed(nowMs: Long) {
+        clearPresenceApproach()
         unlockConfirmedAtMs = nowMs
         arrivalStrongSinceMs = UNSET_MS
         arrivalConfirmed = false
@@ -144,6 +188,19 @@ internal class ProximityDecisionPolicy {
         walkAwayWeakestRssi = 0
     }
 
+    private fun expirePresenceApproach(nowMs: Long) {
+        if (presenceApproachAtMs != UNSET_MS && nowMs - presenceApproachAtMs > PRESENCE_TTL_MS) {
+            clearPresenceApproach()
+        }
+    }
+
+    private fun clearPresenceApproach() {
+        presenceApproachAtMs = UNSET_MS
+        presenceEntryRssi = 0
+        presencePeakRssi = Int.MIN_VALUE
+        presenceNearSinceMs = UNSET_MS
+    }
+
     private companion object {
         const val UNSET_MS = -1L
         const val STRONG_NEAR_RSSI = -72
@@ -154,6 +211,13 @@ internal class ProximityDecisionPolicy {
         const val APPROACH_CONFIRM_MS = 400L
         const val DOOR_CONFIRM_MS = 1_200L
         const val UNLOCK_EVIDENCE_TTL_MS = 5_000L
+        const val PRESENCE_ENTRY_MARGIN_DB = 3
+        const val PRESENCE_READY_MARGIN_DB = 4
+        const val PRESENCE_RISE_DB = 1
+        // Two consecutive fast-cadence observations. Requiring 400 ms made the result depend on
+        // whether one noisy 200 ms sample landed just before SESSION_READY (the 0.1.28 failure).
+        const val PRESENCE_CONFIRM_MS = 200L
+        const val PRESENCE_TTL_MS = 35_000L
         const val ARRIVAL_CONFIRM_MS = 1_500L
         const val PRE_ARRIVAL_GRACE_MS = 15_000L
         const val WALK_AWAY_CONFIRM_MS = 2_000L

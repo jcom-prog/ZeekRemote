@@ -1,0 +1,19 @@
+# 0.1.28 retest: initial presence failed with GATT 133; second presence arrived at 24536 ms.
+# Motion was already STILL by the successful handshake. Departure MOVING begins at 54843 ms.
+0,-84,true,true
+24536,-63,false,true
+25481,-63,false,false
+25684,-64,false,false
+25893,-62,false,false
+26104,-62,false,false
+26310,-63,false,false
+26519,-64,false,false
+26728,-65,false,false
+26942,-63,false,false
+27169,-62,false,false
+27576,-62,false,false
+27996,-66,false,false
+28572,-72,false,false
+54843,-81,true,false
+55062,-78,true,false
+55270,-78,true,false

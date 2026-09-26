@@ -5,9 +5,14 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Mandatory replay gates derived from the physical-car logs for 0.1.24 through 0.1.27. */
+/** Mandatory replay gates derived from the physical-car logs for 0.1.24 through 0.1.28. */
 class FieldTraceRegressionTest {
-    private data class Sample(val elapsedMs: Long, val rssi: Int, val moving: Boolean)
+    private data class Sample(
+        val elapsedMs: Long,
+        val rssi: Int,
+        val moving: Boolean,
+        val presence: Boolean = false,
+    )
 
     @Test
     fun v0124_departureNeverUnlocks() {
@@ -49,8 +54,38 @@ class FieldTraceRegressionTest {
         assertTrue("arrival remains latched while still near", decisions.last())
     }
 
+    @Test
+    fun v0128_presenceArrivalQualifiesBeforeDoorRange() {
+        val policy = ProximityDecisionPolicy()
+        val trace = trace("0.1.28-arrival-late-10s.csv")
+        val decisions = replayLocked(policy, trace)
+        val first = decisions.indexOfFirst { it }
+        assertTrue("0.1.28 regression: arrival must qualify during the handshake", first >= 0)
+        assertTrue("arrival must qualify no later than SESSION_READY", trace[first].elapsedMs <= 4_100L)
+        assertTrue("arrival must qualify before close-range RSSI", trace[first].rssi <= -82)
+    }
+
+    @Test
+    fun v0128_status133RecoveryPreservesArrivalAndNeverWaitsForDepartureMotion() {
+        val policy = ProximityDecisionPolicy()
+        val trace = trace("0.1.28-status133-arrival.csv")
+        val decisions = replayLocked(policy, trace)
+        val first = decisions.indexOfFirst { it }
+        assertTrue("status-133 recovery must preserve the original arrival", first >= 0)
+        assertFalse("unlock must be qualified while stationary at the car, not after walking away",
+            trace[first].moving)
+        assertTrue("unlock evidence must exist before the departure edge",
+            trace[first].elapsedMs < 54_843L)
+    }
+
     private fun replayLocked(policy: ProximityDecisionPolicy, name: String): List<Boolean> =
-        trace(name).map { policy.shouldUnlock(it.elapsedMs, it.rssi, it.moving, UNLOCK_RSSI) }
+        replayLocked(policy, trace(name))
+
+    private fun replayLocked(policy: ProximityDecisionPolicy, samples: List<Sample>): List<Boolean> =
+        samples.map {
+            if (it.presence) policy.onPresenceMatch(it.elapsedMs, it.rssi, it.moving, UNLOCK_RSSI)
+            policy.shouldUnlock(it.elapsedMs, it.rssi, it.moving, UNLOCK_RSSI)
+        }
 
     private fun trace(name: String): List<Sample> {
         val stream = requireNotNull(javaClass.getResourceAsStream("/proximity-traces/$name")) { name }
@@ -58,7 +93,12 @@ class FieldTraceRegressionTest {
             lines.filter { it.isNotBlank() && !it.startsWith("#") }
                 .map { row ->
                     val value = row.split(',')
-                    Sample(value[0].toLong(), value[1].toInt(), value[2].toBooleanStrict())
+                    Sample(
+                        elapsedMs = value[0].toLong(),
+                        rssi = value[1].toInt(),
+                        moving = value[2].toBooleanStrict(),
+                        presence = value.getOrNull(3)?.toBooleanStrict() ?: false,
+                    )
                 }.toList()
         }
     }
