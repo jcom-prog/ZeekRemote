@@ -7,6 +7,76 @@ import org.junit.Test
 
 class ProximityDecisionPolicyTest {
     @Test
+    fun captured031TurnaroundWithoutOpeningLocksBeforeSessionIsLost() {
+        val policy = ProximityDecisionPolicy()
+        var now = 0L
+        policy.onUnlockConfirmed(now)
+
+        // Exact EMA sequence from 0.1.31-turnaround-no-lock.log after CTRL_UNLOCK was confirmed.
+        // The user never reached the strong-near arrival band and immediately walked away. 0.1.31
+        // discarded this evidence during its 15 s grace and later could no longer lock over BLE.
+        val turnaround = listOf(
+            -83, -85, -83, -80, -79, -81, -82, -80, -80, -79, -79, -80,
+            -84, -86, -86, -86, -86, -88, -90, -90, -91, -91,
+        )
+        var decision = ProximityDecisionPolicy.ArmedDecision.NONE
+        turnaround.forEach { rssi ->
+            decision = policy.onUnlockedSample(now, rssi, true, -82)
+            now += 210
+        }
+
+        assertEquals(ProximityDecisionPolicy.ArmedDecision.LOCK, decision)
+        assertTrue("lock must be decided while the original DK session is still available", now <= 5_000)
+    }
+
+    @Test
+    fun shortPostUnlockBodyShadowDoesNotBecomeAbortedArrival() {
+        val policy = ProximityDecisionPolicy()
+        var now = 0L
+        policy.onUnlockConfirmed(now)
+
+        // More than 8 dB of body-shadow is insufficient without four seconds of observation and a
+        // sustained FAR run. This protects a normal user who pauses or changes phone orientation.
+        listOf(-75, -78, -84, -85, -87, -80, -79, -86, -88, -81).forEach { rssi ->
+            assertEquals(ProximityDecisionPolicy.ArmedDecision.NONE,
+                policy.onUnlockedSample(now, rssi, true, -82))
+            now += 300
+        }
+    }
+
+    @Test
+    fun nearRecoveryResetsAbortedArrivalEvidence() {
+        val policy = ProximityDecisionPolicy()
+        var now = 0L
+        policy.onUnlockConfirmed(now)
+
+        listOf(-78, -83, -86, -88, -90, -81).forEach { rssi ->
+            assertEquals(ProximityDecisionPolicy.ArmedDecision.NONE,
+                policy.onUnlockedSample(now, rssi, true, -82))
+            now += 700
+        }
+        // The preceding candidate was reset by -81. Remaining FAR samples are too short to lock.
+        repeat(4) {
+            assertEquals(ProximityDecisionPolicy.ArmedDecision.NONE,
+                policy.onUnlockedSample(now, -90, true, -82))
+            now += 300
+        }
+    }
+
+    @Test
+    fun farRssiWithoutObservedMovementNeverLocksAbortedArrival() {
+        val policy = ProximityDecisionPolicy()
+        var now = 0L
+        policy.onUnlockConfirmed(now)
+
+        repeat(30) {
+            assertEquals(ProximityDecisionPolicy.ArmedDecision.NONE,
+                policy.onUnlockedSample(now, if (it == 0) -78 else -92, false, -82))
+            now += 200
+        }
+    }
+
+    @Test
     fun capturedDepartureBounceDoesNotUnlockOrRelock() {
         val policy = ProximityDecisionPolicy()
         var now = 0L

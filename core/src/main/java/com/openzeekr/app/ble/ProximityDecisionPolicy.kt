@@ -29,6 +29,9 @@ internal class ProximityDecisionPolicy {
     private var unlockConfirmedAtMs = UNSET_MS
     private var arrivalStrongSinceMs = UNSET_MS
     private var arrivalConfirmed = false
+    private var preArrivalPeakRssi = Int.MIN_VALUE
+    private var abortedArrivalFarSinceMs = UNSET_MS
+    private var abortedArrivalWeakestRssi = 0
     private var walkAwayFarSinceMs = UNSET_MS
     private var walkAwayFarStartRssi = 0
     private var walkAwayWeakestRssi = 0
@@ -50,6 +53,7 @@ internal class ProximityDecisionPolicy {
         unlockConfirmedAtMs = UNSET_MS
         arrivalStrongSinceMs = UNSET_MS
         arrivalConfirmed = false
+        resetAbortedArrivalCandidate()
         resetWalkAwayCandidate()
         departureLatched = false
         departureLinkEnded = false
@@ -145,6 +149,7 @@ internal class ProximityDecisionPolicy {
         unlockConfirmedAtMs = nowMs
         arrivalStrongSinceMs = UNSET_MS
         arrivalConfirmed = false
+        resetAbortedArrivalCandidate()
         resetWalkAwayCandidate()
     }
 
@@ -200,10 +205,12 @@ internal class ProximityDecisionPolicy {
      */
     fun onUnlockedSample(nowMs: Long, rssi: Int, moving: Boolean, lockThreshold: Int): ArmedDecision {
         if (!arrivalConfirmed) {
+            preArrivalPeakRssi = maxOf(preArrivalPeakRssi, rssi)
             if (rssi >= ARRIVAL_STRONG_RSSI) {
                 if (arrivalStrongSinceMs == UNSET_MS) arrivalStrongSinceMs = nowMs
                 if (nowMs - arrivalStrongSinceMs >= ARRIVAL_CONFIRM_MS) {
                     arrivalConfirmed = true
+                    resetAbortedArrivalCandidate()
                     resetWalkAwayCandidate()
                     return ArmedDecision.ARRIVAL_CONFIRMED
                 }
@@ -211,8 +218,35 @@ internal class ProximityDecisionPolicy {
                 arrivalStrongSinceMs = UNSET_MS
             }
 
-            // If the user really reversed before reaching the car, still allow a safe lock, but never
-            // during the immediate post-unlock bounce seen in the 0.1.20 field trace.
+            // An unlock can be followed by an intentional turnaround without the user ever reaching
+            // the strong-near arrival band. Preserve that as a separate, conservative state instead
+            // of throwing all departure evidence away for PRE_ARRIVAL_GRACE_MS. The captured 0.1.31
+            // turnaround fell from -79 to -91 over 4.6 s. Require all of: an observation window,
+            // sustained FAR samples, an 8 dB drop from the best post-unlock sample, a currently
+            // deep-FAR signal, and current movement. A near return
+            // resets it.
+            if (rssi > lockThreshold) {
+                resetAbortedArrivalDepartureEvidence()
+            } else {
+                if (abortedArrivalFarSinceMs == UNSET_MS) {
+                    abortedArrivalFarSinceMs = nowMs
+                    abortedArrivalWeakestRssi = rssi
+                } else if (rssi < abortedArrivalWeakestRssi) {
+                    abortedArrivalWeakestRssi = rssi
+                }
+                val observedLongEnough = nowMs - unlockConfirmedAtMs >= ABORTED_ARRIVAL_OBSERVE_MS
+                val farLongEnough = nowMs - abortedArrivalFarSinceMs >= ABORTED_ARRIVAL_FAR_MS
+                val materiallyReceding = preArrivalPeakRssi != Int.MIN_VALUE &&
+                    abortedArrivalWeakestRssi <= preArrivalPeakRssi - ABORTED_ARRIVAL_DROP_DB
+                val currentlyConvincinglyFar = rssi <= lockThreshold - ABORTED_ARRIVAL_FAR_MARGIN_DB
+                if (observedLongEnough && farLongEnough && materiallyReceding &&
+                    currentlyConvincinglyFar && moving) {
+                    return ArmedDecision.LOCK
+                }
+            }
+
+            // Keep the existing conservative fallback for a reversal that did not satisfy the
+            // stronger aborted-arrival proof above.
             if (nowMs - unlockConfirmedAtMs < PRE_ARRIVAL_GRACE_MS) {
                 resetWalkAwayCandidate()
                 return ArmedDecision.NONE
@@ -254,6 +288,16 @@ internal class ProximityDecisionPolicy {
         walkAwayWeakestRssi = 0
     }
 
+    private fun resetAbortedArrivalDepartureEvidence() {
+        abortedArrivalFarSinceMs = UNSET_MS
+        abortedArrivalWeakestRssi = 0
+    }
+
+    private fun resetAbortedArrivalCandidate() {
+        preArrivalPeakRssi = Int.MIN_VALUE
+        resetAbortedArrivalDepartureEvidence()
+    }
+
     private fun expirePresenceApproach(nowMs: Long) {
         if (presenceApproachAtMs != UNSET_MS && nowMs - presenceApproachAtMs > PRESENCE_TTL_MS) {
             clearPresenceApproach()
@@ -286,6 +330,10 @@ internal class ProximityDecisionPolicy {
         const val PRESENCE_TTL_MS = 35_000L
         const val ARRIVAL_CONFIRM_MS = 1_500L
         const val PRE_ARRIVAL_GRACE_MS = 15_000L
+        const val ABORTED_ARRIVAL_OBSERVE_MS = 4_000L
+        const val ABORTED_ARRIVAL_FAR_MS = 1_500L
+        const val ABORTED_ARRIVAL_DROP_DB = 8
+        const val ABORTED_ARRIVAL_FAR_MARGIN_DB = 4
         const val WALK_AWAY_CONFIRM_MS = 2_000L
         const val WALK_AWAY_DROP_DB = 3
         const val WALK_AWAY_RECOVERY_DB = 3
