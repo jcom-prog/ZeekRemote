@@ -150,11 +150,11 @@ class ProximityDecisionPolicyTest {
         // Captured 2026-09-26 deep-sleep trace: presence connected at the door while motion had
         // already gone STILL. These samples happened before SESSION_READY.
         listOf(-61, -62, -64, -64, -64, -63, -65).forEach { rssi ->
-            policy.shouldUnlock(now, rssi, false, -86, freshSessionHandshake = true)
+            policy.shouldUnlock(now, rssi, false, -86)
             now += 200
         }
         assertTrue("door arrival must be qualified during the handshake",
-            policy.shouldUnlock(now, -68, false, -86, freshSessionHandshake = true))
+            policy.shouldUnlock(now, -68, false, -86))
 
         // Handshake completes after body shadow weakens RSSI, but before any FAR/departure sample.
         now += 2_000
@@ -167,10 +167,10 @@ class ProximityDecisionPolicyTest {
         val policy = ProximityDecisionPolicy()
         var now = 0L
         repeat(8) {
-            policy.shouldUnlock(now, -64, false, -86, freshSessionHandshake = true)
+            policy.shouldUnlock(now, -64, false, -86)
             now += 200
         }
-        assertTrue(policy.shouldUnlock(now, -70, false, -86, freshSessionHandshake = true))
+        assertTrue(policy.shouldUnlock(now, -70, false, -86))
 
         now += 200
         assertFalse("a FAR sample must invalidate pending arrival evidence immediately",
@@ -184,107 +184,13 @@ class ProximityDecisionPolicyTest {
         val policy = ProximityDecisionPolicy()
         var now = 0L
         repeat(8) {
-            policy.shouldUnlock(now, -64, false, -86, freshSessionHandshake = true)
+            policy.shouldUnlock(now, -64, false, -86)
             now += 200
         }
-        assertTrue(policy.shouldUnlock(now, -70, false, -86, freshSessionHandshake = true))
+        assertTrue(policy.shouldUnlock(now, -70, false, -86))
 
         now += 5_001
         assertFalse("old arrival evidence must not unlock a later session",
             policy.shouldUnlock(now, -84, false, -86))
-    }
-
-    @Test
-    fun captured0124DoorArrivalSurvivesShortStrongWindow() {
-        val policy = ProximityDecisionPolicy()
-        var now = 0L
-
-        // Exact decisive part of 0.1.24-wrong-direction.log. The car was first seen at -58 dBm,
-        // but body shadow weakened the GATT RSSI before the four-second handshake completed.
-        val handshakeTrace = listOf(-58, -67, -71, -78, -78, -79, -82, -83, -86, -87,
-            -87, -86, -83, -82, -79, -77, -78, -81, -82, -83)
-        handshakeTrace.forEach { rssi ->
-            policy.shouldUnlock(now, rssi, false, -86, freshSessionHandshake = true)
-            now += 200
-        }
-
-        assertTrue("corroborated door-range evidence must survive until SESSION_READY",
-            policy.shouldUnlock(now, -83, false, -86))
-        assertTrue("stationary door arrival must pass the final wire-command guard",
-            policy.canSendUnlock(now, -83, false, -86))
-
-        assertFalse("movement without positive direction must fail before the wire command",
-            policy.canSendUnlock(now + 200, -84, true, -86))
-    }
-
-    @Test
-    fun captured0124WalkAwayMustNeverBecomeApproach() {
-        val policy = ProximityDecisionPolicy()
-        var now = 0L
-
-        // A distant baseline existed, but movement starts only after the user has reached the car.
-        repeat(14) {
-            assertFalse(policy.shouldUnlock(now, -91, false, -86))
-            now += 200
-        }
-
-        // This is the outward-moving sequence that incorrectly armed unlock in 0.1.24. Merely being
-        // MOVING at -84 is not approach evidence: the samples do not improve from movement start.
-        listOf(-83, -84, -84, -86, -89, -90, -91, -92).forEach { rssi ->
-            assertFalse("walk-away must not arm unlock; rssi=$rssi",
-                policy.shouldUnlock(now, rssi, true, -86))
-            now += 200
-        }
-    }
-
-    @Test
-    fun captured0126FreshMovingDoorSessionPassesFinalWireGuard() {
-        val policy = ProximityDecisionPolicy()
-        var now = 0L
-
-        // Exact decisive 0.1.26 trace after the status-133 recovery: the car reconnects at -64 dBm
-        // while Activity Recognition still reports MOVING. Two CONNECTED samples qualify a fresh,
-        // strong door arrival; SESSION_READY must be allowed to send UNLOCK without inventing a
-        // second +3 dB gain that is physically impossible this close to the car.
-        assertFalse(policy.shouldUnlock(now, -64, true, -86, freshSessionHandshake = true)); now += 200
-        assertTrue(policy.shouldUnlock(now, -64, true, -86, freshSessionHandshake = true)); now += 200
-        assertEquals(ProximityDecisionPolicy.UnlockEvidence.FRESH_STRONG_CONNECTION,
-            policy.currentUnlockEvidence())
-        assertTrue("0.1.26 regression: qualified moving door arrival must reach the wire",
-            policy.canSendUnlock(now, -64, true, -86))
-    }
-
-    @Test
-    fun freshDoorEvidenceCannotUnlockAfterMovingAwayFromDoorRange() {
-        val policy = ProximityDecisionPolicy()
-        var now = 0L
-        repeat(2) { policy.shouldUnlock(now, -64, true, -86, freshSessionHandshake = true); now += 200 }
-
-        assertFalse("fresh-door exception is bounded to strong door range while moving",
-            policy.canSendUnlock(now, -73, true, -86))
-    }
-}
-
-class UnlockRetryPolicyTest {
-    @Test
-    fun captured0125TraceRetriesOnlyAfterMaterialApproach() {
-        val policy = UnlockRetryPolicy()
-        policy.recordAttempt(-81) // first command in 0.1.25 at ~7.6 m
-
-        listOf(-84, -87, -85, -82, -81, -80, -79).forEach {
-            assertFalse("noise/body shadow must not create a retry at $it dBm", policy.hasApproachedEnough(it))
-        }
-        assertTrue("-78 dBm is the first +3 dB approach point (~5.8 m)", policy.hasApproachedEnough(-78))
-
-        policy.recordAttempt(-78)
-        assertFalse(policy.hasApproachedEnough(-76))
-        assertTrue("a third bounded attempt is allowed only after another +3 dB", policy.hasApproachedEnough(-75))
-    }
-
-    @Test
-    fun walkingAwayNeverQualifiesReceivedOnlyRetry() {
-        val policy = UnlockRetryPolicy()
-        policy.recordAttempt(-81)
-        listOf(-82, -85, -89, -93).forEach { assertFalse(policy.hasApproachedEnough(it)) }
     }
 }

@@ -191,7 +191,7 @@ class CalibrationTestController(
             val session = realSession() ?: return@launch
             setState { it.copy(phase = Phase.RUNNING, busy = true, message = "$label over BLE (0x0110)…") }
             val res = runCatching { session.control(ctrl, 3000L) }.getOrElse { ControlResult.WRITE_FAILED }
-            val ok = res == ControlResult.CONFIRMED || res == ControlResult.RECEIVED_ONLY
+            val ok = res == ControlResult.CONFIRMED
             setState { it.copy(phase = if (ok) Phase.DONE else Phase.ERROR, busy = false,
                 message = "$label -> $res") }
             Logx.d("carprox", "test $label -> $res")

@@ -56,7 +56,7 @@ class VehicleControl(
             val r = runCatching { ble.session.control(b, BLE_ACK_TIMEOUT_MS) }
                 .getOrDefault(ControlResult.WRITE_FAILED)
             Logx.d("ctl", "${cmd.name}: BLE control 0x%02x -> $r".format(b))
-            if (r == ControlResult.CONFIRMED || r == ControlResult.RECEIVED_ONLY) {
+            if (r == ControlResult.CONFIRMED) {
                 if (cmd == Command.UNLOCK) ble.noteUnlockConfirmed()
                 return CallResult.Ok(RemoteControlResponse(serviceId = cmd.serviceId, status = "ok (key)"))
             }

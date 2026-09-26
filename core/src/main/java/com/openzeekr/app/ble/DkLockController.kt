@@ -42,9 +42,7 @@ class DkLockController(
         if (!ensureSession()) { Logx.w("lock", "$label: no live session (refresh failed)"); return false }
         var r = runCatching { session.control(ctrl, ACK_TIMEOUT_MS) }.getOrElse { ControlResult.WRITE_FAILED }
         Logx.d("lock", "$label -> $r")
-        // Lock remains fail-safe: receipt-only is accepted here because the cloud/link-loss safety
-        // net independently verifies/fixes the final locked state. Unlock proximity is stricter.
-        if (r == ControlResult.CONFIRMED || r == ControlResult.RECEIVED_ONLY) {
+        if (r == ControlResult.CONFIRMED) {
             if (ctrl == DkOpcodes.CTRL_UNLOCK) onUnlockConfirmed()
             return true
         }
@@ -55,7 +53,7 @@ class DkLockController(
         if (!refresh()) { Logx.w("lock", "$label: session refresh failed"); return false }
         r = runCatching { session.control(ctrl, ACK_TIMEOUT_MS) }.getOrElse { ControlResult.WRITE_FAILED }
         Logx.d("lock", "$label (after refresh) -> $r")
-        return (r == ControlResult.CONFIRMED || r == ControlResult.RECEIVED_ONLY).also { confirmed ->
+        return (r == ControlResult.CONFIRMED).also { confirmed ->
             if (confirmed && ctrl == DkOpcodes.CTRL_UNLOCK) onUnlockConfirmed()
         }
     }

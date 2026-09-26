@@ -86,9 +86,7 @@ class MotionMonitor(context: Context) {
     /** Invoked once on each STILL→MOVING edge (any source). Lets the caller cancel a long idle sleep. */
     @Volatile var onMovingEdge: (() -> Unit)? = null
 
-    /** Reports a real wake-capable hardware motion edge. Unlike Activity Recognition this signal is
-     * sufficiently direct to wake the secured key immediately; the service also uses it to bridge
-     * the scan/connect hand-off with a short, bounded CPU wake. */
+    /** Lets the service bridge the 1.5 s security debounce with a short, bounded CPU wake. */
     @Volatile var onHardwareWake: (() -> Unit)? = null
 
     @Volatile private var running = false
@@ -100,12 +98,7 @@ class MotionMonitor(context: Context) {
     private var arPendingIntent: PendingIntent? = null
 
     private val onMotion = object : TriggerEventListener() {
-        override fun onTrigger(event: TriggerEvent?) {
-            if (!running) return
-            if (_state.value != Motion.MOVING) onHardwareWake?.invoke()
-            setMoving()
-            armStationary()
-        }
+        override fun onTrigger(event: TriggerEvent?) { if (running) { setMoving(); armStationary() } }
     }
     private val onStationary = object : TriggerEventListener() {
         override fun onTrigger(event: TriggerEvent?) { if (running) { setStill(); armMotion() } }
@@ -130,7 +123,6 @@ class MotionMonitor(context: Context) {
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
         override fun onSensorChanged(event: SensorEvent) {
             if (!running) return
-            if (event.sensor.isWakeUpSensor && _state.value != Motion.MOVING) onHardwareWake?.invoke()
             setMoving()
             stillHandler.removeCallbacks(stepStillRunnable)
             stillHandler.postDelayed(stepStillRunnable, STEP_STILL_TIMEOUT_MS)
