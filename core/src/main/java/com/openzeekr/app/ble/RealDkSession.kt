@@ -339,16 +339,17 @@ class RealDkSession(
                 Logx.w("dk", "control 0x%02x: no 0x0111 within ${timeoutMs}ms -> NO_RESPONSE".format(ctrl))
                 return ControlResult.NO_RESPONSE
             }
-            // A 0x0112 result may follow; a non-zero errCode = the car rejected it. (Observed
-            // successful unlocks send only 0x0111, so absence of 0x0112 counts as CONFIRMED.)
+            // A 0x0112 result may follow; a non-zero errCode = the car rejected it. 0x0111 proves
+            // receipt only. Field trace 0.1.25 showed it at ~7.6 m while the physical unlock did not
+            // happen until ~1 m, so absence of 0x0112 must not be called execution confirmation.
             val resBody = withTimeoutOrNull(RESULT_WINDOW_MS) { result.await() }
             if (resBody != null) {
                 val err = if (resBody.size >= 8) ((resBody[6].toInt() and 0xFF) shl 8) or (resBody[7].toInt() and 0xFF) else 0
                 Logx.d("dk", "control 0x%02x: 0x0111 ok, 0x0112 err=0x%04x tail=%s".format(ctrl, err, hexOf(afterHeader(resBody))))
                 if (err != 0) ControlResult.REJECTED else ControlResult.CONFIRMED
             } else {
-                Logx.d("dk", "control 0x%02x: 0x0111 received (no 0x0112) -> CONFIRMED".format(ctrl))
-                ControlResult.CONFIRMED
+                Logx.d("dk", "control 0x%02x: 0x0111 received (no 0x0112) -> RECEIVED_ONLY".format(ctrl))
+                ControlResult.RECEIVED_ONLY
             }
         } catch (e: Exception) {
             Logx.w("dk", "control error: ${e.message}"); ControlResult.WRITE_FAILED

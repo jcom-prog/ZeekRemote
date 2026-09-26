@@ -237,3 +237,27 @@ class ProximityDecisionPolicyTest {
         }
     }
 }
+
+class UnlockRetryPolicyTest {
+    @Test
+    fun captured0125TraceRetriesOnlyAfterMaterialApproach() {
+        val policy = UnlockRetryPolicy()
+        policy.recordAttempt(-81) // first command in 0.1.25 at ~7.6 m
+
+        listOf(-84, -87, -85, -82, -81, -80, -79).forEach {
+            assertFalse("noise/body shadow must not create a retry at $it dBm", policy.hasApproachedEnough(it))
+        }
+        assertTrue("-78 dBm is the first +3 dB approach point (~5.8 m)", policy.hasApproachedEnough(-78))
+
+        policy.recordAttempt(-78)
+        assertFalse(policy.hasApproachedEnough(-76))
+        assertTrue("a third bounded attempt is allowed only after another +3 dB", policy.hasApproachedEnough(-75))
+    }
+
+    @Test
+    fun walkingAwayNeverQualifiesReceivedOnlyRetry() {
+        val policy = UnlockRetryPolicy()
+        policy.recordAttempt(-81)
+        listOf(-82, -85, -89, -93).forEach { assertFalse(policy.hasApproachedEnough(it)) }
+    }
+}

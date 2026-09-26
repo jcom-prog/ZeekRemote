@@ -214,3 +214,24 @@ internal class ProximityDecisionPolicy {
         const val WALK_AWAY_RECOVERY_DB = 3
     }
 }
+
+/**
+ * Paces idempotent approach-unlock retries after the car acknowledged receipt (0x0111) without an
+ * execution result (0x0112). A retry is allowed only after the phone has moved materially closer.
+ * This converts the 0.1.25 field trace (-81 -> -78 -> -74 dBm) into three bounded attempts instead
+ * of firing a burst at the same distance.
+ */
+internal class UnlockRetryPolicy {
+    private var lastAttemptRssi: Int? = null
+
+    fun recordAttempt(rssi: Int) {
+        lastAttemptRssi = rssi
+    }
+
+    fun hasApproachedEnough(rssi: Int): Boolean =
+        lastAttemptRssi?.let { rssi >= it + RETRY_GAIN_DB } ?: true
+
+    companion object {
+        const val RETRY_GAIN_DB = 3
+    }
+}

@@ -486,12 +486,14 @@ class ProximityController(
     }
 
     /**
-     * Confirmed-unlock retry loop (replaces the old one-shot). Runs on its own coroutine until:
-     *  - the car CONFIRMS the unlock (latch [armedUnlocked], done), or
+     * Execution-aware unlock retry loop. Runs on its own coroutine until:
+     *  - a 0x0112 result explicitly confirms execution, or
+     *  - three progressively closer 0x0111 receipt-only answers create a provisional latch, or
      *  - we walk away ([needToUnlock] cleared + this job cancelled by onSample), or
      *  - we exhaust MAX_UNLOCK_ATTEMPTS.
-     * Each attempt reads the car's ACTUAL answer via [DkSession.control]: a write-fail, no-response, or
-     * reject all tear the link down (reusing the known device) and try again; only a confirm ends it.
+     * Each attempt reads the car's answer via [DkSession.control]. A write-fail, no-response, or reject
+     * tears the link down and retries. A receipt-only answer keeps the healthy session and waits for
+     * another +3 dB of approach before sending the next idempotent unlock.
      * The "took the phone out, unlock errored, had to toggle BT" wedge is exactly a no-response/reject,
      * so it now self-heals by reconnecting and retrying instead of silently "succeeding".
      */
@@ -499,8 +501,10 @@ class ProximityController(
         if (unlockJob?.isActive == true) return
         unlockJob = scope.launch {
             var attempt = 0
+            var receivedOnlyCount = 0
+            var waitForStrongerRssi = false
+            val retryPolicy = UnlockRetryPolicy()
             while (isActive && needToUnlock && attempt < MAX_UNLOCK_ATTEMPTS) {
-                attempt++
                 if (ble.state.value != DkBleManager.State.SESSION_READY) {
                     if (!awaitState(setOf(DkBleManager.State.SESSION_READY), UNLOCK_SESSION_WAIT_MS)) {
                         if (!needToUnlock) break
@@ -521,6 +525,13 @@ class ProximityController(
                     needToUnlock = false
                     break
                 }
+                if (waitForStrongerRssi && !retryPolicy.hasApproachedEnough(current)) {
+                    delay(RECEIVED_ONLY_RETRY_POLL_MS)
+                    continue
+                }
+                attempt++
+                waitForStrongerRssi = false
+                retryPolicy.recordAttempt(current)
                 val r = runCatching { ble.session.control(DkProtocol.CTRL_UNLOCK, UNLOCK_ACK_TIMEOUT_MS) }
                     .getOrDefault(ControlResult.WRITE_FAILED)
                 Logx.d("prox", "unlock attempt #$attempt -> $r")
@@ -531,6 +542,24 @@ class ProximityController(
                     decisionPolicy.onUnlockConfirmed(System.currentTimeMillis())
                     lastTriggerMs = System.currentTimeMillis() // cooldown before a walk-away lock
                     break
+                }
+                if (r == ControlResult.RECEIVED_ONLY) {
+                    receivedOnlyCount++
+                    if (receivedOnlyCount >= MAX_RECEIVED_ONLY_ATTEMPTS) {
+                        // Three increasingly-close receipts are the strongest proof this Zeekr emits
+                        // in normal passive-entry operation. Preserve authenticated key presence and
+                        // the walk-away safety latch, but label it accurately as provisional.
+                        Logx.d("prox", "unlock received-only x$receivedOnlyCount at progressively stronger RSSI -> provisional unlock latch")
+                        ble.noteUnlockConfirmed()
+                        armedUnlocked = true
+                        decisionPolicy.onUnlockConfirmed(System.currentTimeMillis())
+                        lastTriggerMs = System.currentTimeMillis()
+                        break
+                    }
+                    Logx.d("prox", "unlock receipt only; waiting for +${UnlockRetryPolicy.RETRY_GAIN_DB} dB approach before retry")
+                    waitForStrongerRssi = true
+                    delay(RECEIVED_ONLY_RETRY_POLL_MS)
+                    continue
                 }
                 if (!needToUnlock) break
                 resetLink()                    // write-fail / no-response / reject → clear the wedge
@@ -570,7 +599,7 @@ class ProximityController(
                 val r = runCatching { ble.session.control(DkProtocol.CTRL_LOCK, LOCK_ACK_TIMEOUT_MS) }
                     .getOrDefault(ControlResult.WRITE_FAILED)
                 Logx.d("prox", "$reason: BLE lock attempt #$attempt -> $r")
-                if (r == ControlResult.CONFIRMED) { confirmed = true; break }
+                if (r == ControlResult.CONFIRMED || r == ControlResult.RECEIVED_ONLY) { confirmed = true; break }
                 resetLink()   // write-fail / no-response / reject → clear the wedge and retry
                 delay(UNLOCK_RETRY_DELAY_MS)
             }
@@ -790,9 +819,11 @@ class ProximityController(
         // walk-away lock is worth more (per the user). Was 30s, which missed the connected window.
         private const val ARMED_IDLE_MAX_MS = 3_000L
         private const val MAX_UNLOCK_ATTEMPTS = 5          // bound so a walked-away/absent car can't spin
+        private const val MAX_RECEIVED_ONLY_ATTEMPTS = 3   // 0x0111-only retries at progressively closer RSSI
         private const val UNLOCK_SESSION_WAIT_MS = 8_000L  // wait for SESSION_READY before an attempt
         private const val UNLOCK_ACK_TIMEOUT_MS = 1_500L   // wait for the car's 0x0111 receipt
         private const val UNLOCK_RETRY_DELAY_MS = 400L     // pause between attempts after a reset
+        private const val RECEIVED_ONLY_RETRY_POLL_MS = 120L // wait for a real +3 dB approach, not a burst
         // Confirmed-lock loop (walk-away). After MAX_LOCK_ATTEMPTS unconfirmed BLE tries, fall back to
         // cloud. Shorter session-wait than unlock: if BLE won't come up we want cloud sooner (car open).
         private const val MAX_LOCK_ATTEMPTS = 5

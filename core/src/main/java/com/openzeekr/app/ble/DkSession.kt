@@ -31,8 +31,9 @@ interface DkSession {
      * and may follow with `0x0112` (result). Maps to:
      *  - [ControlResult.WRITE_FAILED] — the frame couldn't even be written (dead/wedged GATT),
      *  - [ControlResult.NO_RESPONSE]  — written but no `0x0111` within [timeoutMs] (car didn't get it),
-     *  - [ControlResult.REJECTED]     — `0x0112` came back with a non-zero error code,
-     *  - [ControlResult.CONFIRMED]    — the car acknowledged the command.
+     *  - [ControlResult.RECEIVED_ONLY] — `0x0111` arrived but no execution result followed,
+     *  - [ControlResult.REJECTED]      — `0x0112` came back with a non-zero error code,
+     *  - [ControlResult.CONFIRMED]     — `0x0112` explicitly confirmed execution.
      */
     suspend fun control(ctrl: Byte, timeoutMs: Long): ControlResult = ControlResult.WRITE_FAILED
 
@@ -67,7 +68,7 @@ interface DkSession {
 }
 
 /** Outcome of a [DkSession.control] call, reading the car's actual answer (not just the GATT write). */
-enum class ControlResult { CONFIRMED, REJECTED, NO_RESPONSE, WRITE_FAILED }
+enum class ControlResult { CONFIRMED, RECEIVED_ONLY, REJECTED, NO_RESPONSE, WRITE_FAILED }
 
 class NotYetReversedException(what: String) :
     UnsupportedOperationException("$what is not reverse-engineered yet — placeholder")
