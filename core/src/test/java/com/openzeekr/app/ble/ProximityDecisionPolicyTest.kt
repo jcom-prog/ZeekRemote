@@ -69,6 +69,66 @@ class ProximityDecisionPolicyTest {
     }
 
     @Test
+    fun capturedFastApproachUnlocksEarlierWithoutWaitingAtDoor() {
+        val policy = ProximityDecisionPolicy()
+        var now = 0L
+
+        // 0.1.22 screen-off field trace. Establish the distant baseline, then replay the first clean
+        // rise. The decision must be ready at -83 instead of waiting through the later dip/recovery
+        // until -82; this preserves unlock distance when the user walks faster in rain.
+        repeat(14) {
+            assertFalse(policy.shouldUnlock(now, -91, true, -86))
+            now += 200
+        }
+        assertFalse(policy.shouldUnlock(now, -85, true, -86)); now += 200
+        assertFalse(policy.shouldUnlock(now, -83, true, -86)); now += 200
+        assertTrue(policy.shouldUnlock(now, -83, true, -86))
+    }
+
+    @Test
+    fun capturedDepartureReboundStillLocksPromptly() {
+        val policy = ProximityDecisionPolicy()
+        var now = 0L
+        policy.onUnlockConfirmed(now)
+
+        // Confirm that the phone really reached the car first.
+        repeat(9) {
+            policy.onUnlockedSample(now, -62, true, -82)
+            now += 200
+        }
+
+        // Extract from 0.1.22-deep-sleep-distance-retest.log. Short recoveries to -80/-81 used to
+        // erase the entire walk-away timer, and the final rebound from -93 to -84 prevented the
+        // required current-vs-start 3 dB drop. The weakest observed sample now preserves direction.
+        var decision = ProximityDecisionPolicy.ArmedDecision.NONE
+        listOf(-73, -75, -77, -76, -78, -79, -82, -82, -81, -80, -80, -82,
+            -83, -85, -86, -88, -88, -91, -93, -90, -87, -84).forEach { rssi ->
+            decision = policy.onUnlockedSample(now, rssi, true, -82)
+            now += 200
+        }
+        assertEquals(ProximityDecisionPolicy.ArmedDecision.LOCK, decision)
+    }
+
+    @Test
+    fun strongRecoveryCancelsWalkAwayCandidate() {
+        val policy = ProximityDecisionPolicy()
+        var now = 0L
+        policy.onUnlockConfirmed(now)
+        repeat(9) { policy.onUnlockedSample(now, -65, true, -82); now += 200 }
+
+        listOf(-83, -85, -86, -79).forEach { rssi ->
+            assertEquals(ProximityDecisionPolicy.ArmedDecision.NONE,
+                policy.onUnlockedSample(now, rssi, true, -82))
+            now += 500
+        }
+        repeat(6) {
+            assertEquals(ProximityDecisionPolicy.ArmedDecision.NONE,
+                policy.onUnlockedSample(now, -83, true, -82))
+            now += 400
+        }
+    }
+
+    @Test
     fun bodyShadowWhileStillNeverLocks() {
         val policy = ProximityDecisionPolicy()
         var now = 0L

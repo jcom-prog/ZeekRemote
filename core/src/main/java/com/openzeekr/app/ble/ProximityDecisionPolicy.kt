@@ -22,6 +22,7 @@ internal class ProximityDecisionPolicy {
     private var arrivalConfirmed = false
     private var walkAwayFarSinceMs = UNSET_MS
     private var walkAwayFarStartRssi = 0
+    private var walkAwayWeakestRssi = 0
 
     fun resetLocked() {
         sawStrongNearWhileLocked = false
@@ -50,7 +51,11 @@ internal class ProximityDecisionPolicy {
         }
 
         farSinceMs = UNSET_MS
-        val qualifiedApproach = farQualified && moving && rssi >= unlockThreshold + UNLOCK_MARGIN_DB
+        // Once we were already strongly at the car and subsequently went FAR, a later multipath
+        // rebound is departure noise, not a second approach. A genuine new approach starts with a
+        // fresh policy/session and therefore has no [departureObserved] latch.
+        val qualifiedApproach = farQualified && !departureObserved && moving &&
+            rssi >= unlockThreshold + UNLOCK_MARGIN_DB
         val freshDoorSession = !farQualified && !departureObserved && rssi >= STRONG_NEAR_RSSI
         if (qualifiedApproach || freshDoorSession) {
             if (nearCandidateSinceMs == UNSET_MS) nearCandidateSinceMs = nowMs
@@ -104,25 +109,39 @@ internal class ProximityDecisionPolicy {
             }
         }
 
-        if (!moving || rssi > lockThreshold) {
+        if (!moving) {
             resetWalkAwayCandidate()
             return ArmedDecision.NONE
         }
 
         if (walkAwayFarSinceMs == UNSET_MS) {
+            if (rssi > lockThreshold) return ArmedDecision.NONE
             walkAwayFarSinceMs = nowMs
             walkAwayFarStartRssi = rssi
+            walkAwayWeakestRssi = rssi
             return ArmedDecision.NONE
         }
 
+        // BLE RSSI regularly rebounds by a few dB while the user keeps walking away (body shadow and
+        // multipath). Do not erase otherwise valid departure evidence for that noise. A genuinely
+        // strong recovery means the phone is close again and cancels the candidate.
+        if (rssi >= lockThreshold + WALK_AWAY_RECOVERY_DB) {
+            resetWalkAwayCandidate()
+            return ArmedDecision.NONE
+        }
+        if (rssi < walkAwayWeakestRssi) walkAwayWeakestRssi = rssi
+
         val sustained = nowMs - walkAwayFarSinceMs >= WALK_AWAY_CONFIRM_MS
-        val materiallyReceding = rssi <= walkAwayFarStartRssi - WALK_AWAY_DROP_DB
-        return if (sustained && materiallyReceding) ArmedDecision.LOCK else ArmedDecision.NONE
+        val materiallyReceding = walkAwayWeakestRssi <= walkAwayFarStartRssi - WALK_AWAY_DROP_DB
+        val currentlyFar = rssi <= lockThreshold
+        return if (sustained && materiallyReceding && currentlyFar) ArmedDecision.LOCK
+        else ArmedDecision.NONE
     }
 
     private fun resetWalkAwayCandidate() {
         walkAwayFarSinceMs = UNSET_MS
         walkAwayFarStartRssi = 0
+        walkAwayWeakestRssi = 0
     }
 
     private companion object {
@@ -130,14 +149,15 @@ internal class ProximityDecisionPolicy {
         const val STRONG_NEAR_RSSI = -72
         const val ARRIVAL_STRONG_RSSI = -72
         const val FAR_MARGIN_DB = 2
-        const val UNLOCK_MARGIN_DB = 3
+        const val UNLOCK_MARGIN_DB = 1
         const val FAR_BASELINE_MS = 2_500L
-        const val APPROACH_CONFIRM_MS = 800L
+        const val APPROACH_CONFIRM_MS = 400L
         const val DOOR_CONFIRM_MS = 1_200L
         const val UNLOCK_EVIDENCE_TTL_MS = 5_000L
         const val ARRIVAL_CONFIRM_MS = 1_500L
         const val PRE_ARRIVAL_GRACE_MS = 15_000L
         const val WALK_AWAY_CONFIRM_MS = 2_000L
         const val WALK_AWAY_DROP_DB = 3
+        const val WALK_AWAY_RECOVERY_DB = 3
     }
 }
