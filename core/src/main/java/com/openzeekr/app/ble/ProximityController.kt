@@ -467,6 +467,7 @@ class ProximityController(
         // latch still guarantees a single unlock per approach (reconnects while parked won't re-fire).
         if (!armedUnlocked && !needToUnlock && unlockQualified) {
             needToUnlock = true
+            decisionPolicy.onPendingUnlockStarted()
             // A liveness command must never occupy the shared reply slots while unlock starts.
             pingJob?.cancel(); pingJob = null; pingInFlight = false
             Logx.d("prox", "approach-unlock ARM (rssi=$smoothed ~${"%.1f".format(dist)}m prevZone=$prevZone) — confirmed-unlock loop")
@@ -476,11 +477,15 @@ class ProximityController(
         // WALK-AWAY cancels a pending unlock loop — only once we cross to FAR (≤ lockThresh). The NEAR/FAR
         // hysteresis gap is the "smoothing" so it can't flap while you hover at the door; cancelling also
         // stops any stale mid-retry command dead.
-        val abandonedFarApproach = cfg.proximitySensitivity == "far" &&
-            smoothed <= unlockThresh - 3 && receding
-        if (needToUnlock && smoothed <= lockThresh &&
-            (cfg.proximitySensitivity != "far" || abandonedFarApproach)) {
-            Logx.d("prox", "walk-away — cancelling unlock loop (rssi=$smoothed)")
+        val cancelPendingUnlock = needToUnlock && decisionPolicy.shouldCancelPendingUnlock(
+            nowMs = now,
+            rssi = smoothed,
+            moving = motion.state.value == MotionMonitor.Motion.MOVING,
+            unlockThreshold = unlockThresh,
+            lockThreshold = lockThresh,
+        )
+        if (cancelPendingUnlock) {
+            Logx.d("prox", "sustained walk-away — cancelling unlock loop (rssi=$smoothed)")
             needToUnlock = false
             unlockJob?.cancel(); unlockJob = null
         }

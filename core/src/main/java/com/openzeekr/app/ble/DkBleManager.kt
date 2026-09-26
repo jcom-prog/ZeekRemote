@@ -223,6 +223,7 @@ class DkBleManager(base: Context) : DkTransport {
     // marks a teardown WE initiated (forceReconnect/watch handover) so we don't fight the caller.
     @Volatile private var deliberate = false
     private var setupRetries = 0
+    private val status133RecoveryPolicy = Status133RecoveryPolicy()
 
     // ---- scan state ----
     private var scanCb: ScanCallback? = null
@@ -681,9 +682,8 @@ class DkBleManager(base: Context) : DkTransport {
                     wasReady -> _state.value = State.IDLE   // ready-link drop: liveness/keep-alive decides
                     // Unexpected mid-setup drop (status 19, car/stack contention) with a known device:
                     // retry FAST via reconnectLast instead of the ~20 s offloaded presence scan.
-                    // Android status 133 commonly means the cached RPA/GATT route is stale after the
-                    // car slept. Reusing that same device just repeats 133; surface ERROR so the
-                    // bounded approach watchdog performs a fresh scan and obtains the current RPA.
+                    // Status 133 can be either a transient Android-stack race or a stale RPA. Its
+                    // separate bounded policy below permits one recent-route retry before reacquiring.
                     status != 133 && !deliberate && lastDevice != null && setupRetries < MAX_SETUP_RETRIES -> {
                         setupRetries++
                         _state.value = State.IDLE // reconnectLast requires a resting state
@@ -692,21 +692,38 @@ class DkBleManager(base: Context) : DkTransport {
                     }
                     else -> {
                         setupRetries = 0
-                        if (status == 133) {
-                            // The route/address held by this BluetoothDevice is unusable. Forget it
-                            // and autonomously reacquire a current RPA instead of waiting for the
-                            // service's next multi-second watchdog pass.
-                            lastDevice = null
-                            lastRnd = null
-                            advBroadcastRnd = null
-                            Logx.w("ble", "status 133 — discard cached route; immediate fresh scan")
-                        }
-                        fail("disconnected (status=$status)")
-                        if (status == 133 && !deliberate) scope.launch {
-                            delay(STATUS_133_RESCAN_DELAY_MS)
-                            if (_state.value == State.ERROR) {
-                                val recover = onStatus133Recovery
-                                if (recover != null) recover() else connect(null)
+                        val recovery = if (status == 133 && !deliberate) {
+                            status133RecoveryPolicy.onFailure(lastDevice != null && lastRnd != null)
+                        } else null
+                        if (recovery == Status133RecoveryPolicy.Route.RETRY_RECENT_ROUTE) {
+                            // 0.1.30 fast test 2: this just-received RPA failed once with 133, yet
+                            // the same MAC connected on the next presence event. Give that route one
+                            // bounded stack-settle retry instead of paying for a complete scan cycle.
+                            _state.value = State.IDLE
+                            Logx.w("ble", "status 133 — one fast retry of recent presence route")
+                            scope.launch {
+                                delay(STATUS_133_DIRECT_RETRY_DELAY_MS)
+                                if (_state.value == State.IDLE && !reconnectLast()) {
+                                    val recover = onStatus133Recovery
+                                    if (recover != null) recover() else connect(null)
+                                }
+                            }
+                        } else {
+                            if (status == 133) {
+                                // No route exists or its one direct retry also failed. Only now forget
+                                // it and reacquire a current RPA through the proven offloaded scanner.
+                                lastDevice = null
+                                lastRnd = null
+                                advBroadcastRnd = null
+                                Logx.w("ble", "status 133 — recent route exhausted; immediate fresh scan")
+                            }
+                            fail("disconnected (status=$status)")
+                            if (status == 133 && !deliberate) scope.launch {
+                                delay(STATUS_133_RESCAN_DELAY_MS)
+                                if (_state.value == State.ERROR) {
+                                    val recover = onStatus133Recovery
+                                    if (recover != null) recover() else connect(null)
+                                }
                             }
                         }
                     }
@@ -777,6 +794,7 @@ class DkBleManager(base: Context) : DkTransport {
             (session as RealDkSession).establish()
             Logx.d("ble", "DK session READY")
             setupRetries = 0 // clean session — clear the fast-retry budget
+            status133RecoveryPolicy.onSessionReady()
             handshakeFailStreak = 0; handshakeBackoffUntilMs = 0L // handshake worked — clear the backoff
             _state.value = State.SESSION_READY
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -885,6 +903,7 @@ class DkBleManager(base: Context) : DkTransport {
         private const val SETUP_RETRY_DELAY_MS = 900L
         /** Short stack-settle delay before reacquiring the RPA after Android's generic GATT 133. */
         private const val STATUS_133_RESCAN_DELAY_MS = 400L
+        private const val STATUS_133_DIRECT_RETRY_DELAY_MS = 350L
         // Auto-reconnect backoff after repeated DK-handshake failures (car won't complete the handshake).
         private const val HANDSHAKE_FAIL_THRESHOLD = 3
         private const val HANDSHAKE_BACKOFF_BASE_MS = 30_000L

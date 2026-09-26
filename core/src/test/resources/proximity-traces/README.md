@@ -14,6 +14,11 @@ synthetic tuning curves.
 | `0.1.28-status133-arrival.csv` | `cfc70a4a26248462a0ad3a7df8c317f092b32d6bf1dd1c02d1b18217c72b07dc` | GATT 133 may not lose arrival context or defer unlock until departure. |
 | `0.1.29-post-lock-rebound.csv` | `6b3c0c03c3f4171ccc8dc486c55d3264d94d64fa6540f149b3f6aa0168369e58` | A same-session RSSI rebound after confirmed lock must never emit unlock. |
 | `0.1.29-clean-post-lock.csv` | `aab6f2771ab8478607aafe73486391b664a0961d0adfefa930352b5fb608f9c8` | A clean fast departure remains locked without rearming arrival. |
+| `0.1.30-pending-unlock-dip.csv` | `5f41f677017b8aedb236173527b417caa54c50b95f3ab6618baa6c22a5357dd9` | A short arrival RSSI dip cannot cancel an in-flight unlock. |
+
+The second 0.1.30 trace (`3700182e5f866ad014877fb2d46b576ce4fec7a324660b9ac0c5d576341b17a6`)
+also gates `Status133RecoveryPolicyTest`: one early status 133 gets exactly one recent-route retry,
+then recovery falls back to a fresh presence scan.
 
 The source logs remain external because they total roughly 48 MB and contain unrelated device logcat.
 The hashes make the provenance independently checkable when a fixture is reviewed or regenerated.

@@ -5,7 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Mandatory replay gates derived from the physical-car logs for 0.1.24 through 0.1.29. */
+/** Mandatory replay gates derived from the physical-car logs for 0.1.24 through 0.1.30. */
 class FieldTraceRegressionTest {
     private data class Sample(
         val elapsedMs: Long,
@@ -92,6 +92,16 @@ class FieldTraceRegressionTest {
         policy.onDepartureLockStarted()
         val decisions = replayLocked(policy, "0.1.29-clean-post-lock.csv")
         assertFalse("clean departure may never rearm arrival", decisions.any { it })
+    }
+
+    @Test
+    fun v0130PendingUnlockSurvivesCapturedArrivalDip() {
+        val policy = ProximityDecisionPolicy()
+        policy.onPendingUnlockStarted()
+        val cancelled = trace("0.1.30-pending-unlock-dip.csv").map {
+            policy.shouldCancelPendingUnlock(it.elapsedMs, it.rssi, it.moving, UNLOCK_RSSI, LOCK_RSSI)
+        }
+        assertFalse("captured approach dip cancelled the first unlock command", cancelled.any { it })
     }
 
     private fun replayLocked(policy: ProximityDecisionPolicy, name: String): List<Boolean> =

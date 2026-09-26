@@ -37,6 +37,7 @@ internal class ProximityDecisionPolicy {
     // not a new arrival. Rearming requires both a link end and a fresh offloaded presence event.
     private var departureLatched = false
     private var departureLinkEnded = false
+    private var pendingUnlockFarSinceMs = UNSET_MS
 
     fun resetLocked() {
         sawStrongNearWhileLocked = false
@@ -52,6 +53,7 @@ internal class ProximityDecisionPolicy {
         resetWalkAwayCandidate()
         departureLatched = false
         departureLinkEnded = false
+        pendingUnlockFarSinceMs = UNSET_MS
     }
 
     /** Records hardware-offloaded arrival evidence before connect/handshake timing can erase it. */
@@ -138,6 +140,7 @@ internal class ProximityDecisionPolicy {
     }
 
     fun onUnlockConfirmed(nowMs: Long) {
+        pendingUnlockFarSinceMs = UNSET_MS
         clearPresenceApproach()
         unlockConfirmedAtMs = nowMs
         arrivalStrongSinceMs = UNSET_MS
@@ -147,6 +150,7 @@ internal class ProximityDecisionPolicy {
 
     /** Suppress every unlock decision from the moment walk-away locking starts. */
     fun onDepartureLockStarted() {
+        pendingUnlockFarSinceMs = UNSET_MS
         departureLatched = true
         departureLinkEnded = false
         sawStrongNearWhileLocked = false
@@ -162,6 +166,32 @@ internal class ProximityDecisionPolicy {
     /** A later arrival may rearm only through [onPresenceMatch], never from connected RSSI alone. */
     fun onLinkEnded() {
         if (departureLatched) departureLinkEnded = true
+    }
+
+    /** Starts a bounded departure guard for an unlock command that is already in flight. */
+    fun onPendingUnlockStarted() {
+        pendingUnlockFarSinceMs = UNSET_MS
+    }
+
+    /**
+     * Cancels an in-flight arrival unlock only after sustained far-range movement. A single RSSI
+     * dip cannot prove departure: 0.1.30 fast test 1 fell from -84 to -90 and rebounded to -86 in
+     * about one second while the user was still approaching, cancelling a valid first command.
+     */
+    fun shouldCancelPendingUnlock(
+        nowMs: Long,
+        rssi: Int,
+        moving: Boolean,
+        unlockThreshold: Int,
+        lockThreshold: Int,
+    ): Boolean {
+        val convincinglyFar = rssi <= minOf(lockThreshold, unlockThreshold - PENDING_UNLOCK_FAR_MARGIN_DB)
+        if (!moving || !convincinglyFar) {
+            pendingUnlockFarSinceMs = UNSET_MS
+            return false
+        }
+        if (pendingUnlockFarSinceMs == UNSET_MS) pendingUnlockFarSinceMs = nowMs
+        return nowMs - pendingUnlockFarSinceMs >= PENDING_UNLOCK_CANCEL_MS
     }
 
     /**
@@ -259,5 +289,7 @@ internal class ProximityDecisionPolicy {
         const val WALK_AWAY_CONFIRM_MS = 2_000L
         const val WALK_AWAY_DROP_DB = 3
         const val WALK_AWAY_RECOVERY_DB = 3
+        const val PENDING_UNLOCK_FAR_MARGIN_DB = 3
+        const val PENDING_UNLOCK_CANCEL_MS = 1_200L
     }
 }

@@ -241,4 +241,34 @@ class ProximityDecisionPolicyTest {
         assertFalse(policy.shouldUnlock(now + 600, -82, true, -86))
         assertTrue(policy.shouldUnlock(now + 800, -81, true, -86))
     }
+
+    @Test
+    fun captured0130ArrivalDipDoesNotCancelPendingUnlock() {
+        val policy = ProximityDecisionPolicy()
+        var now = 0L
+        policy.onPendingUnlockStarted()
+
+        // 0.1.30 final fast test 1: the first command was cancelled while the user was still
+        // approaching because a short body-shadow/multipath dip crossed the lock threshold.
+        // The rebound immediately afterwards proves this was not a sustained departure.
+        listOf(-84, -85, -86, -88, -90, -86).forEach { rssi ->
+            assertFalse("short arrival dip must not cancel at rssi=$rssi",
+                policy.shouldCancelPendingUnlock(now, rssi, true, -86, -82))
+            now += 200
+        }
+    }
+
+    @Test
+    fun sustainedFarMovementCanStillCancelAbandonedUnlock() {
+        val policy = ProximityDecisionPolicy()
+        var now = 0L
+        policy.onPendingUnlockStarted()
+
+        var cancelled = false
+        repeat(8) {
+            cancelled = policy.shouldCancelPendingUnlock(now, -91, true, -86, -82)
+            now += 200
+        }
+        assertTrue("a genuinely abandoned approach must eventually cancel", cancelled)
+    }
 }
