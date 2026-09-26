@@ -20,8 +20,8 @@ android {
         applicationId = "com.openzeekr.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 44
-        versionName = "0.1.23"
+        versionCode = 46
+        versionName = "0.1.24"
         // App-global secrets are baked in :core (SecretsConfig + BuildConfig live there).
     }
 
@@ -92,7 +92,7 @@ dependencies {
 
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.compose.material3:material3")
+    implementatation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.navigation:navigation-compose:2.8.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
@@ -101,6 +101,4 @@ dependencies {
     // location; turn-by-turn navigation is handed off to the phone's nav app via deeplink.
     implementation("org.maplibre.gl:android-sdk:11.13.5")
 
-    // Wear Data Layer — clones the digital key to the paired watch on request.
-    implementation("com.google.android.gms:play-services-wearable:18.2.0")
-}
+    // Wear Data Layer — ������́ѡ������х�����Ѽ�ѡ�����ɕ��݅э�����ɕ�Օ�и(������������хѥ������������������ɽ�����������͕�٥��̵ݕ�Ʌ������ȸ���)�(

@@ -91,10 +91,14 @@ class ProximityService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startInForeground()
         val deps = (application as? DepsHolder)?.deps ?: return START_STICKY
-        // A wake-up sensor only guarantees CPU time for delivery of its callback. Hold a short,
-        // bounded bridge across the 1.5 s motion-confirmation window; scan/connect owns the normal
-        // wakelock after recovery begins. This is never a standing idle wakelock.
-        deps.motion.onHardwareWake = { acquireWakeLock(HARDWARE_WAKE_BRIDGE_MS) }
+        // A real wake-capable sensor is stronger evidence than the delayed Activity Recognition
+        // fallback. Start recovery on that edge itself; do not spend another 1.5-2.0 s walking toward
+        // the car before arming the proven screen-off presence route. The bounded lock only bridges
+        // sensor delivery into scan/connect and is never a standing idle wakelock.
+        deps.motion.onHardwareWake = {
+            acquireWakeLock(HARDWARE_WAKE_BRIDGE_MS)
+            scope.launch { wakeSleepingKeyFromHardwareMotion(deps) }
+        }
         registerWakeReceiver()
 
         // Presence signals delivered by BleScanReceiver (offloaded scan woke us).
@@ -386,13 +390,28 @@ class ProximityService : Service() {
         }
     }
 
+    /** Immediate path for a genuine wake-up sensor edge. Activity Recognition never calls this and
+     * therefore retains [KEY_WAKE_MOTION_CONFIRM_MS]. Clearing [keySleeping] before recovery also
+     * prevents the normal motion collector from discarding the same edge as "still sleeping". */
+    private suspend fun wakeSleepingKeyFromHardwareMotion(deps: Deps) {
+        if (!keySleeping || !deps.ble.hasCredential || !deps.ble.bluetoothAvailable) return
+        if (deps.ble.driveAuthorizationActive ||
+            com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value) return
+
+        keySleeping = false
+        sleepDisconnectGraceUntilMs = 0L
+        deps.proximity.updateDiagnostics("hardware motion · waking digital key")
+        Logx.d("svc", "hardware motion: waking stationary key immediately; selecting screen-off recovery route")
+        recoveryProbe(deps, "hardware motion", confirmedMotionWake = true)
+    }
+
     /**
      * Motion-gated anti-relay mode, modelled after modern motion-sleeping key fobs.
      *
      * After two minutes of sensor-confirmed stillness the phone stops both the live GATT session and
-     * the hardware-offloaded presence scan. Screen-on/Bluetooth-on cannot bypass this state. A newly
-     * moving phone must remain moving for a short debounce window; it then performs one immediate,
-     * bounded recovery scan. Drive authorization and Watch link borrowing always take precedence.
+     * the hardware-offloaded presence scan. Screen-on/Bluetooth-on cannot bypass this state. A real
+     * wake-up sensor edge recovers immediately; the coarser Activity Recognition fallback must remain
+     * moving for a short debounce window. Drive authorization and Watch link borrowing take precedence.
      */
     private suspend fun stationaryKeySecurity(deps: Deps) {
         while (scope.isActive) {

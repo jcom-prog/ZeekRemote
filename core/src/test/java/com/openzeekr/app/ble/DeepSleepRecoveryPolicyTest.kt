@@ -4,6 +4,20 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class DeepSleepRecoveryPolicyTest {
+    @Test fun `wake-capable hardware motion starts recovery immediately`() {
+        assertEquals(
+            DeepSleepRecoveryPolicy.WakeTiming.IMMEDIATE,
+            DeepSleepRecoveryPolicy.wakeTiming(wakeCapableHardwareSignal = true),
+        )
+    }
+
+    @Test fun `software activity estimate retains motion confirmation`() {
+        assertEquals(
+            DeepSleepRecoveryPolicy.WakeTiming.CONFIRM_MOTION,
+            DeepSleepRecoveryPolicy.wakeTiming(wakeCapableHardwareSignal = false),
+        )
+    }
+
     @Test fun `confirmed-motion wake keeps the working offloaded presence route`() {
         assertEquals(
             DeepSleepRecoveryPolicy.Route.OFFLOADED_PRESENCE,
