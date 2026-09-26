@@ -26,9 +26,9 @@ import retrofit2.http.Query
  * Reverse-engineered shared-account flow (the signed-in account may be a SHARED user):
  *   1. create-app-certificate   (enrol OUR CSR -> our leaf cert for our deviceId)
  *   2. key-list                 (signed userId+deviceId+vin -> dkId + shareStatus)
- *   3a. empty list  -> create-owner-blu-key mints THIS account's own key (owner OR shared:
- *       Zeekr has no in-app "share a key" action, every account mints its own)
- *   3b. existing entry not bound to us -> share-key/repush binds THIS device
+ *   3a. empty list, owner  -> create-owner-blu-key
+ *   3b. empty list, shared -> create-share-key
+ *   3c. existing entry not bound to us -> share-key/repush binds THIS device
  *   4. key-info                 (-> digitalKey, cmacKeyCert, coef*)
  * then persists the credential (DkIdentity) and arms the BLE session.
  *
@@ -88,11 +88,9 @@ class DkProvisioning(
     private fun ok(code: String?) = code == "000000"
 
     /**
-     * Run the full setup for this device. [owner] = the vehicle-list isOwner flag; it now only
-     * tunes which existing key-list entry we pick and the shared-account receive/repush branch. It
-     * no longer decides whether we may MINT: an empty key-list always attempts create-owner-blu-key
-     * (owner or shared) and lets the server decide. On success the BLE session is credentialed +
-     * ready to establish().
+     * Run the full setup for this device. [owner] is the server-provided vehicle-list isOwner flag
+     * and is security-sensitive: it selects the stock SDK's distinct owner/share create endpoint.
+     * A shared account must never call create-owner-blu-key.
      */
     suspend fun provision(owner: Boolean = false): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
@@ -157,19 +155,15 @@ class DkProvisioning(
             var bookId: String? = null
             var shareStatus: Int? = null
             if (entry == null) {
-                // Empty key-list = this account has no key on this car yet, so mint one. On Zeekr
-                // there is NO "share a key" action in the app (confirmed on a shared account), which
-                // means every account - owner OR shared - creates its OWN BLE key via
-                // create-owner-blu-key. So we no longer pre-gate on isOwner; we attempt the mint and
-                // let the server decide. If the cloud really does restrict non-owner minting it will
-                // return a specific code, which is far more useful than a client-side guess. (See
-                // [[dk-real-eu-api]]: shared acct can create keys.)
+                // The stock 3.0.7 SDK exposes separate creation routes. The previous implementation
+                // sent shared users to create-owner-blu-key, even though vehicle-list explicitly said
+                // isOwner=false. EU TSP rejects that exact request with 079001. Preserve the server's
+                // account role and select the matching route here.
                 _state.value = State(Step.BIND)
-                Logx.d("provision", "step 3 create-owner-blu-key (owner=$owner, empty key-list) …")
-                val cr = createOwnerBluKeyWithRetry(deviceId, sig)
-                val od = cr.data ?: error("create key failed: ${cr.code} ${cr.msg}" +
-                    if (!owner) " (this account is not the registered owner of the car - if the " +
-                        "cloud blocks non-owner minting, its error code shows here)" else "")
+                val route = createRouteFor(owner)
+                Logx.d("provision", "step 3 ${route.path} (owner=$owner, empty key-list) …")
+                val cr = createBluKeyWithRetry(route, deviceId, sig)
+                val od = cr.data ?: error("${route.path} failed: ${cr.code} ${cr.msg}")
                 dkId = od.dkId; bookId = od.bookId
                 Logx.d("provision", "step 3 key created dkId=$dkId")
             } else {
@@ -280,12 +274,20 @@ class DkProvisioning(
      * key-list preceded both stock's failed and successful create) — only time. So re-sign (fresh
      * ECDSA signature, like stock) and retry with a ~5s backoff.
      */
-    private suspend fun createOwnerBluKeyWithRetry(deviceId: String, sign: () -> String): DkResp<KeyItem> {
+    private suspend fun createBluKeyWithRetry(
+        route: DkCreateRoute,
+        deviceId: String,
+        sign: () -> String,
+    ): DkResp<KeyItem> {
         var last: retrofit2.HttpException? = null
         var sessionRefreshed = false
         for (attempt in 1..OWNER_CREATE_ATTEMPTS) {
             try {
-                return api.createOwnerBluKey(OwnerKeyReq(deviceId = deviceId, proprietary = "", signature = sign()))
+                val request = OwnerKeyReq(deviceId = deviceId, proprietary = "", signature = sign())
+                return when (route) {
+                    DkCreateRoute.OWNER -> api.createOwnerBluKey(request)
+                    DkCreateRoute.SHARED -> api.createShareKey(request)
+                }
             } catch (e: retrofit2.HttpException) {
                 val errorBody = runCatching { e.response()?.errorBody()?.string().orEmpty() }.getOrDefault("")
                 val serverCode = Regex("\\\"code\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"")
@@ -293,7 +295,7 @@ class DkProvisioning(
                 when {
                     e.code() == 429 -> {
                         last = e
-                        Logx.w("provision", "create-owner-blu-key 429 (gateway rate-limit 00A29) — " +
+                        Logx.w("provision", "${route.path} 429 (gateway rate-limit 00A29) — " +
                             "backoff ${OWNER_CREATE_BACKOFF_MS}ms, retry $attempt/$OWNER_CREATE_ATTEMPTS …")
                         if (attempt < OWNER_CREATE_ATTEMPTS) kotlinx.coroutines.delay(OWNER_CREATE_BACKOFF_MS)
                     }
@@ -301,7 +303,7 @@ class DkProvisioning(
                         // Stock 3.0.7 maps 079001 to action_refresh_vehicle_list. AccountLogin's
                         // final phase refreshes that list as well as the associated account context;
                         // the next loop iteration then signs with the newly stored userId/VIN.
-                        Logx.w("provision", "create-owner-blu-key 079001 — refreshing vehicle/account context")
+                        Logx.w("provision", "${route.path} 079001 — refreshing vehicle/account context")
                         AccountLogin(store).login().getOrElse { cause ->
                             throw IllegalStateException(
                                 "Digital-key vehicle context expired (079001) and refresh failed: " +
@@ -315,7 +317,7 @@ class DkProvisioning(
             }
         }
         throw IllegalStateException(
-            "create-owner-blu-key kept returning 429 (gateway rate-limit). Wait and try again.", last)
+            "${route.path} kept returning 429 (gateway rate-limit). Wait and try again.", last)
     }
 
     /**
@@ -380,6 +382,15 @@ internal fun signWithCurrentDkContext(
     return signer(userId, vin)
 }
 
+/** The official 3.0.7 SDK has separate endpoints for owner and shared-account key creation. */
+internal enum class DkCreateRoute(val path: String) {
+    OWNER("create-owner-blu-key"),
+    SHARED("create-share-key"),
+}
+
+internal fun createRouteFor(owner: Boolean): DkCreateRoute =
+    if (owner) DkCreateRoute.OWNER else DkCreateRoute.SHARED
+
 // ---------------- DK cloud API (relative to baseUrl) ----------------
 
 private const val DKC = "ms-tsp-dkbs-geely/api/v1.0/app/digital-key-center"
@@ -396,10 +407,13 @@ interface DkApi {
     @POST("$DKC/share-key")
     suspend fun shareKey(@Body body: ShareKeyReq): DkResp<kotlinx.serialization.json.JsonElement>
 
-    /** Mint this account's own BLE key (proprietary=""). Used whenever the key-list is empty,
-     *  for owner AND shared accounts (Zeekr has no in-app key-sharing; each account mints its own). */
+    /** Mint an owner BLE key. Never call this for vehicle-list isOwner=false. */
     @POST("$DKC/create-owner-blu-key")
     suspend fun createOwnerBluKey(@Body body: OwnerKeyReq): DkResp<KeyItem>
+
+    /** Mint the shared account's BLE key, matching the official SDK's createShareBleKey route. */
+    @POST("$DKC/create-share-key")
+    suspend fun createShareKey(@Body body: OwnerKeyReq): DkResp<KeyItem>
 
     @GET("$DKC/key-info")
     suspend fun keyInfo(
