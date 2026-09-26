@@ -325,6 +325,56 @@ class DkBleManager(base: Context) : DkTransport {
         return true
     }
 
+    /**
+     * Connect directly from the hardware-offloaded presence result that woke the process.
+     *
+     * Unlike a String MAC, [ScanResult.device] retains Android's RANDOM/RPA address type. The same
+     * result can also contain the DK broadcast random, so the deep-sleep path must not discard it and
+     * perform another 20-second scan. Returns false only when the split presence advert does not yet
+     * contain a usable broadcastRnd; the caller then starts the normal per-MAC combining scan.
+     */
+    @SuppressLint("MissingPermission")
+    fun connectFromPresence(result: ScanResult): Boolean {
+        if (inHandshakeBackoff()) return false
+        when (_state.value) {
+            State.CONNECTING, State.CONNECTED, State.SESSION_READY -> {
+                Logx.d("ble", "presence result ignored — already ${_state.value}")
+                return true
+            }
+            else -> {}
+        }
+        val record = result.scanRecord
+        val rnd = DkAdvertParser.parseBroadcastRnd(
+            rawRecord = record?.bytes,
+            manufacturerData = record?.manufacturerSpecificData?.get(DK_MFR_COMPANY_ID),
+        ) ?: run {
+            Logx.d("ble", "presence result ${result.device.address} has no broadcastRnd — foreground combining scan required")
+            return false
+        }
+        if (adapter?.isEnabled != true) return false
+
+        // A foreground scan may have started just before the offloaded PendingIntent arrived.
+        // The preserved result is strictly better (correct device + rnd), so atomically stop that
+        // scan before opening one and only one GATT client.
+        if (_state.value == State.SCANNING) {
+            adapter?.bluetoothLeScanner?.let { stopScanInternal(it) }
+        }
+
+        lastError = null
+        advBroadcastRnd = rnd
+        lastDevice = result.device
+        lastRnd = rnd
+        // Seed only the first asynchronous GATT-RSSI cycle. The proximity policy still requires
+        // sustained direction evidence, so this cannot turn one stale advert into an unlock.
+        lastRemoteRssi = result.rssi
+        rssiReadPending = false
+        Logx.d("ble", "presence direct-connect ${result.device.address} rssi=${result.rssi} " +
+            "rnd=${rnd.joinToString("") { "%02x".format(it) }}")
+        _state.value = State.CONNECTING
+        connectDevice(result.device)
+        return true
+    }
+
     @SuppressLint("MissingPermission")
     private fun startScan(a: BluetoothAdapter, useBatching: Boolean = true) {
         val scanner = a.bluetoothLeScanner ?: run { fail("no LE scanner"); return }
@@ -640,8 +690,20 @@ class DkBleManager(base: Context) : DkTransport {
                     }
                     else -> {
                         setupRetries = 0
-                        if (status == 133) Logx.w("ble", "status 133 — discard cached route; fresh scan required")
+                        if (status == 133) {
+                            // The route/address held by this BluetoothDevice is unusable. Forget it
+                            // and autonomously reacquire a current RPA instead of waiting for the
+                            // service's next multi-second watchdog pass.
+                            lastDevice = null
+                            lastRnd = null
+                            advBroadcastRnd = null
+                            Logx.w("ble", "status 133 — discard cached route; immediate fresh scan")
+                        }
                         fail("disconnected (status=$status)")
+                        if (status == 133 && !deliberate) scope.launch {
+                            delay(STATUS_133_RESCAN_DELAY_MS)
+                            if (_state.value == State.ERROR) connect(null)
+                        }
                     }
                 }
             }
@@ -816,6 +878,8 @@ class DkBleManager(base: Context) : DkTransport {
         // to beat the ~20 s offloaded presence scan). Exhausted → fall back to the scan path.
         private const val MAX_SETUP_RETRIES = 3
         private const val SETUP_RETRY_DELAY_MS = 900L
+        /** Short stack-settle delay before reacquiring the RPA after Android's generic GATT 133. */
+        private const val STATUS_133_RESCAN_DELAY_MS = 400L
         // Auto-reconnect backoff after repeated DK-handshake failures (car won't complete the handshake).
         private const val HANDSHAKE_FAIL_THRESHOLD = 3
         private const val HANDSHAKE_BACKOFF_BASE_MS = 30_000L

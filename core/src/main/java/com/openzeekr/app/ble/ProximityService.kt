@@ -101,15 +101,22 @@ class ProximityService : Service() {
                     deps.ble.disarmPresenceScan()
                     return START_STICKY
                 }
-                val mac = intent.getStringExtra(EXTRA_MAC)
-                // NOTE: do NOT connect(mac) directly. The car advertises a Resolvable Private
-                // Address, so the MAC from the offloaded result is a RANDOM address; a direct
-                // getRemoteDevice(mac).connectGatt treats it as PUBLIC and times out (status=147).
-                // The offloaded scan is only a WAKE trigger — re-run the proven scan-based connect,
-                // which takes the BluetoothDevice from the live ScanResult (correct address type).
-                Logx.d("svc", "presence: car in range (saw $mac) — engaging via scan-connect")
+                val scanResult = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(EXTRA_SCAN_RESULT, android.bluetooth.le.ScanResult::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(EXTRA_SCAN_RESULT) as? android.bluetooth.le.ScanResult
+                }
+                val mac = scanResult?.device?.address ?: intent.getStringExtra(EXTRA_MAC)
+                Logx.d("svc", "presence: car in range (saw $mac) — engaging from preserved scan result")
                 deps.ble.disarmPresenceScan()
-                runCatching { deps.ble.connect(null) } // wakelock follows state via manageWakeLock
+                // A ScanResult carries the BluetoothDevice's RANDOM/RPA address type. Never rebuild
+                // that device with getRemoteDevice(mac): Android then treats it as PUBLIC and the
+                // connect fails. If this particular split advert lacks broadcastRnd, the manager
+                // safely falls back to the normal scan and combines only packets from the same MAC.
+                runCatching {
+                    if (scanResult == null || !deps.ble.connectFromPresence(scanResult)) deps.ble.connect(null)
+                } // wakelock follows state via manageWakeLock
             }
             ACTION_ABSENT -> {
                 // Legacy MATCH_LOST signal. Nothing to do: manageWakeLock releases
@@ -486,6 +493,7 @@ class ProximityService : Service() {
         /** BleScanReceiver → service: the car's advert left range (MATCH_LOST) or offload dropped. */
         const val ACTION_ABSENT = "com.openzeekr.app.ble.PROX_ABSENT"
         const val EXTRA_MAC = "mac"
+        const val EXTRA_SCAN_RESULT = "scan_result"
 
         fun start(context: Context) {
             val i = Intent(context, ProximityService::class.java)
@@ -497,10 +505,11 @@ class ProximityService : Service() {
         }
 
         /** Woken by the offloaded scan: car is nearby — engage (connect + approach). */
-        fun notifyPresent(context: Context, mac: String?) {
+        fun notifyPresent(context: Context, result: android.bluetooth.le.ScanResult?) {
             val i = Intent(context, ProximityService::class.java)
                 .setAction(ACTION_PRESENT)
-                .putExtra(EXTRA_MAC, mac)
+                .putExtra(EXTRA_MAC, result?.device?.address)
+                .putExtra(EXTRA_SCAN_RESULT, result)
             runCatching { ContextCompat.startForegroundService(context, i) }
         }
 

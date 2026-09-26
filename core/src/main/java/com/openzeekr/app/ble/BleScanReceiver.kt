@@ -36,9 +36,19 @@ class BleScanReceiver : BroadcastReceiver() {
             (intent.getParcelableArrayListExtra<ScanResult>(BluetoothLeScanner.EXTRA_LIST_SCAN_RESULT)
                 ?: emptyList())
 
-        // Pick the strongest advertiser (only our car should realistically match the 0xFDFD/0x06FE
-        // filter near us; identity is verified by the DK handshake regardless).
-        val best = results.maxByOrNull { it.rssi }
+        // Prefer a result that already carries broadcastRnd over a slightly stronger UUID-only
+        // primary packet. The old strongest-only choice could discard the one split advert that
+        // makes an immediate direct connection possible. Identity is still proven by the DK
+        // handshake; the random is never combined across MAC addresses.
+        val candidates = results.map { result ->
+            val rec = result.scanRecord
+            val hasRnd = DkAdvertParser.parseBroadcastRnd(
+                rawRecord = rec?.bytes,
+                manufacturerData = rec?.manufacturerSpecificData?.get(DK_MFR_COMPANY_ID),
+            ) != null
+            PresenceAdvertSelector.Candidate(result, result.rssi, hasRnd)
+        }
+        val best = PresenceAdvertSelector.select(candidates)
         val mac = best?.device?.address
         val rssi = best?.rssi
 
@@ -50,12 +60,17 @@ class BleScanReceiver : BroadcastReceiver() {
             else -> {
                 // ALL_MATCHES: the next matching car advert wakes the app; service disarms immediately.
                 Logx.d("ble", "presence MATCH mac=${mac ?: "?"} rssi=${rssi ?: "?"} — waking to connect")
-                ProximityService.notifyPresent(context, mac)
+                // Preserve the complete ScanResult. The BluetoothDevice inside it retains the
+                // RANDOM/RPA address type and the record may already contain the broadcastRnd.
+                // Passing only the MAC forced the service to throw this useful result away and
+                // start a second 20 s scan (captured by the 0.1.20 deep-sleep trace).
+                ProximityService.notifyPresent(context, best)
             }
         }
     }
 
     companion object {
         const val ACTION_SCAN_RESULT = "com.openzeekr.app.ble.PRESENCE_SCAN_RESULT"
+        private const val DK_MFR_COMPANY_ID = 0x06FE
     }
 }
