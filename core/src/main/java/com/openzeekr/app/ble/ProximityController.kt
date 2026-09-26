@@ -341,7 +341,11 @@ class ProximityController(
         // reached the door at -61 dBm, but SESSION_READY arrived ~3.4 s later after the signal had
         // weakened; gating observation on READY discarded the only reliable arrival evidence.
         val unlockQualified = !armedUnlocked && !needToUnlock && decisionPolicy.shouldUnlock(
-            now, smoothed, motion.state.value == MotionMonitor.Motion.MOVING, unlockThresh,
+            now,
+            smoothed,
+            motion.state.value == MotionMonitor.Motion.MOVING,
+            unlockThresh,
+            freshSessionHandshake = ble.state.value == DkBleManager.State.CONNECTED,
         )
         if (armedDecision == ProximityDecisionPolicy.ArmedDecision.ARRIVAL_CONFIRMED) {
             Logx.d("prox", "arrival confirmed (rssi=$smoothed) — sustained-near guard passed")
@@ -504,6 +508,19 @@ class ProximityController(
                     }
                 }
                 if (!needToUnlock) break
+                val current = _state.value.smoothedRssi
+                val cfg = store.current()
+                if (current == null || !decisionPolicy.canSendUnlock(
+                        System.currentTimeMillis(),
+                        current,
+                        motion.state.value == MotionMonitor.Motion.MOVING,
+                        cfg.sensitivityUnlockRssi,
+                    )
+                ) {
+                    Logx.d("prox", "unlock pre-send guard rejected stale/receding evidence")
+                    needToUnlock = false
+                    break
+                }
                 val r = runCatching { ble.session.control(DkProtocol.CTRL_UNLOCK, UNLOCK_ACK_TIMEOUT_MS) }
                     .getOrDefault(ControlResult.WRITE_FAILED)
                 Logx.d("prox", "unlock attempt #$attempt -> $r")

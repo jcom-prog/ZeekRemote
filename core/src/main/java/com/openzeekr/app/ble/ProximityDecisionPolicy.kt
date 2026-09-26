@@ -15,7 +15,11 @@ internal class ProximityDecisionPolicy {
     private var farSinceMs = UNSET_MS
     private var farQualified = false
     private var nearCandidateSinceMs = UNSET_MS
+    private var strongNearSamples = 0
     private var unlockQualifiedAtMs = UNSET_MS
+    private var wasMoving = false
+    private var movingStartRssi = 0
+    private var movingBestRssi = 0
 
     private var unlockConfirmedAtMs = UNSET_MS
     private var arrivalStrongSinceMs = UNSET_MS
@@ -30,7 +34,11 @@ internal class ProximityDecisionPolicy {
         farSinceMs = UNSET_MS
         farQualified = false
         nearCandidateSinceMs = UNSET_MS
+        strongNearSamples = 0
         unlockQualifiedAtMs = UNSET_MS
+        wasMoving = false
+        movingStartRssi = 0
+        movingBestRssi = 0
         unlockConfirmedAtMs = UNSET_MS
         arrivalStrongSinceMs = UNSET_MS
         arrivalConfirmed = false
@@ -38,14 +46,37 @@ internal class ProximityDecisionPolicy {
     }
 
     /** Returns true only for a qualified approach or a fresh, stable session already at the door. */
-    fun shouldUnlock(nowMs: Long, rssi: Int, moving: Boolean, unlockThreshold: Int): Boolean {
+    fun shouldUnlock(
+        nowMs: Long,
+        rssi: Int,
+        moving: Boolean,
+        unlockThreshold: Int,
+        freshSessionHandshake: Boolean = false,
+    ): Boolean {
         if (rssi >= STRONG_NEAR_RSSI) sawStrongNearWhileLocked = true
+
+        // Motion alone has no direction. Anchor every new moving period and require a material RSSI
+        // gain before treating it as an approach. This prevents picking up the phone at the car and
+        // walking away from being misclassified as a new arrival.
+        if (moving) {
+            if (!wasMoving) {
+                movingStartRssi = rssi
+                movingBestRssi = rssi
+            } else if (rssi > movingBestRssi) {
+                movingBestRssi = rssi
+            }
+        } else {
+            movingStartRssi = 0
+            movingBestRssi = 0
+        }
+        wasMoving = moving
 
         if (rssi <= unlockThreshold - FAR_MARGIN_DB) {
             if (sawStrongNearWhileLocked) departureObserved = true
             if (farSinceMs == UNSET_MS) farSinceMs = nowMs
             if (nowMs - farSinceMs >= FAR_BASELINE_MS) farQualified = true
             nearCandidateSinceMs = UNSET_MS
+            strongNearSamples = 0
             unlockQualifiedAtMs = UNSET_MS
             return false
         }
@@ -54,17 +85,26 @@ internal class ProximityDecisionPolicy {
         // Once we were already strongly at the car and subsequently went FAR, a later multipath
         // rebound is departure noise, not a second approach. A genuine new approach starts with a
         // fresh policy/session and therefore has no [departureObserved] latch.
-        val qualifiedApproach = farQualified && !departureObserved && moving &&
+        val directionConfirmed = moving && movingBestRssi >= movingStartRssi + APPROACH_GAIN_DB
+        val qualifiedApproach = farQualified && !departureObserved && directionConfirmed &&
             rssi >= unlockThreshold + UNLOCK_MARGIN_DB
-        val freshDoorSession = !farQualified && !departureObserved && rssi >= STRONG_NEAR_RSSI
+        val freshDoorSession = freshSessionHandshake && !departureObserved && rssi >= STRONG_NEAR_RSSI
         if (qualifiedApproach || freshDoorSession) {
             if (nearCandidateSinceMs == UNSET_MS) nearCandidateSinceMs = nowMs
-            val holdMs = if (qualifiedApproach) APPROACH_CONFIRM_MS else DOOR_CONFIRM_MS
-            if (nowMs - nearCandidateSinceMs >= holdMs && unlockQualifiedAtMs == UNSET_MS) {
+            if (freshDoorSession) strongNearSamples++
+            val qualified = if (qualifiedApproach) {
+                nowMs - nearCandidateSinceMs >= APPROACH_CONFIRM_MS
+            } else {
+                // Two independent door-range GATT readings corroborate the offloaded presence hit.
+                // Do not demand 1.2 s continuously: body shadow during the handshake is normal.
+                strongNearSamples >= DOOR_CONFIRM_SAMPLES
+            }
+            if (qualified && unlockQualifiedAtMs == UNSET_MS) {
                 unlockQualifiedAtMs = nowMs
             }
         } else {
             nearCandidateSinceMs = UNSET_MS
+            strongNearSamples = 0
         }
 
         // A fresh deep-sleep connection can prove that the phone reached the door while the DK
@@ -75,6 +115,18 @@ internal class ProximityDecisionPolicy {
             unlockQualifiedAtMs = UNSET_MS
         }
         return unlockQualifiedAtMs != UNSET_MS
+    }
+
+    /** Final invariant immediately before the wire command: still at the door, or proven approach. */
+    fun canSendUnlock(nowMs: Long, rssi: Int, moving: Boolean, unlockThreshold: Int): Boolean {
+        if (unlockQualifiedAtMs == UNSET_MS ||
+            nowMs - unlockQualifiedAtMs > UNLOCK_EVIDENCE_TTL_MS ||
+            rssi <= unlockThreshold - FAR_MARGIN_DB
+        ) return false
+
+        // A stationary phone at door range is safe. If it is moving, require the same positive
+        // direction evidence as the approach decision; movement away can never pass this check.
+        return !moving || movingBestRssi >= movingStartRssi + APPROACH_GAIN_DB
     }
 
     fun onUnlockConfirmed(nowMs: Long) {
@@ -150,9 +202,10 @@ internal class ProximityDecisionPolicy {
         const val ARRIVAL_STRONG_RSSI = -72
         const val FAR_MARGIN_DB = 2
         const val UNLOCK_MARGIN_DB = 1
+        const val APPROACH_GAIN_DB = 3
         const val FAR_BASELINE_MS = 2_500L
         const val APPROACH_CONFIRM_MS = 400L
-        const val DOOR_CONFIRM_MS = 1_200L
+        const val DOOR_CONFIRM_SAMPLES = 2
         const val UNLOCK_EVIDENCE_TTL_MS = 5_000L
         const val ARRIVAL_CONFIRM_MS = 1_500L
         const val PRE_ARRIVAL_GRACE_MS = 15_000L

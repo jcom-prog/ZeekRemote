@@ -150,11 +150,11 @@ class ProximityDecisionPolicyTest {
         // Captured 2026-09-26 deep-sleep trace: presence connected at the door while motion had
         // already gone STILL. These samples happened before SESSION_READY.
         listOf(-61, -62, -64, -64, -64, -63, -65).forEach { rssi ->
-            policy.shouldUnlock(now, rssi, false, -86)
+            policy.shouldUnlock(now, rssi, false, -86, freshSessionHandshake = true)
             now += 200
         }
         assertTrue("door arrival must be qualified during the handshake",
-            policy.shouldUnlock(now, -68, false, -86))
+            policy.shouldUnlock(now, -68, false, -86, freshSessionHandshake = true))
 
         // Handshake completes after body shadow weakens RSSI, but before any FAR/departure sample.
         now += 2_000
@@ -167,10 +167,10 @@ class ProximityDecisionPolicyTest {
         val policy = ProximityDecisionPolicy()
         var now = 0L
         repeat(8) {
-            policy.shouldUnlock(now, -64, false, -86)
+            policy.shouldUnlock(now, -64, false, -86, freshSessionHandshake = true)
             now += 200
         }
-        assertTrue(policy.shouldUnlock(now, -70, false, -86))
+        assertTrue(policy.shouldUnlock(now, -70, false, -86, freshSessionHandshake = true))
 
         now += 200
         assertFalse("a FAR sample must invalidate pending arrival evidence immediately",
@@ -184,13 +184,56 @@ class ProximityDecisionPolicyTest {
         val policy = ProximityDecisionPolicy()
         var now = 0L
         repeat(8) {
-            policy.shouldUnlock(now, -64, false, -86)
+            policy.shouldUnlock(now, -64, false, -86, freshSessionHandshake = true)
             now += 200
         }
-        assertTrue(policy.shouldUnlock(now, -70, false, -86))
+        assertTrue(policy.shouldUnlock(now, -70, false, -86, freshSessionHandshake = true))
 
         now += 5_001
         assertFalse("old arrival evidence must not unlock a later session",
             policy.shouldUnlock(now, -84, false, -86))
+    }
+
+    @Test
+    fun captured0124DoorArrivalSurvivesShortStrongWindow() {
+        val policy = ProximityDecisionPolicy()
+        var now = 0L
+
+        // Exact decisive part of 0.1.24-wrong-direction.log. The car was first seen at -58 dBm,
+        // but body shadow weakened the GATT RSSI before the four-second handshake completed.
+        val handshakeTrace = listOf(-58, -67, -71, -78, -78, -79, -82, -83, -86, -87,
+            -87, -86, -83, -82, -79, -77, -78, -81, -82, -83)
+        handshakeTrace.forEach { rssi ->
+            policy.shouldUnlock(now, rssi, false, -86, freshSessionHandshake = true)
+            now += 200
+        }
+
+        assertTrue("corroborated door-range evidence must survive until SESSION_READY",
+            policy.shouldUnlock(now, -83, false, -86))
+        assertTrue("stationary door arrival must pass the final wire-command guard",
+            policy.canSendUnlock(now, -83, false, -86))
+
+        assertFalse("movement without positive direction must fail before the wire command",
+            policy.canSendUnlock(now + 200, -84, true, -86))
+    }
+
+    @Test
+    fun captured0124WalkAwayMustNeverBecomeApproach() {
+        val policy = ProximityDecisionPolicy()
+        var now = 0L
+
+        // A distant baseline existed, but movement starts only after the user has reached the car.
+        repeat(14) {
+            assertFalse(policy.shouldUnlock(now, -91, false, -86))
+            now += 200
+        }
+
+        // This is the outward-moving sequence that incorrectly armed unlock in 0.1.24. Merely being
+        // MOVING at -84 is not approach evidence: the samples do not improve from movement start.
+        listOf(-83, -84, -84, -86, -89, -90, -91, -92).forEach { rssi ->
+            assertFalse("walk-away must not arm unlock; rssi=$rssi",
+                policy.shouldUnlock(now, rssi, true, -86))
+            now += 200
+        }
     }
 }
