@@ -1,290 +1,106 @@
-package com.openzeekr.app.ble
+import java.io.FileInputStream
+import java.util.Properties
 
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
-import org.junit.Test
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
 
-class ProximityDecisionPolicyTest {
-    @Test
-    fun capturedDepartureBounceDoesNotUnlockOrRelock() {
-        val policy = ProximityDecisionPolicy()
-        var now = 0L
+// Release signing is read from an UNTRACKED keystore.properties at the repo root (see
+// keystore.properties.example). If it's absent, `release` builds unsigned — Studio's
+// "Generate Signed Bundle" still works independently.
+val keystorePropsFile = rootProject.file("keystore.properties")
+val keystoreProps = Properties().apply { if (keystorePropsFile.exists()) load(FileInputStream(keystorePropsFile)) }
 
-        // Captured 0.1.20 sequence: user was close, walked away, then multipath made RSSI rebound.
-        // The old FAR->NEAR edge unlocked at the final -84/-82 rebound.
-        val lockedTrace = listOf(-64, -68, -70, -72, -73, -76, -77, -76, -75, -76,
-            -79, -82, -84, -85, -87, -88, -88, -87, -84, -83, -84, -84, -82)
-        lockedTrace.forEach { rssi ->
-            assertFalse("must not unlock while departing; rssi=$rssi", policy.shouldUnlock(now, rssi, true, -86))
-            now += 200
-        }
+android {
+    namespace = "com.openzeekr.app"
+    compileSdk = 34
 
-        // Even if an unlock was externally confirmed, the captured post-unlock bounce must not lock
-        // during the 15 s arrival grace, and a STILL sample must cancel a walk-away candidate.
-        policy.onUnlockConfirmed(now)
-        val postUnlock = listOf(-79, -79, -79, -79, -77, -79, -82, -85, -86, -83,
-            -80, -81, -84, -85, -84, -84, -84, -86, -86, -84)
-        postUnlock.forEach { rssi ->
-            assertEquals(ProximityDecisionPolicy.ArmedDecision.NONE,
-                policy.onUnlockedSample(now, rssi, true, -82))
-            now += 200
-        }
-        assertEquals(ProximityDecisionPolicy.ArmedDecision.NONE,
-            policy.onUnlockedSample(now, -87, false, -82))
+    defaultConfig {
+        applicationId = "com.openzeekr.app"
+        minSdk = 26
+        targetSdk = 34
+        versionCode = 52
+        versionName = "0.1.27"
+        // App-global secrets are baked in :core (SecretsConfig + BuildConfig live there).
     }
 
-    @Test
-    fun qualifiedApproachUnlocksThenRealDepartureLocks() {
-        val policy = ProximityDecisionPolicy()
-        var now = 0L
-
-        // Establish a real FAR baseline before approaching.
-        repeat(14) {
-            assertFalse(policy.shouldUnlock(now, -91, true, -86))
-            now += 200
-        }
-        // Sustained approach, comfortably through the threshold margin.
-        var unlocked = false
-        listOf(-87, -85, -83, -82, -81, -80, -79, -78).forEach { rssi ->
-            unlocked = unlocked || policy.shouldUnlock(now, rssi, true, -86)
-            now += 200
-        }
-        assertTrue(unlocked)
-
-        policy.onUnlockConfirmed(now)
-        var arrival = ProximityDecisionPolicy.ArmedDecision.NONE
-        repeat(9) {
-            arrival = policy.onUnlockedSample(now, -68, true, -82)
-            now += 200
-        }
-        assertEquals(ProximityDecisionPolicy.ArmedDecision.ARRIVAL_CONFIRMED, arrival)
-
-        var lock = ProximityDecisionPolicy.ArmedDecision.NONE
-        listOf(-83, -83, -84, -84, -85, -85, -86, -86, -87, -87, -88, -88).forEach { rssi ->
-            lock = policy.onUnlockedSample(now, rssi, true, -82)
-            now += 200
-        }
-        assertEquals(ProximityDecisionPolicy.ArmedDecision.LOCK, lock)
-    }
-
-    @Test
-    fun capturedFastApproachUnlocksEarlierWithoutWaitingAtDoor() {
-        val policy = ProximityDecisionPolicy()
-        var now = 0L
-
-        // 0.1.22 screen-off field trace. Establish the distant baseline, then replay the first clean
-        // rise. The decision must be ready at -83 instead of waiting through the later dip/recovery
-        // until -82; this preserves unlock distance when the user walks faster in rain.
-        repeat(14) {
-            assertFalse(policy.shouldUnlock(now, -91, true, -86))
-            now += 200
-        }
-        assertFalse(policy.shouldUnlock(now, -85, true, -86)); now += 200
-        assertFalse(policy.shouldUnlock(now, -83, true, -86)); now += 200
-        assertTrue(policy.shouldUnlock(now, -83, true, -86))
-    }
-
-    @Test
-    fun capturedDepartureReboundStillLocksPromptly() {
-        val policy = ProximityDecisionPolicy()
-        var now = 0L
-        policy.onUnlockConfirmed(now)
-
-        // Confirm that the phone really reached the car first.
-        repeat(9) {
-            policy.onUnlockedSample(now, -62, true, -82)
-            now += 200
-        }
-
-        // Extract from 0.1.22-deep-sleep-distance-retest.log. Short recoveries to -80/-81 used to
-        // erase the entire walk-away timer, and the final rebound from -93 to -84 prevented the
-        // required current-vs-start 3 dB drop. The weakest observed sample now preserves direction.
-        var decision = ProximityDecisionPolicy.ArmedDecision.NONE
-        listOf(-73, -75, -77, -76, -78, -79, -82, -82, -81, -80, -80, -82,
-            -83, -85, -86, -88, -88, -91, -93, -90, -87, -84).forEach { rssi ->
-            decision = policy.onUnlockedSample(now, rssi, true, -82)
-            now += 200
-        }
-        assertEquals(ProximityDecisionPolicy.ArmedDecision.LOCK, decision)
-    }
-
-    @Test
-    fun strongRecoveryCancelsWalkAwayCandidate() {
-        val policy = ProximityDecisionPolicy()
-        var now = 0L
-        policy.onUnlockConfirmed(now)
-        repeat(9) { policy.onUnlockedSample(now, -65, true, -82); now += 200 }
-
-        listOf(-83, -85, -86, -79).forEach { rssi ->
-            assertEquals(ProximityDecisionPolicy.ArmedDecision.NONE,
-                policy.onUnlockedSample(now, rssi, true, -82))
-            now += 500
-        }
-        repeat(6) {
-            assertEquals(ProximityDecisionPolicy.ArmedDecision.NONE,
-                policy.onUnlockedSample(now, -83, true, -82))
-            now += 400
+    signingConfigs {
+        if (keystorePropsFile.exists()) create("release") {
+            storeFile = file(keystoreProps.getProperty("storeFile"))
+            storePassword = keystoreProps.getProperty("storePassword")
+            keyAlias = keystoreProps.getProperty("keyAlias")
+            keyPassword = keystoreProps.getProperty("keyPassword")
+            keystoreProps.getProperty("storeType")?.let { storeType = it } // e.g. PKCS12 for a .p12
         }
     }
 
-    @Test
-    fun bodyShadowWhileStillNeverLocks() {
-        val policy = ProximityDecisionPolicy()
-        var now = 0L
-        policy.onUnlockConfirmed(now)
-        repeat(9) { now += 200; policy.onUnlockedSample(now, -65, false, -82) }
-
-        repeat(30) {
-            now += 200
-            assertEquals(ProximityDecisionPolicy.ArmedDecision.NONE,
-                policy.onUnlockedSample(now, -90, false, -82))
+    buildTypes {
+        debug {
+            // Test build installs beside the upstream release while phone and watch retain the same
+            // package id/signing identity required by the Wear Data Layer.
+            applicationIdSuffix = ".test"
+            versionNameSuffix = "-work"
+            // CI writes keystore.properties from the encrypted permanent test-key secret. Binding
+            // it explicitly prevents AGP from silently generating a new debug identity.
+            if (keystorePropsFile.exists()) signingConfig = signingConfigs.getByName("release")
+        }
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (keystorePropsFile.exists()) signingConfig = signingConfigs.getByName("release")
         }
     }
 
-    @Test
-    fun capturedDeepSleepArrivalSurvivesHandshakeDelay() {
-        val policy = ProximityDecisionPolicy()
-        var now = 0L
-
-        // Captured 2026-09-26 deep-sleep trace: presence connected at the door while motion had
-        // already gone STILL. These samples happened before SESSION_READY.
-        listOf(-61, -62, -64, -64, -64, -63, -65).forEach { rssi ->
-            policy.shouldUnlock(now, rssi, false, -86, freshSessionHandshake = true)
-            now += 200
-        }
-        assertTrue("door arrival must be qualified during the handshake",
-            policy.shouldUnlock(now, -68, false, -86, freshSessionHandshake = true))
-
-        // Handshake completes after body shadow weakens RSSI, but before any FAR/departure sample.
-        now += 2_000
-        assertTrue("qualified arrival must remain consumable when the DK session becomes ready",
-            policy.shouldUnlock(now, -84, false, -86))
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
-
-    @Test
-    fun pendingDoorArrivalIsCancelledByFarDeparture() {
-        val policy = ProximityDecisionPolicy()
-        var now = 0L
-        repeat(8) {
-            policy.shouldUnlock(now, -64, false, -86, freshSessionHandshake = true)
-            now += 200
-        }
-        assertTrue(policy.shouldUnlock(now, -70, false, -86, freshSessionHandshake = true))
-
-        now += 200
-        assertFalse("a FAR sample must invalidate pending arrival evidence immediately",
-            policy.shouldUnlock(now, -88, true, -86))
-        now += 200
-        assertFalse(policy.shouldUnlock(now, -84, true, -86))
+    kotlinOptions {
+        jvmTarget = "17"
     }
-
-    @Test
-    fun pendingDoorArrivalExpiresBeforeLaterReconnect() {
-        val policy = ProximityDecisionPolicy()
-        var now = 0L
-        repeat(8) {
-            policy.shouldUnlock(now, -64, false, -86, freshSessionHandshake = true)
-            now += 200
-        }
-        assertTrue(policy.shouldUnlock(now, -70, false, -86, freshSessionHandshake = true))
-
-        now += 5_001
-        assertFalse("old arrival evidence must not unlock a later session",
-            policy.shouldUnlock(now, -84, false, -86))
+    buildFeatures {
+        compose = true
     }
-
-    @Test
-    fun captured0124DoorArrivalSurvivesShortStrongWindow() {
-        val policy = ProximityDecisionPolicy()
-        var now = 0L
-
-        // Exact decisive part of 0.1.24-wrong-direction.log. The car was first seen at -58 dBm,
-        // but body shadow weakened the GATT RSSI before the four-second handshake completed.
-        val handshakeTrace = listOf(-58, -67, -71, -78, -78, -79, -82, -83, -86, -87,
-            -87, -86, -83, -82, -79, -77, -78, -81, -82, -83)
-        handshakeTrace.forEach { rssi ->
-            policy.shouldUnlock(now, rssi, false, -86, freshSessionHandshake = true)
-            now += 200
-        }
-
-        assertTrue("corroborated door-range evidence must survive until SESSION_READY",
-            policy.shouldUnlock(now, -83, false, -86))
-        assertTrue("stationary door arrival must pass the final wire-command guard",
-            policy.canSendUnlock(now, -83, false, -86))
-
-        assertFalse("movement without positive direction must fail before the wire command",
-            policy.canSendUnlock(now + 200, -84, true, -86))
+    composeOptions {
+        kotlinCompilerExtensionVersion = "1.5.14"
     }
-
-    @Test
-    fun captured0124WalkAwayMustNeverBecomeApproach() {
-        val policy = ProximityDecisionPolicy()
-        var now = 0L
-
-        // A distant baseline existed, but movement starts only after the user has reached the car.
-        repeat(14) {
-            assertFalse(policy.shouldUnlock(now, -91, false, -86))
-            now += 200
-        }
-
-        // This is the outward-moving sequence that incorrectly armed unlock in 0.1.24. Merely being
-        // MOVING at -84 is not approach evidence: the samples do not improve from movement start.
-        listOf(-83, -84, -84, -86, -89, -90, -91, -92).forEach { rssi ->
-            assertFalse("walk-away must not arm unlock; rssi=$rssi",
-                policy.shouldUnlock(now, rssi, true, -86))
-            now += 200
-        }
-    }
-
-    @Test
-    fun captured0126FreshMovingDoorSessionPassesFinalWireGuard() {
-        val policy = ProximityDecisionPolicy()
-        var now = 0L
-
-        // Exact decisive 0.1.26 trace after the status-133 recovery: the car reconnects at -64 dBm
-        // while Activity Recognition still reports MOVING. Two CONNECTED samples qualify a fresh,
-        // strong door arrival; SESSION_READY must be allowed to send UNLOCK without inventing a
-        // second +3 dB gain that is physically impossible this close to the car.
-        assertFalse(policy.shouldUnlock(now, -64, true, -86, freshSessionHandshake = true)); now += 200
-        assertTrue(policy.shouldUnlock(now, -64, true, -86, freshSessionHandshake = true)); now += 200
-        assertEquals(ProximityDecisionPolicy.UnlockEvidence.FRESH_STRONG_CONNECTION,
-            policy.currentUnlockEvidence())
-        assertTrue("0.1.26 regression: qualified moving door arrival must reach the wire",
-            policy.canSendUnlock(now, -64, true, -86))
-    }
-
-    @Test
-    fun freshDoorEvidenceCannotUnlockAfterMovingAwayFromDoorRange() {
-        val policy = ProximityDecisionPolicy()
-        var now = 0L
-        repeat(2) { policy.shouldUnlock(now, -64, true, -86, freshSessionHandshake = true); now += 200 }
-
-        assertFalse("fresh-door exception is bounded to strong door range while moving",
-            policy.canSendUnlock(now, -73, true, -86))
+    packaging {
+        resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        // BouncyCastle bcprov + bcpkix (pulled in transitively via :core) ship these.
+        resources.excludes += "/META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+        resources.excludes += "/META-INF/versions/**/OSGI-INF/**"
+        resources.excludes += "/META-INF/*.SF"
+        resources.excludes += "/META-INF/*.DSA"
+        resources.excludes += "/META-INF/*.RSA"
     }
 }
 
-class UnlockRetryPolicyTest {
-    @Test
-    fun captured0125TraceRetriesOnlyAfterMaterialApproach() {
-        val policy = UnlockRetryPolicy()
-        policy.recordAttempt(-81) // first command in 0.1.25 at ~7.6 m
+dependencies {
+    // Shared BLE/DK/crypto/cloud logic (also carries okhttp/retrofit/serialization/
+    // security-crypto/bouncycastle transitively via `api`).
+    implementation(project(":core"))
 
-        listOf(-84, -87, -85, -82, -81, -80, -79).forEach {
-            assertFalse("noise/body shadow must not create a retry at $it dBm", policy.hasApproachedEnough(it))
-        }
-        assertTrue("-78 dBm is the first +3 dB approach point (~5.8 m)", policy.hasApproachedEnough(-78))
+    val composeBom = platform("androidx.compose:compose-bom:2024.09.02")
+    implementation(composeBom)
 
-        policy.recordAttempt(-78)
-        assertFalse(policy.hasApproachedEnough(-76))
-        assertTrue("a third bounded attempt is allowed only after another +3 dB", policy.hasApproachedEnough(-75))
-    }
+    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.activity:activity-compose:1.9.2")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6")
 
-    @Test
-    fun walkingAwayNeverQualifiesReceivedOnlyRetry() {
-        val policy = UnlockRetryPolicy()
-        policy.recordAttempt(-81)
-        listOf(-82, -85, -89, -93).forEach { assertFalse(policy.hasApproachedEnough(it)) }
-    }
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.navigation:navigation-compose:2.8.1")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+
+    // Map (free, no API key): MapLibre GL + OpenFreeMap tiles. Used for the parked-car
+    // location; turn-by-turn navigation is handed off to the phone's nav app via deeplink.
+    implementation("org.maplibre.gl:android-sdk:11.13.5")
+
+    // Wear Data Layer — clones the digital key to the paired watch on request.
+    implementation("com.google.android.gms:play-services-wearable:18.2.0")
 }
