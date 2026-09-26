@@ -62,6 +62,10 @@ class ProximityService : Service() {
     // short window after a drop while you're moving — the walk-up case — vs. the slow offloaded scan.
     private var lastEngagedMs = 0L
     private var lastWakeProbeMs = 0L
+    // Protect the proven PendingIntent route briefly after a security-sleep wake. Without this,
+    // keepConnected can classify the just-dropped session as "recent" and immediately replace the
+    // offload listener with the screen-off callback scan that timed out in the 0.1.21 field trace.
+    private var motionPresenceRecoveryUntilMs = 0L
     private var wakeReceiverRegistered = false
     /** Modern-key security mode: after two minutes without movement there is no BLE session and no
      * presence scan. Motion must be confirmed before the key is made discoverable/useful again. */
@@ -236,7 +240,14 @@ class ProximityService : Service() {
                         // low-power scan once you're clearly gone.
                         val moving = deps.motion.state.value == MotionMonitor.Motion.MOVING
                         val recentlyEngaged = System.currentTimeMillis() - lastEngagedMs < AGGRESSIVE_RECONNECT_MS
-                        val aggressive = (moving && recentlyEngaged) || deps.ble.driveAuthorizationActive
+                        val normallyAggressive = (moving && recentlyEngaged) || deps.ble.driveAuthorizationActive
+                        val presenceRecoveryActive = System.currentTimeMillis() < motionPresenceRecoveryUntilMs
+                        val recoveryRoute = DeepSleepRecoveryPolicy.keepAliveRoute(
+                            presenceRecoveryActive = presenceRecoveryActive,
+                            presenceArmed = deps.ble.presenceArmed,
+                            normallyAggressive = normallyAggressive,
+                        )
+                        val aggressive = recoveryRoute == DeepSleepRecoveryPolicy.Route.FOREGROUND_SCAN
                         if (offload && !aggressive) {
                             // Zero-CPU idle: the offloaded scan watches for the car and wakes us via
                             // BleScanReceiver. manageWakeLock releases the wakelock (nothing to hold for).
@@ -288,9 +299,11 @@ class ProximityService : Service() {
         }.onFailure { Logx.w("svc", "wake receiver registration failed: ${it.message}") }
     }
 
-    /** One bounded foreground probe for explicit wake signals. It never runs while a session is live,
-     *  never steals the BLE slot from Wear, and is debounced so screen flicker cannot create scans. */
-    private suspend fun recoveryProbe(deps: Deps, reason: String) {
+    /** Recover an idle key after an explicit wake signal. A confirmed-motion wake from security sleep
+     *  first uses the filtered PendingIntent scan: field traces prove Android delivers that route with
+     *  the screen off while ordinary callback scans can time out twice. Other wake signals retain the
+     *  bounded foreground probe. Neither route steals the BLE slot from Wear. */
+    private suspend fun recoveryProbe(deps: Deps, reason: String, confirmedMotionWake: Boolean = false) {
         val now = System.currentTimeMillis()
         if (now - lastWakeProbeMs < WAKE_PROBE_DEBOUNCE_MS) return
         if (!deps.ble.hasCredential || !deps.ble.bluetoothAvailable) return
@@ -304,9 +317,22 @@ class ProximityService : Service() {
         }
         if (deps.ble.state.value !in setOf(DkBleManager.State.IDLE, DkBleManager.State.ERROR)) return
         lastWakeProbeMs = now
-        deps.proximity.updateDiagnostics("$reason · recovery scan")
-        Logx.d("svc", "$reason: immediate bounded recovery scan")
-        runCatching { deps.ble.disarmPresenceScan(); deps.ble.connect(null) }
+        val offloadEnabled = deps.config.config.value.presenceOffloadEnabled
+        val presenceArmed = if (confirmedMotionWake && offloadEnabled) {
+            runCatching { deps.ble.armPresenceScan(approachMode = true) }.getOrDefault(false)
+        } else false
+        when (DeepSleepRecoveryPolicy.route(offloadEnabled && confirmedMotionWake, presenceArmed)) {
+            DeepSleepRecoveryPolicy.Route.OFFLOADED_PRESENCE -> {
+                motionPresenceRecoveryUntilMs = now + MOTION_PRESENCE_RECOVERY_MS
+                deps.proximity.updateDiagnostics("$reason · waiting for car presence")
+                Logx.d("svc", "$reason: BALANCED offloaded presence armed (screen-off recovery)")
+            }
+            DeepSleepRecoveryPolicy.Route.FOREGROUND_SCAN -> {
+                deps.proximity.updateDiagnostics("$reason · recovery scan")
+                Logx.d("svc", "$reason: immediate bounded recovery scan")
+                runCatching { deps.ble.disarmPresenceScan(); deps.ble.connect(null) }
+            }
+        }
     }
 
     /** Low-frequency state watchdog. This does not scan continuously: it only repairs an idle/error
@@ -393,8 +419,8 @@ class ProximityService : Service() {
                     sleepDisconnectGraceUntilMs = 0L
                     val reason = if (driveOverride) "start-key override" else "confirmed motion"
                     deps.proximity.updateDiagnostics("$reason · waking digital key")
-                    Logx.d("svc", "$reason: waking stationary key with immediate recovery scan")
-                    recoveryProbe(deps, reason)
+                    Logx.d("svc", "$reason: waking stationary key; selecting screen-off recovery route")
+                    recoveryProbe(deps, reason, confirmedMotionWake = !driveOverride)
                 } else {
                     deps.ble.disarmPresenceScan()
                 }
@@ -475,6 +501,7 @@ class ProximityService : Service() {
         // range; a genuine walk-away goes quiet (STILL) or ages out and falls back to the low-power scan.
         private const val AGGRESSIVE_RECONNECT_MS = 30_000L
         private const val WAKE_PROBE_DEBOUNCE_MS = 5_000L
+        private const val MOTION_PRESENCE_RECOVERY_MS = 30_000L
         private const val WATCHDOG_INTERVAL_MS = 5_000L
         private const val KEY_SLEEP_AFTER_MS = 2 * 60 * 1_000L
         private const val KEY_WAKE_MOTION_CONFIRM_MS = 1_500L
