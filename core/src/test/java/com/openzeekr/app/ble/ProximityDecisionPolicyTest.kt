@@ -81,4 +81,56 @@ class ProximityDecisionPolicyTest {
                 policy.onUnlockedSample(now, -90, false, -82))
         }
     }
+
+    @Test
+    fun capturedDeepSleepArrivalSurvivesHandshakeDelay() {
+        val policy = ProximityDecisionPolicy()
+        var now = 0L
+
+        // Captured 2026-09-26 deep-sleep trace: presence connected at the door while motion had
+        // already gone STILL. These samples happened before SESSION_READY.
+        listOf(-61, -62, -64, -64, -64, -63, -65).forEach { rssi ->
+            policy.shouldUnlock(now, rssi, false, -86)
+            now += 200
+        }
+        assertTrue("door arrival must be qualified during the handshake",
+            policy.shouldUnlock(now, -68, false, -86))
+
+        // Handshake completes after body shadow weakens RSSI, but before any FAR/departure sample.
+        now += 2_000
+        assertTrue("qualified arrival must remain consumable when the DK session becomes ready",
+            policy.shouldUnlock(now, -84, false, -86))
+    }
+
+    @Test
+    fun pendingDoorArrivalIsCancelledByFarDeparture() {
+        val policy = ProximityDecisionPolicy()
+        var now = 0L
+        repeat(8) {
+            policy.shouldUnlock(now, -64, false, -86)
+            now += 200
+        }
+        assertTrue(policy.shouldUnlock(now, -70, false, -86))
+
+        now += 200
+        assertFalse("a FAR sample must invalidate pending arrival evidence immediately",
+            policy.shouldUnlock(now, -88, true, -86))
+        now += 200
+        assertFalse(policy.shouldUnlock(now, -84, true, -86))
+    }
+
+    @Test
+    fun pendingDoorArrivalExpiresBeforeLaterReconnect() {
+        val policy = ProximityDecisionPolicy()
+        var now = 0L
+        repeat(8) {
+            policy.shouldUnlock(now, -64, false, -86)
+            now += 200
+        }
+        assertTrue(policy.shouldUnlock(now, -70, false, -86))
+
+        now += 5_001
+        assertFalse("old arrival evidence must not unlock a later session",
+            policy.shouldUnlock(now, -84, false, -86))
+    }
 }

@@ -337,6 +337,12 @@ class ProximityController(
         val armedDecision = if (armedUnlocked) decisionPolicy.onUnlockedSample(
             now, smoothed, motion.state.value == MotionMonitor.Motion.MOVING, lockThresh,
         ) else ProximityDecisionPolicy.ArmedDecision.NONE
+        // Observe locked RSSI even while CONNECTED is still handshaking. The deep-sleep field trace
+        // reached the door at -61 dBm, but SESSION_READY arrived ~3.4 s later after the signal had
+        // weakened; gating observation on READY discarded the only reliable arrival evidence.
+        val unlockQualified = !armedUnlocked && !needToUnlock && decisionPolicy.shouldUnlock(
+            now, smoothed, motion.state.value == MotionMonitor.Motion.MOVING, unlockThresh,
+        )
         if (armedDecision == ProximityDecisionPolicy.ArmedDecision.ARRIVAL_CONFIRMED) {
             Logx.d("prox", "arrival confirmed (rssi=$smoothed) — sustained-near guard passed")
         }
@@ -382,6 +388,12 @@ class ProximityController(
         } else {
             nearRefDist = null
             when {
+                ble.state.value == DkBleManager.State.CONNECTED -> {
+                    // Do not enter FAR sleep halfway through the handshake. Keep sampling for the
+                    // short bring-up window so strong door-range evidence survives until READY.
+                    _wakeLockNeeded.value = true; farAsleep = false
+                    nextIntervalMs = MONITOR_FAST_MS
+                }
                 !motion.hasSource -> {
                     // No sensor to wake us: keep the wakelock; poll the blind walk-time formula (or the
                     // 30 s ceiling once RSSI says we've been steady for a while). Degraded path.
@@ -443,9 +455,7 @@ class ProximityController(
         // the car and nothing happened": the handshake often only reaches SESSION_READY once you're
         // already standing still, so the old rising-RSSI-trend requirement missed it. The armedUnlocked
         // latch still guarantees a single unlock per approach (reconnects while parked won't re-fire).
-        if (!armedUnlocked && !needToUnlock && decisionPolicy.shouldUnlock(
-                now, smoothed, motion.state.value == MotionMonitor.Motion.MOVING, unlockThresh,
-            )) {
+        if (!armedUnlocked && !needToUnlock && unlockQualified) {
             needToUnlock = true
             Logx.d("prox", "approach-unlock ARM (rssi=$smoothed ~${"%.1f".format(dist)}m prevZone=$prevZone) — confirmed-unlock loop")
             startUnlockLoop()

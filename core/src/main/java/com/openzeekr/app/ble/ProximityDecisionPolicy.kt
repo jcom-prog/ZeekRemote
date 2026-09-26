@@ -15,6 +15,7 @@ internal class ProximityDecisionPolicy {
     private var farSinceMs = UNSET_MS
     private var farQualified = false
     private var nearCandidateSinceMs = UNSET_MS
+    private var unlockQualifiedAtMs = UNSET_MS
 
     private var unlockConfirmedAtMs = UNSET_MS
     private var arrivalStrongSinceMs = UNSET_MS
@@ -28,6 +29,7 @@ internal class ProximityDecisionPolicy {
         farSinceMs = UNSET_MS
         farQualified = false
         nearCandidateSinceMs = UNSET_MS
+        unlockQualifiedAtMs = UNSET_MS
         unlockConfirmedAtMs = UNSET_MS
         arrivalStrongSinceMs = UNSET_MS
         arrivalConfirmed = false
@@ -43,20 +45,31 @@ internal class ProximityDecisionPolicy {
             if (farSinceMs == UNSET_MS) farSinceMs = nowMs
             if (nowMs - farSinceMs >= FAR_BASELINE_MS) farQualified = true
             nearCandidateSinceMs = UNSET_MS
+            unlockQualifiedAtMs = UNSET_MS
             return false
         }
 
         farSinceMs = UNSET_MS
         val qualifiedApproach = farQualified && moving && rssi >= unlockThreshold + UNLOCK_MARGIN_DB
         val freshDoorSession = !farQualified && !departureObserved && rssi >= STRONG_NEAR_RSSI
-        if (!qualifiedApproach && !freshDoorSession) {
+        if (qualifiedApproach || freshDoorSession) {
+            if (nearCandidateSinceMs == UNSET_MS) nearCandidateSinceMs = nowMs
+            val holdMs = if (qualifiedApproach) APPROACH_CONFIRM_MS else DOOR_CONFIRM_MS
+            if (nowMs - nearCandidateSinceMs >= holdMs && unlockQualifiedAtMs == UNSET_MS) {
+                unlockQualifiedAtMs = nowMs
+            }
+        } else {
             nearCandidateSinceMs = UNSET_MS
-            return false
         }
 
-        if (nearCandidateSinceMs == UNSET_MS) nearCandidateSinceMs = nowMs
-        val holdMs = if (qualifiedApproach) APPROACH_CONFIRM_MS else DOOR_CONFIRM_MS
-        return nowMs - nearCandidateSinceMs >= holdMs
+        // A fresh deep-sleep connection can prove that the phone reached the door while the DK
+        // handshake is still running. Preserve that qualified evidence briefly so SESSION_READY can
+        // consume it; a FAR sample (above) invalidates it immediately and the TTL prevents a stale
+        // close-range observation from unlocking on a later reconnect.
+        if (unlockQualifiedAtMs != UNSET_MS && nowMs - unlockQualifiedAtMs > UNLOCK_EVIDENCE_TTL_MS) {
+            unlockQualifiedAtMs = UNSET_MS
+        }
+        return unlockQualifiedAtMs != UNSET_MS
     }
 
     fun onUnlockConfirmed(nowMs: Long) {
@@ -121,6 +134,7 @@ internal class ProximityDecisionPolicy {
         const val FAR_BASELINE_MS = 2_500L
         const val APPROACH_CONFIRM_MS = 800L
         const val DOOR_CONFIRM_MS = 1_200L
+        const val UNLOCK_EVIDENCE_TTL_MS = 5_000L
         const val ARRIVAL_CONFIRM_MS = 1_500L
         const val PRE_ARRIVAL_GRACE_MS = 15_000L
         const val WALK_AWAY_CONFIRM_MS = 2_000L
