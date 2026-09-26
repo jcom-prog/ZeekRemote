@@ -96,12 +96,9 @@ class ProximityController(
 
     // Hysteresis latch: true once the car has CONFIRMED our auto-unlock (next auto action is a lock).
     private var armedUnlocked = false
-    // Far sensitivity deliberately unlocks before the proven-good walk-away threshold. Until the
-    // phone subsequently reaches the car, only a sustained receding trend may lock it again. This
-    // preserves the 7GT's good departure lock without immediately relocking during approach.
-    private var arrivalPending = false
-    private var arrivalUnlockedAtMs = 0L
-    private var farRecedingStreak = 0
+    // Time-based evidence gate. This owns arrival/departure confirmation so neither the fast RSSI
+    // path nor the periodic idle check can actuate from one noisy threshold crossing.
+    private val decisionPolicy = ProximityDecisionPolicy()
     // Confirmed-unlock retry loop: true while actively trying to unlock; the job is the loop itself.
     @Volatile private var needToUnlock = false
     private var unlockJob: Job? = null
@@ -152,7 +149,8 @@ class ProximityController(
         linkLostAtMs = 0L; walkAwayArmed = false; lostReceding = false; lostRssi = null; cloudNetFired = false
         // Keep armedUnlocked as-is across start/stop toggles within a session isn't meaningful;
         // reset so a fresh monitor starts from a known state.
-        armedUnlocked = false; arrivalPending = false; arrivalUnlockedAtMs = 0L; farRecedingStreak = 0
+        armedUnlocked = false
+        decisionPolicy.resetLocked()
         needToUnlock = false; unlockJob?.cancel(); unlockJob = null
         farAsleep = false; nearRefDist = null; nearStillSinceMs = 0L
         farApproachDeadline = 0L; farApproachRefDist = Double.MAX_VALUE
@@ -218,7 +216,7 @@ class ProximityController(
         motion.onMovingEdge = null; motionWake?.complete(Unit); motionWake = null
         motion.stop()
         gattEma = null; linkLostAtMs = 0L; walkAwayArmed = false; cloudNetFired = false
-        arrivalPending = false; arrivalUnlockedAtMs = 0L; farRecedingStreak = 0
+        decisionPolicy.resetLocked()
         inCarSinceMs = 0L; steadyRef = null; steadySinceMs = 0L; lastCadence = ""
         rssiNullStreak = 0; pingInFlight = false; pingFailStreak = 0; lastPingMs = 0L
         farAsleep = false; nearRefDist = null; _wakeLockNeeded.value = false
@@ -293,8 +291,14 @@ class ProximityController(
             // Safety re-check on the periodic timeout: a single RSSI read; lock if we've drifted far
             // without the car ever pushing (rare — moving normally generates frames).
             val rssi = ble.pollRemoteRssi()
-            if (rssi == null || (!arrivalPending && rssi <= store.current().sensitivityLockRssi)) {
-                Logx.d("prox", "armed idle safety-check rssi=$rssi -> far, locking")
+            val idleDecision = if (rssi == null) ProximityDecisionPolicy.ArmedDecision.NONE else
+                decisionPolicy.onUnlockedSample(
+                    System.currentTimeMillis(), rssi,
+                    motion.state.value == MotionMonitor.Motion.MOVING,
+                    store.current().sensitivityLockRssi,
+                )
+            if (idleDecision == ProximityDecisionPolicy.ArmedDecision.LOCK) {
+                Logx.d("prox", "armed idle safety-check rssi=$rssi -> sustained walk-away, locking")
                 armedUnlocked = false
                 startLockLoop("idle-far-lock")
             }
@@ -329,16 +333,12 @@ class ProximityController(
         val receding = trend < -TREND_DEADBAND
         lostReceding = receding; lostRssi = smoothed    // remembered for link-loss classification
 
-        if (armedUnlocked && arrivalPending && smoothed >= ARRIVAL_REACHED_RSSI) {
-            arrivalPending = false
-            arrivalUnlockedAtMs = 0L
-            farRecedingStreak = 0
-            Logx.d("prox", "arrival reached (rssi=$smoothed) — normal walk-away lock armed")
-        }
-        farRecedingStreak = when {
-            !armedUnlocked || smoothed > lockThresh -> 0
-            receding -> farRecedingStreak + 1
-            else -> 0
+        val now = System.currentTimeMillis()
+        val armedDecision = if (armedUnlocked) decisionPolicy.onUnlockedSample(
+            now, smoothed, motion.state.value == MotionMonitor.Motion.MOVING, lockThresh,
+        ) else ProximityDecisionPolicy.ArmedDecision.NONE
+        if (armedDecision == ProximityDecisionPolicy.ArmedDecision.ARRIVAL_CONFIRMED) {
+            Logx.d("prox", "arrival confirmed (rssi=$smoothed) — sustained-near guard passed")
         }
 
         val prevZone = _state.value.zone
@@ -352,8 +352,6 @@ class ProximityController(
             phase = Phase.MONITORING, source = Source.GATT,
             rawRssi = rssi, smoothedRssi = smoothed, distanceM = dist, zone = zone, error = null,
         )
-
-        val now = System.currentTimeMillis()
 
         // RSSI-steadiness anchor — the FAR "still" signal ONLY on devices with no motion sensor at all.
         val ref = steadyRef
@@ -445,7 +443,9 @@ class ProximityController(
         // the car and nothing happened": the handshake often only reaches SESSION_READY once you're
         // already standing still, so the old rising-RSSI-trend requirement missed it. The armedUnlocked
         // latch still guarantees a single unlock per approach (reconnects while parked won't re-fire).
-        if (!armedUnlocked && !needToUnlock && smoothed >= unlockThresh && prevZone != Zone.NEAR) {
+        if (!armedUnlocked && !needToUnlock && decisionPolicy.shouldUnlock(
+                now, smoothed, motion.state.value == MotionMonitor.Motion.MOVING, unlockThresh,
+            )) {
             needToUnlock = true
             Logx.d("prox", "approach-unlock ARM (rssi=$smoothed ~${"%.1f".format(dist)}m prevZone=$prevZone) — confirmed-unlock loop")
             startUnlockLoop()
@@ -462,18 +462,10 @@ class ProximityController(
             needToUnlock = false
             unlockJob?.cancel(); unlockJob = null
         }
-        // Once arrival has completed, retain the field-proven -82 dBm walk-away lock. Before arrival,
-        // require a grace period, a materially weaker signal AND sustained receding samples. Brief body
-        // shadow while walking toward the door must never relock a car that just unlocked at 6 m.
-        val preArrivalWalkAway = arrivalPending &&
-            now - arrivalUnlockedAtMs >= PRE_ARRIVAL_GRACE_MS &&
-            smoothed <= unlockThresh - PRE_ARRIVAL_EXIT_DB &&
-            farRecedingStreak >= FAR_RECEDING_CONFIRM_SAMPLES
-        if (armedUnlocked && smoothed <= lockThresh && (!arrivalPending || preArrivalWalkAway)) {
+        // A lock now requires time-based, moving-and-receding evidence from the shared policy. The same
+        // rule is used by armedWatch, so its periodic safety sample cannot bypass this guard.
+        if (armedUnlocked && armedDecision == ProximityDecisionPolicy.ArmedDecision.LOCK) {
             armedUnlocked = false
-            arrivalPending = false
-            arrivalUnlockedAtMs = 0L
-            farRecedingStreak = 0
             Logx.d("prox", "walk-away-lock (rssi=$smoothed ~${"%.1f".format(dist)}m)")
             startLockLoop("walk-away-lock")
         }
@@ -509,9 +501,7 @@ class ProximityController(
                 if (r == ControlResult.CONFIRMED) {
                     ble.noteUnlockConfirmed()
                     armedUnlocked = true
-                    arrivalPending = true
-                    arrivalUnlockedAtMs = System.currentTimeMillis()
-                    farRecedingStreak = 0
+                    decisionPolicy.onUnlockConfirmed(System.currentTimeMillis())
                     lastTriggerMs = System.currentTimeMillis() // cooldown before a walk-away lock
                     break
                 }
@@ -537,7 +527,7 @@ class ProximityController(
         if (lockJob?.isActive == true) return
         // A pending unlock loop is now moot (we've decided you're leaving) — stop it fighting us.
         needToUnlock = false; unlockJob?.cancel(); unlockJob = null
-        arrivalPending = false; arrivalUnlockedAtMs = 0L; farRecedingStreak = 0
+        decisionPolicy.resetLocked()
         lockJob = scope.launch {
             lastTriggerMs = System.currentTimeMillis()   // start the action cooldown
             var confirmed = false
@@ -750,10 +740,6 @@ class ProximityController(
         private const val PING_FAIL_STREAK = 2
         private const val JUMP_DB = 4
         private const val TREND_DEADBAND = 0.6      // dB of smoothed change to count as moving
-        private const val ARRIVAL_REACHED_RSSI = -78 // close enough to arm the proven departure rule
-        private const val PRE_ARRIVAL_GRACE_MS = 15_000L
-        private const val PRE_ARRIVAL_EXIT_DB = 6
-        private const val FAR_RECEDING_CONFIRM_SAMPLES = 10
         private const val ALPHA_FAST = 0.6
         private const val ALPHA_SLOW = 0.35
         private const val LINK_LOSS_LOCK_DELAY_MS = 5_000L
