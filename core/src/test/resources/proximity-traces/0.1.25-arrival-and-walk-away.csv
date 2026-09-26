@@ -1,0 +1,22 @@
+# Derived from 0.1.25-arrival-distance-1m.log, 19:06:00-19:06:52. Regression: one unlock, then lock.
+0,-91,true
+400,-90,true
+800,-89,true
+1200,-89,true
+1600,-90,true
+2000,-90,true
+2400,-91,true
+2800,-91,true
+3200,-90,true
+3600,-90,true
+4000,-89,true
+4400,-89,true
+4800,-88,true
+5200,-88,true
+5600,-87,true
+6000,-85,true
+6400,-83,true
+6800,-82,true
+7200,-81,true
+7600,-78,true
+8000,-74,true

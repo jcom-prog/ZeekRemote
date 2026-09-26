@@ -1,0 +1,11 @@
+# Derived from 0.1.26-received-only-no-response.log, 19:50:16-19:50:18. Regression: close/still must not be rejected before send.
+0,-64,false
+200,-64,false
+400,-65,false
+600,-65,false
+800,-65,false
+1000,-66,false
+1200,-67,false
+1400,-67,false
+1600,-65,false
+1800,-63,false

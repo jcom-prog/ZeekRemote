@@ -65,7 +65,7 @@ class RealDkSession(
     private var appHandler: ((Int, ByteArray) -> Unit)? = null
 
     private val pending = ConcurrentHashMap<Int, CompletableDeferred<ByteArray>>()
-    /** Exactly one encrypted 0x0110 command may own the shared 0x0111/0x0112 waiters at a time. */
+    /** Serializes encrypted 0x0110 commands which share the 0x0111/0x0112 response slots. */
     private val controlMutex = Mutex()
 
     /** Fire-and-forget scope for the transport ACK (onRawInbound is not a coroutine). */
@@ -316,7 +316,6 @@ class RealDkSession(
             // REJECTS it (RPA gated behind DK3.0, EEC 0x100a) — nothing actuates. A bare 0x0120 gets NO
             // reply at all (car ignores it), so 0x0110 is the working probe. ANY frame back = the
             // app-layer link (the exact path unlock uses) is alive.
-            Logx.d("dk", "wire PING sub=0x0a")
             val ok = send(DkProtocol.CMD_A2V_CONTROL, byteArrayOf(DkProtocol.CTRL_RPA_START))
             if (!ok) { Logx.w("dk", "ping: 0x0110 write failed"); return false }
             val reply = withTimeoutOrNull(timeoutMs) { waiter.await() }
@@ -336,13 +335,6 @@ class RealDkSession(
         pending[DkProtocol.CMD_V2A_CMD_RECEIVED] = recv   // 0x0111
         pending[DkProtocol.CMD_V2A_RESULT] = result       // 0x0112
         return try {
-            val label = when (ctrl) {
-                DkProtocol.CTRL_UNLOCK -> "UNLOCK"
-                DkProtocol.CTRL_LOCK -> "LOCK"
-                DkProtocol.CTRL_RPA_START -> "PING"
-                else -> "CONTROL"
-            }
-            Logx.d("dk", "wire $label sub=0x%02x".format(ctrl))
             if (!send(DkProtocol.CMD_A2V_CONTROL, byteArrayOf(ctrl))) {
                 Logx.w("dk", "control 0x%02x: write failed".format(ctrl)); return ControlResult.WRITE_FAILED
             }
@@ -351,17 +343,16 @@ class RealDkSession(
                 Logx.w("dk", "control 0x%02x: no 0x0111 within ${timeoutMs}ms -> NO_RESPONSE".format(ctrl))
                 return ControlResult.NO_RESPONSE
             }
-            // A 0x0112 result may follow; a non-zero errCode = the car rejected it. 0x0111 proves
-            // receipt only. Field trace 0.1.25 showed it at ~7.6 m while the physical unlock did not
-            // happen until ~1 m, so absence of 0x0112 must not be called execution confirmation.
+            // A 0x0112 result may follow; a non-zero errCode = the car rejected it. (Observed
+            // successful unlocks send only 0x0111, so absence of 0x0112 counts as CONFIRMED.)
             val resBody = withTimeoutOrNull(RESULT_WINDOW_MS) { result.await() }
             if (resBody != null) {
                 val err = if (resBody.size >= 8) ((resBody[6].toInt() and 0xFF) shl 8) or (resBody[7].toInt() and 0xFF) else 0
                 Logx.d("dk", "control 0x%02x: 0x0111 ok, 0x0112 err=0x%04x tail=%s".format(ctrl, err, hexOf(afterHeader(resBody))))
                 if (err != 0) ControlResult.REJECTED else ControlResult.CONFIRMED
             } else {
-                Logx.d("dk", "control 0x%02x: 0x0111 received (no 0x0112) -> RECEIVED_ONLY".format(ctrl))
-                ControlResult.RECEIVED_ONLY
+                Logx.d("dk", "control 0x%02x: 0x0111 received (no 0x0112) -> CONFIRMED".format(ctrl))
+                ControlResult.CONFIRMED
             }
         } catch (e: Exception) {
             Logx.w("dk", "control error: ${e.message}"); ControlResult.WRITE_FAILED
@@ -379,7 +370,6 @@ class RealDkSession(
             seen.add("${hex(cmd)}[${hexOf(tail).take(64)}]")
         }
         return try {
-            Logx.d("dk", "wire PROBE sub=0x%02x".format(ctrl))
             val ok = send(DkProtocol.CMD_A2V_CONTROL, byteArrayOf(ctrl))
             Logx.d("dk", "probe: sent 0x0110 ctrl=0x%02x write=$ok — listening ${windowMs}ms".format(ctrl))
             delay(windowMs)

@@ -1,0 +1,25 @@
+# Derived from 0.1.24-wrong-direction.log, 18:17:09-18:17:18. Regression: departure must not unlock.
+0,-58,false
+200,-67,false
+400,-71,false
+600,-78,false
+800,-82,false
+1000,-86,false
+1200,-87,false
+1400,-86,false
+1600,-83,false
+1800,-82,false
+2000,-79,false
+2200,-77,false
+2400,-81,false
+2600,-82,false
+2800,-83,true
+3000,-84,true
+3200,-89,true
+3400,-90,true
+3600,-92,true
+3800,-91,true
+4000,-88,true
+4200,-85,true
+4400,-82,true
+4600,-84,true
