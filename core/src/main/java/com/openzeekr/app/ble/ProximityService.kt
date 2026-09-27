@@ -68,6 +68,10 @@ class ProximityService : Service() {
     private var motionPresenceRecoveryUntilMs = 0L
     /** Strict battery bound for the faster hardware-offloaded scan after a real motion wake. */
     private var fastPresenceUntilMs = 0L
+    // Scan only during the existing motion-confirmation window; never establish a key session
+    // before the stationary-key security gate has confirmed sustained motion.
+    private var earlyPresenceUntilMs = 0L
+    private var earlyPresenceResult: android.bluetooth.le.ScanResult? = null
     private var wakeReceiverRegistered = false
     /** Modern-key security mode: after two minutes without movement there is no BLE session and no
      * presence scan. Motion must be confirmed before the key is made discoverable/useful again. */
@@ -116,8 +120,28 @@ class ProximityService : Service() {
         when (intent?.action) {
             ACTION_PRESENT -> {
                 if (keySleeping) {
-                    Logx.d("svc", "presence ignored: stationary key is sleeping")
-                    deps.ble.disarmPresenceScan()
+                    val scanResult = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(EXTRA_SCAN_RESULT, android.bluetooth.le.ScanResult::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(EXTRA_SCAN_RESULT) as? android.bluetooth.le.ScanResult
+                    }
+                    if (EarlyPresencePolicy.mayRetain(keySleeping,
+                        deps.motion.state.value == MotionMonitor.Motion.MOVING,
+                        earlyPresenceUntilMs, System.currentTimeMillis()) &&
+                        scanResult != null && EarlyPresencePolicy.freshAdvertisement(
+                            scanResult.timestampNanos, android.os.SystemClock.elapsedRealtimeNanos(),
+                            EARLY_PRESENCE_WINDOW_MS) &&
+                        !deps.ble.shouldDeferWeakPresence(scanResult.rssi)) {
+                        earlyPresenceResult = scanResult
+                        Logx.d("svc", "early presence saved pending confirmed motion (rssi=${scanResult.rssi})")
+                        deps.ble.disarmPresenceScan()
+                    } else {
+                        Logx.d("svc", "presence ignored: stationary key is sleeping")
+                        if (!EarlyPresencePolicy.mayRetain(keySleeping,
+                                deps.motion.state.value == MotionMonitor.Motion.MOVING,
+                                earlyPresenceUntilMs, System.currentTimeMillis())) deps.ble.disarmPresenceScan()
+                    }
                     return START_STICKY
                 }
                 val scanResult = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -226,7 +250,13 @@ class ProximityService : Service() {
             if (keySleeping && !deps.ble.driveAuthorizationActive) {
                 // During the short grace window the proximity controller may complete a pending
                 // walk-away lock. After that, enforce a genuinely silent key.
-                deps.ble.disarmPresenceScan()
+                if (!EarlyPresencePolicy.mayRetain(keySleeping,
+                        deps.motion.state.value == MotionMonitor.Motion.MOVING,
+                        earlyPresenceUntilMs, System.currentTimeMillis())) {
+                    earlyPresenceUntilMs = 0L
+                    earlyPresenceResult = null
+                    deps.ble.disarmPresenceScan()
+                }
                 if (System.currentTimeMillis() >= sleepDisconnectGraceUntilMs &&
                     deps.ble.state.value !in setOf(DkBleManager.State.IDLE, DkBleManager.State.ERROR)) {
                     Logx.d("svc", "stationary key: dropping residual BLE session")
@@ -401,8 +431,23 @@ class ProximityService : Service() {
         deps.motion.state.collect { m ->
             val became = m == MotionMonitor.Motion.MOVING && last != MotionMonitor.Motion.MOVING
             last = m
-            if (!became || keySleeping || !deps.ble.hasCredential || !deps.ble.bluetoothAvailable) return@collect
+            if (!became || !deps.ble.hasCredential || !deps.ble.bluetoothAvailable) return@collect
             if (com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value) return@collect
+            if (EarlyPresencePolicy.mayPrepare(keySleeping, m == MotionMonitor.Motion.MOVING,
+                    com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value)) {
+                if (deps.config.config.value.proximityEnabled &&
+                    deps.config.config.value.presenceOffloadEnabled &&
+                    deps.ble.state.value in setOf(DkBleManager.State.IDLE, DkBleManager.State.ERROR)) {
+                    // Do not connect or unlock on an unconfirmed motion edge. Hardware filtering
+                    // may capture an advert while the security debounce is still running.
+                    earlyPresenceUntilMs = System.currentTimeMillis() + EARLY_PRESENCE_WINDOW_MS
+                    if (!deps.ble.armPresenceScan(approachMode = true, lowLatency = true)) {
+                        earlyPresenceUntilMs = 0L
+                    } else Logx.d("svc", "motion edge: early filtered presence armed; key remains asleep")
+                }
+                return@collect
+            }
+            if (keySleeping) return@collect
             when (deps.ble.state.value) {
                 DkBleManager.State.IDLE, DkBleManager.State.ERROR -> {
                     fastPresenceUntilMs = System.currentTimeMillis() + FAST_PRESENCE_WINDOW_MS
@@ -448,7 +493,18 @@ class ProximityService : Service() {
                     val reason = if (driveOverride) "start-key override" else "confirmed motion"
                     deps.proximity.updateDiagnostics("$reason · waking digital key")
                     Logx.d("svc", "$reason: waking stationary key; selecting screen-off recovery route")
-                    recoveryProbe(deps, reason, confirmedMotionWake = !driveOverride)
+                    val prepared = if (EarlyPresencePolicy.mayConnect(movementConfirmed,
+                            com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value,
+                            earlyPresenceUntilMs, System.currentTimeMillis()))
+                        earlyPresenceResult else null
+                    earlyPresenceResult = null
+                    earlyPresenceUntilMs = 0L
+                    if (prepared != null && !com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value) {
+                        deps.ble.disarmPresenceScan()
+                        deps.proximity.onPresenceMatch(prepared.rssi)
+                        Logx.d("svc", "confirmed motion: engaging saved early presence (rssi=${prepared.rssi})")
+                        if (!deps.ble.connectFromPresence(prepared)) recoveryProbe(deps, reason, confirmedMotionWake = true)
+                    } else recoveryProbe(deps, reason, confirmedMotionWake = !driveOverride)
                 } else {
                     deps.ble.disarmPresenceScan()
                 }
@@ -534,6 +590,7 @@ class ProximityService : Service() {
         private const val WATCHDOG_INTERVAL_MS = 5_000L
         private const val KEY_SLEEP_AFTER_MS = 2 * 60 * 1_000L
         private const val KEY_WAKE_MOTION_CONFIRM_MS = 1_500L
+        private const val EARLY_PRESENCE_WINDOW_MS = KEY_WAKE_MOTION_CONFIRM_MS + 2 * KEY_SLEEP_POLL_MS
         private const val KEY_SLEEP_LOCK_GRACE_MS = 15_000L
         private const val KEY_SLEEP_POLL_MS = 500L
         private const val HARDWARE_WAKE_BRIDGE_MS = 5_000L
