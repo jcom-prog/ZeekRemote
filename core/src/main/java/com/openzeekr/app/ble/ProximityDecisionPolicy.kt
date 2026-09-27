@@ -47,6 +47,11 @@ internal class ProximityDecisionPolicy {
     private var manualStillReady = false
     private var manualReturnMoving = false
     private var manualStillRssi = 0
+    private var manualNearPeakRssi = Int.MIN_VALUE
+    private var manualWeakStillSinceMs = UNSET_MS
+    private var manualWeakestRssi = 0
+    private var manualWeakReturnMoving = false
+    private var manualWeakNearSinceMs = UNSET_MS
     private var pendingUnlockFarSinceMs = UNSET_MS
 
     fun resetLocked() {
@@ -216,6 +221,15 @@ internal class ProximityDecisionPolicy {
         if (departureLinkEnded) return false // fresh offloaded presence owns this path
 
         if (manualDeparture) {
+            manualNearPeakRssi = maxOf(manualNearPeakRssi, rssi)
+            // A motion sensor can report STILL during departure and allow far-sleep before the
+            // ordinary FAR threshold is sampled. Admit that route only after a large drop from
+            // the manual-lock near signal, a long stationary interval, a new motion edge, and a
+            // sustained strong recovery. The ordinary FAR/STILL route below remains unchanged.
+            if (departureSameLinkFarQualifiedAtMs == UNSET_MS &&
+                tryRearmManualWeakSleep(nowMs, rssi, moving, unlockThreshold)) {
+                return true
+            }
             // Motion can report MOVING for seconds after a stop. A manual lock can only be
             // rearmed by a separate, observed FAR pause followed by a new motion edge.
             if (departureSameLinkFarQualifiedAtMs == UNSET_MS) {
@@ -290,6 +304,52 @@ internal class ProximityDecisionPolicy {
             if (!moving || !separatedLongEnough || !crossedArrivalEdge) return false
         }
 
+        finishSameLinkReturn()
+        return true
+    }
+
+    private fun tryRearmManualWeakSleep(
+        nowMs: Long, rssi: Int, moving: Boolean, unlockThreshold: Int,
+    ): Boolean {
+        val weakEnough = rssi <= MANUAL_WEAK_SLEEP_RSSI &&
+            manualNearPeakRssi >= rssi + MANUAL_WEAK_DROP_DB
+        if (!moving) {
+            manualWeakReturnMoving = false
+            manualWeakNearSinceMs = UNSET_MS
+            if (weakEnough) {
+                if (manualWeakStillSinceMs == UNSET_MS) {
+                    manualWeakStillSinceMs = nowMs
+                    manualWeakestRssi = rssi
+                } else {
+                    manualWeakestRssi = minOf(manualWeakestRssi, rssi)
+                }
+            } else {
+                manualWeakStillSinceMs = UNSET_MS
+                manualWeakestRssi = 0
+            }
+            return false
+        }
+        if (!manualWeakReturnMoving) {
+            // The first MOVING sample must still be weak. A strong first sample gives no proof
+            // that the phone remained separate while RSSI polling was asleep.
+            if (!weakEnough || manualWeakStillSinceMs == UNSET_MS ||
+                nowMs - manualWeakStillSinceMs < MANUAL_WEAK_SLEEP_MS) return false
+            manualWeakReturnMoving = true
+            manualWeakestRssi = minOf(manualWeakestRssi, rssi)
+        }
+        val strongReturn = rssi >= maxOf(unlockThreshold + UNLOCK_MARGIN_DB,
+            MANUAL_WEAK_RETURN_RSSI) && rssi >= manualWeakestRssi + MANUAL_WEAK_RETURN_RISE_DB
+        if (!strongReturn) {
+            manualWeakNearSinceMs = UNSET_MS
+            return false
+        }
+        if (manualWeakNearSinceMs == UNSET_MS) manualWeakNearSinceMs = nowMs
+        if (nowMs - manualWeakNearSinceMs < MANUAL_WEAK_RETURN_CONFIRM_MS) return false
+        finishSameLinkReturn()
+        return true
+    }
+
+    private fun finishSameLinkReturn() {
         departureLatched = false
         departureLinkEnded = false
         manualDeparture = false
@@ -300,7 +360,6 @@ internal class ProximityDecisionPolicy {
         farQualified = true
         nearCandidateSinceMs = UNSET_MS
         unlockQualifiedAtMs = UNSET_MS
-        return true
     }
 
     private fun resetSameLinkReturn() {
@@ -310,6 +369,11 @@ internal class ProximityDecisionPolicy {
         manualStillReady = false
         manualReturnMoving = false
         manualStillRssi = 0
+        manualNearPeakRssi = Int.MIN_VALUE
+        manualWeakStillSinceMs = UNSET_MS
+        manualWeakestRssi = 0
+        manualWeakReturnMoving = false
+        manualWeakNearSinceMs = UNSET_MS
     }
 
     /** Starts a bounded departure guard for an unlock command that is already in flight. */
@@ -488,5 +552,11 @@ internal class ProximityDecisionPolicy {
         const val SAME_LINK_RETURN_GUARD_MS = 3_000L
         const val MANUAL_STILL_CONFIRM_MS = 1_500L
         const val MANUAL_RETURN_RISE_DB = 2
+        const val MANUAL_WEAK_SLEEP_RSSI = -78
+        const val MANUAL_WEAK_DROP_DB = 15
+        const val MANUAL_WEAK_SLEEP_MS = 10_000L
+        const val MANUAL_WEAK_RETURN_RSSI = -70
+        const val MANUAL_WEAK_RETURN_RISE_DB = 8
+        const val MANUAL_WEAK_RETURN_CONFIRM_MS = 400L
     }
 }

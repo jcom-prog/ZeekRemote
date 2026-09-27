@@ -52,6 +52,30 @@ class ProximityDecisionPolicyTest {
     }
 
     @Test
+    fun manualWeakSleepDoesNotRearmAfterBriefDip() {
+        val policy = ProximityDecisionPolicy()
+        policy.onManualLockConfirmed()
+        assertFalse(policy.shouldUnlock(0L, -60, false, -86))
+        assertFalse(policy.shouldUnlock(15_000L, -78, false, -86))
+        assertFalse(policy.shouldUnlock(17_000L, -79, true, -86))
+        for (time in 17_200L..18_000L step 200L) {
+            assertFalse(policy.shouldUnlock(time, -68, true, -86))
+        }
+    }
+
+    @Test
+    fun manualWeakSleepDoesNotRearmWhileStillDespiteRssiRebound() {
+        val policy = ProximityDecisionPolicy()
+        policy.onManualLockConfirmed()
+        assertFalse(policy.shouldUnlock(0L, -60, false, -86))
+        assertFalse(policy.shouldUnlock(15_000L, -78, false, -86))
+        assertFalse(policy.shouldUnlock(26_000L, -78, false, -86))
+        for (time in 26_200L..27_000L step 200L) {
+            assertFalse(policy.shouldUnlock(time, -68, false, -86))
+        }
+    }
+
+    @Test
     fun coldStartArrivalIsReadyAtFarThresholdAfterTwoSamples() {
         val policy = ProximityDecisionPolicy()
         policy.onPresenceMatch(0L, -87, true, -86)
