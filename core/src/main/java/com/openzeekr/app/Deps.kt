@@ -113,7 +113,7 @@ class Deps(context: Context) {
     val calibTest = CalibrationTestController(appCtx, ble, appScope)
     /** Wakelock-free motion state (still vs moving) for proximity cadence gating. */
     val motion = com.openzeekr.app.ble.MotionMonitor(appCtx)
-    val proximity = ProximityController(
+    val proximity: ProximityController = ProximityController(
         appCtx, config, lock, ble, motion, appScope,
         // Cloud lock fallback for the walk-away lock when BLE won't confirm — never leave the car open.
         cloudLock = { control.send(com.openzeekr.app.remote.Command.LOCK) is com.openzeekr.app.remote.CallResult.Ok },

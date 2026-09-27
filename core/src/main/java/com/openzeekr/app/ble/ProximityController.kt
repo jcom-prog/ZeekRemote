@@ -244,7 +244,7 @@ class ProximityController(
     /** Make every confirmed unlock enter the same walk-away state, regardless of its origin. */
     fun onExternalUnlockConfirmed(source: String) {
         scope.launch {
-            if (_state.value.running && config.current().proximityEnabled) {
+            if (_state.value.running && store.current().proximityEnabled) {
                 recordUnlockConfirmed(source)
             } else {
                 // Keep drive authorization alive, but respect the user's disabled proximity toggle.
