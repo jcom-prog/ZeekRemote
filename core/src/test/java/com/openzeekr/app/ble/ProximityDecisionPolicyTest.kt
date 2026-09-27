@@ -38,6 +38,20 @@ class ProximityDecisionPolicyTest {
     }
 
     @Test
+    fun manualLockAcceptsElapsedStillPauseAcrossFarSleepPollingGap() {
+        val policy = ProximityDecisionPolicy()
+        policy.onManualLockConfirmed()
+        for (time in 0L..2_600L step 200L) {
+            assertFalse(policy.shouldUnlock(time, -89, true, -86))
+        }
+        assertFalse(policy.shouldUnlock(2_800L, -89, false, -86))
+        assertFalse(policy.shouldUnlock(23_500L, -89, true, -86))
+        assertFalse(policy.shouldUnlock(23_700L, -83, true, -86))
+        assertFalse(policy.shouldUnlock(23_900L, -83, true, -86))
+        assertTrue(policy.shouldUnlock(24_100L, -83, true, -86))
+    }
+
+    @Test
     fun coldStartArrivalIsReadyAtFarThresholdAfterTwoSamples() {
         val policy = ProximityDecisionPolicy()
         policy.onPresenceMatch(0L, -87, true, -86)

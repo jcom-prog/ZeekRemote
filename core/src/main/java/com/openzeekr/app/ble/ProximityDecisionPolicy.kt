@@ -215,12 +215,14 @@ internal class ProximityDecisionPolicy {
     ): Boolean {
         if (departureLinkEnded) return false // fresh offloaded presence owns this path
 
-        val farBoundary = unlockThreshold - FAR_MARGIN_DB
         if (manualDeparture) {
             // Motion can report MOVING for seconds after a stop. A manual lock can only be
             // rearmed by a separate, observed FAR pause followed by a new motion edge.
             if (departureSameLinkFarQualifiedAtMs == UNSET_MS) {
-                if (rssi > farBoundary) {
+                // The field return stopped around -89 dBm at ten metres. Requiring the generic
+                // -92 dBm baseline made physical separation impossible to prove in that trace.
+                // STILL + a fresh motion edge provide the extra directional proof on this route.
+                if (rssi > unlockThreshold) {
                     departureSameLinkFarSinceMs = UNSET_MS
                     return false
                 }
@@ -233,18 +235,35 @@ internal class ProximityDecisionPolicy {
                 // Preserve a FAR separation even if body orientation makes the signal rebound
                 // slightly while stopped. It must remain outside the arrival crossing.
                 if (rssi <= unlockThreshold + UNLOCK_MARGIN_DB) {
-                    if (manualStillSinceMs == UNSET_MS) manualStillSinceMs = nowMs
+                    if (manualStillSinceMs == UNSET_MS) {
+                        manualStillSinceMs = nowMs
+                        manualStillRssi = rssi
+                    } else {
+                        manualStillRssi = minOf(manualStillRssi, rssi)
+                    }
                     if (nowMs - manualStillSinceMs >= MANUAL_STILL_CONFIRM_MS) {
                         manualStillReady = true
-                        manualStillRssi = rssi
                     }
                 } else {
                     manualStillSinceMs = UNSET_MS
                     manualStillReady = false
+                    manualStillRssi = 0
                 }
                 return false
             }
-            if (!manualStillReady) return false
+            if (!manualStillReady) {
+                // Far-idle deliberately stops fast RSSI polling. The next MOVING callback can be
+                // the first sample after a long confirmed pause, so use elapsed monotonic time
+                // rather than requiring an otherwise impossible second STILL sample.
+                if (manualStillSinceMs != UNSET_MS &&
+                    nowMs - manualStillSinceMs >= MANUAL_STILL_CONFIRM_MS) {
+                    manualStillReady = true
+                } else {
+                    manualStillSinceMs = UNSET_MS
+                    manualStillRssi = 0
+                    return false
+                }
+            }
             if (!manualReturnMoving) {
                 manualReturnMoving = true
                 manualStillRssi = minOf(manualStillRssi, rssi)
@@ -253,6 +272,7 @@ internal class ProximityDecisionPolicy {
                 rssi < unlockThreshold + UNLOCK_MARGIN_DB ||
                 rssi < manualStillRssi + MANUAL_RETURN_RISE_DB) return false
         } else {
+            val farBoundary = unlockThreshold - FAR_MARGIN_DB
             if (departureSameLinkFarQualifiedAtMs == UNSET_MS) {
                 if (!moving || rssi > farBoundary) {
                     departureSameLinkFarSinceMs = UNSET_MS

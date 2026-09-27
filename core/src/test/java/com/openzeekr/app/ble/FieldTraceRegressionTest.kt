@@ -128,6 +128,24 @@ class FieldTraceRegressionTest {
         assertTrue("return must be recognized before reaching the door", firstReturn!! < 60_000L)
     }
 
+    @Test
+    fun v0135ManualLockFarSleepReturnReplay() {
+        val policy = ProximityDecisionPolicy()
+        policy.onManualLockConfirmed()
+        val samples = trace("0.1.35-manual-lock-far-sleep-return.csv")
+        var firstReturn: Long? = null
+        samples.forEach { sample ->
+            val unlock = policy.shouldUnlock(sample.elapsedMs, sample.rssi, sample.moving, UNLOCK_RSSI)
+            if (sample.elapsedMs < 53_816L) {
+                assertFalse("departure and the FAR/STILL pause must remain locked", unlock)
+            } else if (unlock && firstReturn == null) {
+                firstReturn = sample.elapsedMs
+            }
+        }
+        assertTrue("real return after a 20s FAR/STILL sleep gap must unlock", firstReturn != null)
+        assertTrue("captured return must unlock before door range", firstReturn!! <= 55_284L)
+    }
+
     private fun replayLocked(policy: ProximityDecisionPolicy, name: String): List<Boolean> =
         replayLocked(policy, trace(name))
 
