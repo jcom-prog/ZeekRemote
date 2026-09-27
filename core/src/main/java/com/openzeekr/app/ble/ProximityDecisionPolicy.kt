@@ -200,6 +200,15 @@ internal class ProximityDecisionPolicy {
             departureLinkEnded = true
             manualDeparture = false
             resetSameLinkReturn()
+        } else if (!departureObserved) {
+            // A failed setup can observe FAR long enough to set farQualified, then disconnect
+            // before the phone reaches the car. On a later fresh connection at the door the
+            // motion sensor may already say STILL. FAR proof from the dead link must not disable
+            // the guarded fresh-door fallback; preserve the separate departure protection.
+            farSinceMs = UNSET_MS
+            farQualified = false
+            nearCandidateSinceMs = UNSET_MS
+            unlockQualifiedAtMs = UNSET_MS
         }
     }
 

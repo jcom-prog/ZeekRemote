@@ -127,6 +127,10 @@ class ProximityService : Service() {
                     intent.getParcelableExtra(EXTRA_SCAN_RESULT) as? android.bluetooth.le.ScanResult
                 }
                 val mac = scanResult?.device?.address ?: intent.getStringExtra(EXTRA_MAC)
+                if (scanResult != null && deps.ble.shouldDeferWeakPresence(scanResult.rssi)) {
+                    Logx.d("svc", "status 133: deferring weak presence at rssi=${scanResult.rssi}; keeping offloaded scan armed")
+                    return START_STICKY
+                }
                 Logx.d("svc", "presence: car in range (saw $mac) — engaging from preserved scan result")
                 if (deps.config.config.value.proximityEnabled) {
                     scanResult?.let { deps.proximity.onPresenceMatch(it.rssi) }

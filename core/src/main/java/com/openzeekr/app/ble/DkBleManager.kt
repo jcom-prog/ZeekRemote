@@ -328,6 +328,10 @@ class DkBleManager(base: Context) : DkTransport {
         return true
     }
 
+    /** During repeated 133 recovery, defer only weak offloaded hits and keep scanning. */
+    fun shouldDeferWeakPresence(rssi: Int): Boolean =
+        status133RecoveryPolicy.shouldDeferWeakPresence(rssi, android.os.SystemClock.elapsedRealtime())
+
     /**
      * Connect directly from the hardware-offloaded presence result that woke the process.
      *
@@ -707,7 +711,8 @@ class DkBleManager(base: Context) : DkTransport {
                     else -> {
                         setupRetries = 0
                         val recovery = if (status == 133 && !deliberate) {
-                            status133RecoveryPolicy.onFailure(lastDevice != null && lastRnd != null)
+                            status133RecoveryPolicy.onFailure(lastDevice != null && lastRnd != null,
+                                android.os.SystemClock.elapsedRealtime())
                         } else null
                         if (recovery == Status133RecoveryPolicy.Route.RETRY_RECENT_ROUTE) {
                             // 0.1.30 fast test 2: this just-received RPA failed once with 133, yet

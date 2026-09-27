@@ -135,6 +135,27 @@ class ProximityDecisionPolicyTest {
     }
 
     @Test
+    fun failedFarConnectionThenFreshDoorSessionStillUnlocks() {
+        val policy = ProximityDecisionPolicy()
+        repeat(20) { index -> assertFalse(policy.shouldUnlock(index * 200L, -105, true, -86)) }
+        policy.onLinkEnded()
+        policy.onPresenceMatch(4_200L, -62, false, -86)
+        assertFalse(policy.shouldUnlock(4_400L, -61, false, -86))
+        assertTrue("a dead FAR connection cannot suppress a later ready session at the door",
+            policy.shouldUnlock(5_700L, -61, false, -86))
+    }
+
+    @Test
+    fun freshDoorFallbackStillRejectsObservedDepartureAfterLinkEnd() {
+        val policy = ProximityDecisionPolicy()
+        assertFalse(policy.shouldUnlock(0L, -60, false, -86))
+        assertFalse(policy.shouldUnlock(200L, -95, true, -86))
+        policy.onLinkEnded()
+        assertFalse(policy.shouldUnlock(2_000L, -61, false, -86))
+        assertFalse(policy.shouldUnlock(3_500L, -61, false, -86))
+    }
+
+    @Test
     fun midRangeReturnAfterLinkEndCanCreateFreshArrivalEpoch() {
         val policy = ProximityDecisionPolicy()
         policy.onDepartureLockStarted()
