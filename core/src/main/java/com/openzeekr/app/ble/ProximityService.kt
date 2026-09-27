@@ -590,9 +590,9 @@ class ProximityService : Service() {
         private const val WATCHDOG_INTERVAL_MS = 5_000L
         private const val KEY_SLEEP_AFTER_MS = 2 * 60 * 1_000L
         private const val KEY_WAKE_MOTION_CONFIRM_MS = 1_500L
+        private const val KEY_SLEEP_POLL_MS = 500L
         private const val EARLY_PRESENCE_WINDOW_MS = KEY_WAKE_MOTION_CONFIRM_MS + 2 * KEY_SLEEP_POLL_MS
         private const val KEY_SLEEP_LOCK_GRACE_MS = 15_000L
-        private const val KEY_SLEEP_POLL_MS = 500L
         private const val HARDWARE_WAKE_BRIDGE_MS = 5_000L
         /** While yielded to the watch, poll faster so we notice resume/expiry promptly. */
         private const val WATCH_YIELD_POLL_MS = 1_000L
