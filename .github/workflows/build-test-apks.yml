@@ -75,6 +75,16 @@ jobs:
           printf '%s\n' "$CERTS"
           printf '%s\n' "$CERTS" | grep -Fqi "certificate SHA-256 digest: $EXPECTED"
 
+      - name: Verify built phone APK identity and SHA-256
+        run: |
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
+          BADGING=$("$AAPT" dump badging "$APK")
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='73' versionName='0.1.38-work'"
+          printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
+          printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
+          sha256sum "$APK"
+
       - name: Upload phone APK
         uses: actions/upload-artifact@v4
         with:
