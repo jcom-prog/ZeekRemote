@@ -66,6 +66,8 @@ class ProximityService : Service() {
     // keepConnected can classify the just-dropped session as "recent" and immediately replace the
     // offload listener with the screen-off callback scan that timed out in the 0.1.21 field trace.
     private var motionPresenceRecoveryUntilMs = 0L
+    /** Strict battery bound for the faster hardware-offloaded scan after a real motion wake. */
+    private var fastPresenceUntilMs = 0L
     private var wakeReceiverRegistered = false
     /** Modern-key security mode: after two minutes without movement there is no BLE session and no
      * presence scan. Motion must be confirmed before the key is made discoverable/useful again. */
@@ -278,7 +280,8 @@ class ProximityService : Service() {
                                 // Long-approach path: BALANCED while walking, LOW_POWER while still.
                                 // This filtered PendingIntent scan stays in the BT controller and holds
                                 // no CPU wakelock, so it can listen all day without foreground scanning.
-                                deps.ble.armPresenceScan(approachMode = moving)
+                                val fast = moving && System.currentTimeMillis() < fastPresenceUntilMs
+                                deps.ble.armPresenceScan(approachMode = moving, lowLatency = fast)
                             }
                         } else {
                             // Legacy (offload off), OR aggressive reconnect while walking up: foreground
@@ -336,13 +339,16 @@ class ProximityService : Service() {
         lastWakeProbeMs = now
         val offloadEnabled = deps.config.config.value.presenceOffloadEnabled
         val presenceArmed = if (confirmedMotionWake && offloadEnabled) {
-            runCatching { deps.ble.armPresenceScan(approachMode = true) }.getOrDefault(false)
+            fastPresenceUntilMs = now + FAST_PRESENCE_WINDOW_MS
+            runCatching {
+                deps.ble.armPresenceScan(approachMode = true, lowLatency = true)
+            }.getOrDefault(false)
         } else false
         when (DeepSleepRecoveryPolicy.route(offloadEnabled && confirmedMotionWake, presenceArmed)) {
             DeepSleepRecoveryPolicy.Route.OFFLOADED_PRESENCE -> {
                 motionPresenceRecoveryUntilMs = now + MOTION_PRESENCE_RECOVERY_MS
                 deps.proximity.updateDiagnostics("$reason · waiting for car presence")
-                Logx.d("svc", "$reason: BALANCED offloaded presence armed (screen-off recovery)")
+                Logx.d("svc", "$reason: LOW_LATENCY offloaded presence armed (screen-off recovery)")
             }
             DeepSleepRecoveryPolicy.Route.FOREGROUND_SCAN -> {
                 deps.proximity.updateDiagnostics("$reason · recovery scan")
@@ -381,7 +387,7 @@ class ProximityService : Service() {
     /**
      * Motion-triggered escalation (wakelock-free until it fires). The phone was still and just
      * started moving ([MotionMonitor] hardware trigger). Switch the hardware-filtered PendingIntent
-     * presence scan to BALANCED duty while walking; the Bluetooth controller keeps listening with the
+     * presence scan to LOW_LATENCY duty while walking; the Bluetooth controller keeps listening with the
      * CPU asleep. Its next ALL_MATCHES advert wakes us into the proven foreground scan-connect path.
      * This works for a two-minute or all-day approach without starting a 20 s foreground scan after
      * every stop in every shop. If already engaged, the connected-RSSI controller owns the cadence.
@@ -395,8 +401,9 @@ class ProximityService : Service() {
             if (com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value) return@collect
             when (deps.ble.state.value) {
                 DkBleManager.State.IDLE, DkBleManager.State.ERROR -> {
-                    Logx.d("svc", "motion: phone started moving — arm BALANCED offloaded presence")
-                    runCatching { deps.ble.armPresenceScan(approachMode = true) }
+                    fastPresenceUntilMs = System.currentTimeMillis() + FAST_PRESENCE_WINDOW_MS
+                    Logx.d("svc", "motion: phone started moving — arm bounded LOW_LATENCY offloaded presence")
+                    runCatching { deps.ble.armPresenceScan(approachMode = true, lowLatency = true) }
                 }
                 else -> {} // already engaged/connecting — nothing to do
             }
@@ -519,6 +526,7 @@ class ProximityService : Service() {
         private const val AGGRESSIVE_RECONNECT_MS = 30_000L
         private const val WAKE_PROBE_DEBOUNCE_MS = 5_000L
         private const val MOTION_PRESENCE_RECOVERY_MS = 30_000L
+        private const val FAST_PRESENCE_WINDOW_MS = 30_000L
         private const val WATCHDOG_INTERVAL_MS = 5_000L
         private const val KEY_SLEEP_AFTER_MS = 2 * 60 * 1_000L
         private const val KEY_WAKE_MOTION_CONFIRM_MS = 1_500L

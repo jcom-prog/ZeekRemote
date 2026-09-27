@@ -382,7 +382,11 @@ internal class ProximityDecisionPolicy {
         const val DOOR_CONFIRM_MS = 1_200L
         const val UNLOCK_EVIDENCE_TTL_MS = 5_000L
         const val PRESENCE_ENTRY_MARGIN_DB = 3
-        const val PRESENCE_READY_MARGIN_DB = 4
+        // The offloaded presence hit + real motion + a rising signal already prove an approach.
+        // Requiring another +4 dB after the DK handshake delayed the field-proven 0.1.33 cold start
+        // by ~1.35 s. Keep the two-sample confirmation, but allow readiness at the configured Far
+        // threshold; commands still cannot run before SESSION_READY.
+        const val PRESENCE_READY_MARGIN_DB = 0
         const val PRESENCE_RISE_DB = 1
         // Two consecutive fast-cadence observations. Requiring 400 ms made the result depend on
         // whether one noisy 200 ms sample landed just before SESSION_READY (the 0.1.28 failure).

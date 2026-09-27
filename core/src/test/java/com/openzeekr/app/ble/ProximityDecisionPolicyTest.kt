@@ -7,6 +7,28 @@ import org.junit.Test
 
 class ProximityDecisionPolicyTest {
     @Test
+    fun coldStartArrivalIsReadyAtFarThresholdAfterTwoSamples() {
+        val policy = ProximityDecisionPolicy()
+        policy.onPresenceMatch(0L, -87, true, -86)
+
+        assertFalse(policy.shouldUnlock(100L, -86, true, -86))
+        assertTrue("qualified cold arrival must not wait for an extra 4 dB after handshake",
+            policy.shouldUnlock(300L, -86, true, -86))
+    }
+
+    @Test
+    fun coldStartAtFarThresholdStillRequiresMotionAndRisingEvidence() {
+        val noMotion = ProximityDecisionPolicy()
+        noMotion.onPresenceMatch(0L, -85, false, -86)
+        assertFalse(noMotion.shouldUnlock(300L, -86, false, -86))
+
+        val noRise = ProximityDecisionPolicy()
+        noRise.onPresenceMatch(0L, -85, true, -86)
+        assertFalse(noRise.shouldUnlock(100L, -85, true, -86))
+        assertFalse(noRise.shouldUnlock(300L, -85, true, -86))
+    }
+
+    @Test
     fun captured031TurnaroundWithoutOpeningLocksBeforeSessionIsLost() {
         val policy = ProximityDecisionPolicy()
         var now = 0L
@@ -309,7 +331,10 @@ class ProximityDecisionPolicyTest {
         policy.onLinkEnded()
         policy.onPresenceMatch(now + 400, -90, true, -86)
         assertFalse(policy.shouldUnlock(now + 400, -85, true, -86))
-        assertFalse(policy.shouldUnlock(now + 600, -82, true, -86))
+        // 0.1.34: once the old link ended, hardware presence + movement + a rising signal may
+        // qualify at the configured Far threshold after two fast samples. The pre-link rebound
+        // above remains blocked, so this latency gain does not weaken the departure latch.
+        assertTrue(policy.shouldUnlock(now + 600, -82, true, -86))
         assertTrue(policy.shouldUnlock(now + 800, -81, true, -86))
     }
 

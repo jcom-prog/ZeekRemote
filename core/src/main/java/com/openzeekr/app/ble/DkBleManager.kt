@@ -524,6 +524,7 @@ class DkBleManager(base: Context) : DkTransport {
     @Volatile var presenceArmed: Boolean = false
         private set
     @Volatile private var presenceApproachMode: Boolean = false
+    @Volatile private var presenceLowLatency: Boolean = false
 
     /**
      * Arm a HARDWARE-OFFLOADED presence scan: the Bluetooth controller watches for the car's
@@ -535,17 +536,24 @@ class DkBleManager(base: Context) : DkTransport {
      * Idempotent. Returns true if armed (or already armed).
      */
     @SuppressLint("MissingPermission")
-    fun armPresenceScan(approachMode: Boolean = false): Boolean {
-        if (presenceArmed && presenceApproachMode == approachMode) return true
+    fun armPresenceScan(approachMode: Boolean = false, lowLatency: Boolean = false): Boolean {
+        val useLowLatency = approachMode && lowLatency
+        if (presenceArmed && presenceApproachMode == approachMode &&
+            presenceLowLatency == useLowLatency) return true
         // Re-register when motion changes the desired duty cycle. This remains a filtered
         // PendingIntent scan handled by the Bluetooth controller; it does not hold a CPU wakelock.
         if (presenceArmed) disarmPresenceScan()
         val scanner = adapter?.bluetoothLeScanner ?: return false
         if (adapter?.isEnabled != true) return false
         val settings = ScanSettings.Builder()
-            // BALANCED while walking gives reliable short AND long approaches without a foreground
-            // scan running all day. Parked/still returns to LOW_POWER. Both stay hardware-filtered.
-            .setScanMode(if (approachMode) ScanSettings.SCAN_MODE_BALANCED else ScanSettings.SCAN_MODE_LOW_POWER)
+            // LOW_LATENCY is allowed only during ProximityService's bounded post-motion wake window.
+            // Continued walking falls back to BALANCED; parked/still remains LOW_POWER. All three
+            // routes stay hardware-filtered PendingIntent scans rather than foreground scan loops.
+            .setScanMode(when {
+                useLowLatency -> ScanSettings.SCAN_MODE_LOW_LATENCY
+                approachMode -> ScanSettings.SCAN_MODE_BALANCED
+                else -> ScanSettings.SCAN_MODE_LOW_POWER
+            })
             .apply {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     // ALL_MATCHES is deliberate. FIRST_MATCH can remain latched across a long parked
@@ -560,8 +568,13 @@ class DkBleManager(base: Context) : DkTransport {
         return if (res.getOrDefault(-1) == 0) {
             presenceArmed = true
             presenceApproachMode = approachMode
+            presenceLowLatency = useLowLatency
             Logx.d("ble", "presence scan ARMED (offloaded 0xFDFD/0x06FE, " +
-                "${if (approachMode) "BALANCED approach" else "LOW_POWER idle"}, ALL_MATCHES, CPU may sleep)")
+                "${when {
+                    useLowLatency -> "LOW_LATENCY motion wake"
+                    approachMode -> "BALANCED approach"
+                    else -> "LOW_POWER idle"
+                }}, ALL_MATCHES, CPU may sleep)")
             true
         } else {
             Logx.e("ble", "presence scan arm failed (${res.exceptionOrNull()?.message ?: "startScan!=0"})")
@@ -577,6 +590,7 @@ class DkBleManager(base: Context) : DkTransport {
         runCatching { scanner?.stopScan(presencePendingIntent()) }
         presenceArmed = false
         presenceApproachMode = false
+        presenceLowLatency = false
         Logx.d("ble", "presence scan DISARMED")
     }
 
