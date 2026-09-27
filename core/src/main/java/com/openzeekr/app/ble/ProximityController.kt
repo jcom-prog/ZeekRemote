@@ -254,6 +254,25 @@ class ProximityController(
         }
     }
 
+    /** Make every confirmed manual lock enter the same departure latch as walk-away locking. */
+    fun onExternalLockConfirmed(source: String) {
+        scope.launch {
+            if (_state.value.running && store.current().proximityEnabled) {
+                needToUnlock = false
+                unlockJob?.cancel()
+                unlockJob = null
+                armedUnlocked = false
+                decisionPolicy.onDepartureLockStarted()
+                lastTriggerMs = System.currentTimeMillis()
+                _wakeLockNeeded.value = false
+                activityWake?.complete(Unit)
+                Logx.d("prox", "lock confirmed ($source) -> departure latched")
+            } else {
+                Logx.d("prox", "lock confirmed ($source); proximity disabled/stopped")
+            }
+        }
+    }
+
     private fun recordUnlockConfirmed(source: String) {
         val now = System.currentTimeMillis()
         ble.noteUnlockConfirmed()

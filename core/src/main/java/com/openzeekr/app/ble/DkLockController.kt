@@ -21,6 +21,9 @@ class DkLockController(
     /** Called only after the car confirms an unlock, so the service can preserve authenticated key
      *  presence through the door-open -> vehicle-start transition. */
     private val onUnlockConfirmed: () -> Unit = {},
+    /** Called only after the car confirms a lock, so proximity enters the same departure latch as
+     *  an automatic walk-away lock and cannot issue a redundant lock or rebound unlock. */
+    private val onLockConfirmed: () -> Unit = {},
 ) {
 
     /** VehicleCtrlCmd.UNLOCK over DK (confirmed, with one self-healing retry). */
@@ -44,6 +47,7 @@ class DkLockController(
         Logx.d("lock", "$label -> $r")
         if (r == ControlResult.CONFIRMED) {
             if (ctrl == DkOpcodes.CTRL_UNLOCK) onUnlockConfirmed()
+            if (ctrl == DkOpcodes.CTRL_LOCK) onLockConfirmed()
             return true
         }
         if (r == ControlResult.REJECTED) { Logx.w("lock", "$label rejected by the car"); return false }
@@ -55,6 +59,7 @@ class DkLockController(
         Logx.d("lock", "$label (after refresh) -> $r")
         return (r == ControlResult.CONFIRMED).also { confirmed ->
             if (confirmed && ctrl == DkOpcodes.CTRL_UNLOCK) onUnlockConfirmed()
+            if (confirmed && ctrl == DkOpcodes.CTRL_LOCK) onLockConfirmed()
         }
     }
 

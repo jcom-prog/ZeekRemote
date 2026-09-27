@@ -105,6 +105,7 @@ class Deps(context: Context) {
         session = ble.session,
         refresh = { ble.refreshSession() },
         onUnlockConfirmed = { proximity.onExternalUnlockConfirmed("manual key control") },
+        onLockConfirmed = { proximity.onExternalLockConfirmed("manual key control") },
     )
     val phoneStatus = PhoneStatusProvider(appCtx)
     val rpa = RpaController(ble.session, appScope, phoneStatus::stateByte, rssi = ble::pollRemoteRssi)
@@ -129,6 +130,7 @@ class Deps(context: Context) {
         ble,
         control,
         onUnlockConfirmed = proximity::onExternalUnlockConfirmed,
+        onLockConfirmed = proximity::onExternalLockConfirmed,
     )
     /** Call after the base URL / sign algo changes so the HTTP client rebuilds. */
     fun onEndpointChanged() = apiClient.rebuild()

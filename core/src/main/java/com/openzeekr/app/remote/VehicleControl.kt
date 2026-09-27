@@ -23,6 +23,7 @@ class VehicleControl(
     private val ble: DkBleManager,
     private val cloud: RemoteControlRepository,
     private val onUnlockConfirmed: (String) -> Unit = {},
+    private val onLockConfirmed: (String) -> Unit = {},
 ) {
     /** DK 0x0110 control byte for a command, or null if it must go via the cloud. */
     private fun bleByte(cmd: Command): Byte? = when (cmd) {
@@ -59,6 +60,7 @@ class VehicleControl(
             Logx.d("ctl", "${cmd.name}: BLE control 0x%02x -> $r".format(b))
             if (r == ControlResult.CONFIRMED) {
                 if (cmd == Command.UNLOCK) onUnlockConfirmed("manual BLE control")
+                if (cmd == Command.LOCK) onLockConfirmed("manual BLE control")
                 return CallResult.Ok(RemoteControlResponse(serviceId = cmd.serviceId, status = "ok (key)"))
             }
             Logx.d("ctl", "${cmd.name}: BLE $r — falling back to cloud")
@@ -66,6 +68,9 @@ class VehicleControl(
         return cloud.send(cmd, extraParams).also { result ->
             if (cmd == Command.UNLOCK && result is CallResult.Ok) {
                 onUnlockConfirmed("manual cloud control")
+            }
+            if (cmd == Command.LOCK && result is CallResult.Ok) {
+                onLockConfirmed("manual cloud control")
             }
         }
     }
