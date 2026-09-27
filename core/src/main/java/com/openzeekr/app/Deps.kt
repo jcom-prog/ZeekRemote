@@ -93,8 +93,6 @@ class Deps(context: Context) {
     val capabilities = CapabilityHolder(control, appScope)
 
     val ble: DkBleManager = DkBleManager.get(context)
-    /** BLE-first, cloud-fallback dispatcher for actions the DK session can actuate directly. */
-    val vehicleControl = com.openzeekr.app.remote.VehicleControl(ble, control)
     // One device id for both the TSP transport (x-device-id) and the DK body,
     // as the stock app does (single getDeviceID). Also arm the BLE session if a
     // credential was already provisioned on a previous run.
@@ -106,7 +104,7 @@ class Deps(context: Context) {
     val lock = DkLockController(
         session = ble.session,
         refresh = { ble.refreshSession() },
-        onUnlockConfirmed = { ble.noteUnlockConfirmed() },
+        onUnlockConfirmed = { proximity.onExternalUnlockConfirmed("manual key control") },
     )
     val phoneStatus = PhoneStatusProvider(appCtx)
     val rpa = RpaController(ble.session, appScope, phoneStatus::stateByte, rssi = ble::pollRemoteRssi)
@@ -125,6 +123,12 @@ class Deps(context: Context) {
                 ?.additionalVehicleStatus?.drivingSafetyStatus?.centralLockingStatus
                 ?.let { it == "1" }
         },
+    )
+    /** BLE-first, cloud-fallback dispatcher; confirmed unlocks centrally arm walk-away monitoring. */
+    val vehicleControl = com.openzeekr.app.remote.VehicleControl(
+        ble,
+        control,
+        onUnlockConfirmed = proximity::onExternalUnlockConfirmed,
     )
     /** Call after the base URL / sign algo changes so the HTTP client rebuilds. */
     fun onEndpointChanged() = apiClient.rebuild()

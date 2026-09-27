@@ -286,7 +286,7 @@ class ProximityDecisionPolicyTest {
     }
 
     @Test
-    fun departureLatchBlocksEverySameSessionUnlockAndNeedsFreshPresence() {
+    fun departureLatchBlocksImmediateSameSessionRebound() {
         val policy = ProximityDecisionPolicy()
         policy.onDepartureLockStarted()
 
@@ -300,7 +300,8 @@ class ProximityDecisionPolicyTest {
             now += 200
         }
 
-        // A presence hit before the old link ends is still the same departure and cannot rearm.
+        // A presence hit before the old link ends is still the same departure and cannot rearm
+        // unless a separate, stable FAR epoch has first been observed.
         policy.onPresenceMatch(now, -90, true, -86)
         assertFalse(policy.shouldUnlock(now + 200, -82, true, -86))
 
@@ -310,6 +311,46 @@ class ProximityDecisionPolicyTest {
         assertFalse(policy.shouldUnlock(now + 400, -85, true, -86))
         assertFalse(policy.shouldUnlock(now + 600, -82, true, -86))
         assertTrue(policy.shouldUnlock(now + 800, -81, true, -86))
+    }
+
+    @Test
+    fun captured032QuickReturnRearmsWithoutLinkLoss() {
+        val policy = ProximityDecisionPolicy()
+        var now = 0L
+        policy.onDepartureLockStarted()
+
+        // The car has just locked. A real departure remains continuously FAR long enough to prove
+        // that the previous arrival ended, even though Android keeps the authenticated GATT link.
+        // Captured 0.1.32-turnaround-test-1.log: the retained link remained deep FAR after lock.
+        listOf(-100, -100, -100, -100, -99, -100, -101, -102, -103, -103,
+            -102, -103, -103, -102, -103, -103).forEach { rssi ->
+            assertFalse(policy.shouldUnlock(now, rssi, true, -86))
+            now += 210
+        }
+
+        // Captured 0.1.32-return-no-response.log begins only once the retained connection is already
+        // near (-59 dBm). The long gap is real: no link-down or fresh presence callback occurred.
+        now += 180_000
+        var unlocked = false
+        listOf(-59, -59, -59, -61).forEach { rssi ->
+            unlocked = unlocked || policy.shouldUnlock(now, rssi, true, -86)
+            now += 210
+        }
+        assertTrue("a proven FAR -> NEAR return must create a new arrival epoch without link loss", unlocked)
+    }
+
+    @Test
+    fun sameLinkMultipathReboundCannotRearmDepartureLatch() {
+        val policy = ProximityDecisionPolicy()
+        var now = 0L
+        policy.onDepartureLockStarted()
+
+        // Captured-style post-lock bounce: weak briefly, then rebounds within a few seconds. This is
+        // not a new visit and must remain blocked despite crossing the normal unlock threshold.
+        listOf(-95, -96, -96, -94, -92, -90, -87, -84, -82, -80).forEach { rssi ->
+            assertFalse(policy.shouldUnlock(now, rssi, true, -86))
+            now += 250
+        }
     }
 
     @Test

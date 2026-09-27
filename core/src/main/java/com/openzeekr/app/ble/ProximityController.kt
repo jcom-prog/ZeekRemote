@@ -241,6 +241,30 @@ class ProximityController(
         Logx.d("prox", "arrival epoch: presence rssi=$rssi motion=${motion.state.value}")
     }
 
+    /** Make every confirmed unlock enter the same walk-away state, regardless of its origin. */
+    fun onExternalUnlockConfirmed(source: String) {
+        scope.launch {
+            if (_state.value.running && config.current().proximityEnabled) {
+                recordUnlockConfirmed(source)
+            } else {
+                // Keep drive authorization alive, but respect the user's disabled proximity toggle.
+                ble.noteUnlockConfirmed()
+                Logx.d("prox", "unlock confirmed ($source); proximity disabled/stopped -> walk-away not armed")
+            }
+        }
+    }
+
+    private fun recordUnlockConfirmed(source: String) {
+        val now = System.currentTimeMillis()
+        ble.noteUnlockConfirmed()
+        armedUnlocked = true
+        decisionPolicy.onUnlockConfirmed(now)
+        lastTriggerMs = now
+        _wakeLockNeeded.value = true
+        activityWake?.complete(Unit)
+        Logx.d("prox", "unlock confirmed ($source) -> walk-away armed")
+    }
+
     // ---------------- no live session ----------------
 
     private fun onSessionDown() {
@@ -532,10 +556,7 @@ class ProximityController(
                 Logx.d("prox", "unlock attempt #$attempt -> $r")
                 _state.value = _state.value.copy(lastAction = "unlock #$attempt · $r")
                 if (r == ControlResult.CONFIRMED) {
-                    ble.noteUnlockConfirmed()
-                    armedUnlocked = true
-                    decisionPolicy.onUnlockConfirmed(System.currentTimeMillis())
-                    lastTriggerMs = System.currentTimeMillis() // cooldown before a walk-away lock
+                    recordUnlockConfirmed("proximity")
                     break
                 }
                 if (!needToUnlock) break

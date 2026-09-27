@@ -40,6 +40,8 @@ internal class ProximityDecisionPolicy {
     // not a new arrival. Rearming requires both a link end and a fresh offloaded presence event.
     private var departureLatched = false
     private var departureLinkEnded = false
+    private var departureSameLinkFarSinceMs = UNSET_MS
+    private var departureSameLinkFarQualifiedAtMs = UNSET_MS
     private var pendingUnlockFarSinceMs = UNSET_MS
 
     fun resetLocked() {
@@ -57,6 +59,7 @@ internal class ProximityDecisionPolicy {
         resetWalkAwayCandidate()
         departureLatched = false
         departureLinkEnded = false
+        resetSameLinkReturn()
         pendingUnlockFarSinceMs = UNSET_MS
     }
 
@@ -89,7 +92,9 @@ internal class ProximityDecisionPolicy {
 
     /** Returns true only for a qualified approach or a fresh, stable session already at the door. */
     fun shouldUnlock(nowMs: Long, rssi: Int, moving: Boolean, unlockThreshold: Int): Boolean {
-        if (departureLatched) return false
+        if (departureLatched && !tryRearmSameLinkReturn(nowMs, rssi, moving, unlockThreshold)) {
+            return false
+        }
         expirePresenceApproach(nowMs)
         if (presenceApproachAtMs != UNSET_MS) {
             presencePeakRssi = maxOf(presencePeakRssi, rssi)
@@ -158,6 +163,7 @@ internal class ProximityDecisionPolicy {
         pendingUnlockFarSinceMs = UNSET_MS
         departureLatched = true
         departureLinkEnded = false
+        resetSameLinkReturn()
         sawStrongNearWhileLocked = false
         departureObserved = true
         farSinceMs = UNSET_MS
@@ -170,7 +176,61 @@ internal class ProximityDecisionPolicy {
 
     /** A later arrival may rearm only through [onPresenceMatch], never from connected RSSI alone. */
     fun onLinkEnded() {
-        if (departureLatched) departureLinkEnded = true
+        if (departureLatched) {
+            departureLinkEnded = true
+            resetSameLinkReturn()
+        }
+    }
+
+    /**
+     * Rearm a genuine return while Android deliberately keeps the authenticated GATT link alive.
+     *
+     * 0.1.32 required link-down before a new arrival, so a user returning within three minutes was
+     * visible at -44..-59 dBm but permanently suppressed. Link identity is not an arrival boundary:
+     * require a stable FAR epoch, a quiet separation interval, and then a moving FAR -> NEAR crossing.
+     * The separation interval is intentionally longer than the captured 0.1.29 post-lock multipath
+     * rebound, preserving the departure latch's original anti-reunlock protection.
+     */
+    private fun tryRearmSameLinkReturn(
+        nowMs: Long,
+        rssi: Int,
+        moving: Boolean,
+        unlockThreshold: Int,
+    ): Boolean {
+        if (departureLinkEnded) return false // fresh offloaded presence owns this path
+
+        val farBoundary = unlockThreshold - FAR_MARGIN_DB
+        if (departureSameLinkFarQualifiedAtMs == UNSET_MS) {
+            if (!moving || rssi > farBoundary) {
+                departureSameLinkFarSinceMs = UNSET_MS
+                return false
+            }
+            if (departureSameLinkFarSinceMs == UNSET_MS) departureSameLinkFarSinceMs = nowMs
+            if (nowMs - departureSameLinkFarSinceMs < SAME_LINK_FAR_CONFIRM_MS) return false
+            departureSameLinkFarQualifiedAtMs = nowMs
+            return false
+        }
+
+        val separatedLongEnough =
+            nowMs - departureSameLinkFarQualifiedAtMs >= SAME_LINK_RETURN_GUARD_MS
+        val crossedArrivalEdge = rssi >= unlockThreshold + UNLOCK_MARGIN_DB
+        if (!moving || !separatedLongEnough || !crossedArrivalEdge) return false
+
+        departureLatched = false
+        departureLinkEnded = false
+        resetSameLinkReturn()
+        sawStrongNearWhileLocked = false
+        departureObserved = false
+        farSinceMs = UNSET_MS
+        farQualified = true
+        nearCandidateSinceMs = UNSET_MS
+        unlockQualifiedAtMs = UNSET_MS
+        return true
+    }
+
+    private fun resetSameLinkReturn() {
+        departureSameLinkFarSinceMs = UNSET_MS
+        departureSameLinkFarQualifiedAtMs = UNSET_MS
     }
 
     /** Starts a bounded departure guard for an unlock command that is already in flight. */
@@ -339,5 +399,7 @@ internal class ProximityDecisionPolicy {
         const val WALK_AWAY_RECOVERY_DB = 3
         const val PENDING_UNLOCK_FAR_MARGIN_DB = 3
         const val PENDING_UNLOCK_CANCEL_MS = 1_200L
+        const val SAME_LINK_FAR_CONFIRM_MS = 2_500L
+        const val SAME_LINK_RETURN_GUARD_MS = 3_000L
     }
 }
