@@ -262,7 +262,7 @@ class ProximityController(
                 unlockJob?.cancel()
                 unlockJob = null
                 armedUnlocked = false
-                decisionPolicy.onDepartureLockStarted()
+                decisionPolicy.onManualLockConfirmed()
                 lastTriggerMs = System.currentTimeMillis()
                 _wakeLockNeeded.value = false
                 activityWake?.complete(Unit)

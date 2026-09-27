@@ -42,6 +42,11 @@ internal class ProximityDecisionPolicy {
     private var departureLinkEnded = false
     private var departureSameLinkFarSinceMs = UNSET_MS
     private var departureSameLinkFarQualifiedAtMs = UNSET_MS
+    private var manualDeparture = false
+    private var manualStillSinceMs = UNSET_MS
+    private var manualStillReady = false
+    private var manualReturnMoving = false
+    private var manualStillRssi = 0
     private var pendingUnlockFarSinceMs = UNSET_MS
 
     fun resetLocked() {
@@ -59,6 +64,7 @@ internal class ProximityDecisionPolicy {
         resetWalkAwayCandidate()
         departureLatched = false
         departureLinkEnded = false
+        manualDeparture = false
         resetSameLinkReturn()
         pendingUnlockFarSinceMs = UNSET_MS
     }
@@ -74,6 +80,7 @@ internal class ProximityDecisionPolicy {
             // new arrival epoch. Merely reconnecting or seeing an RSSI rebound cannot clear the latch.
             departureLatched = false
             departureLinkEnded = false
+            manualDeparture = false
         }
         if (presenceApproachAtMs != UNSET_MS) {
             presencePeakRssi = maxOf(presencePeakRssi, rssi)
@@ -176,10 +183,17 @@ internal class ProximityDecisionPolicy {
         resetWalkAwayCandidate()
     }
 
+    /** Confirmed manual lock shares the departure latch. */
+    fun onManualLockConfirmed() {
+        onDepartureLockStarted()
+        manualDeparture = true
+    }
+
     /** A later arrival may rearm only through [onPresenceMatch], never from connected RSSI alone. */
     fun onLinkEnded() {
         if (departureLatched) {
             departureLinkEnded = true
+            manualDeparture = false
             resetSameLinkReturn()
         }
     }
@@ -202,24 +216,63 @@ internal class ProximityDecisionPolicy {
         if (departureLinkEnded) return false // fresh offloaded presence owns this path
 
         val farBoundary = unlockThreshold - FAR_MARGIN_DB
-        if (departureSameLinkFarQualifiedAtMs == UNSET_MS) {
-            if (!moving || rssi > farBoundary) {
-                departureSameLinkFarSinceMs = UNSET_MS
+        if (manualDeparture) {
+            // Motion can report MOVING for seconds after a stop. A manual lock can only be
+            // rearmed by a separate, observed FAR pause followed by a new motion edge.
+            if (departureSameLinkFarQualifiedAtMs == UNSET_MS) {
+                if (rssi > farBoundary) {
+                    departureSameLinkFarSinceMs = UNSET_MS
+                    return false
+                }
+                if (departureSameLinkFarSinceMs == UNSET_MS) departureSameLinkFarSinceMs = nowMs
+                if (nowMs - departureSameLinkFarSinceMs < SAME_LINK_FAR_CONFIRM_MS) return false
+                departureSameLinkFarQualifiedAtMs = nowMs
+            }
+            if (!moving) {
+                manualReturnMoving = false
+                // Preserve a FAR separation even if body orientation makes the signal rebound
+                // slightly while stopped. It must remain outside the arrival crossing.
+                if (rssi <= unlockThreshold + UNLOCK_MARGIN_DB) {
+                    if (manualStillSinceMs == UNSET_MS) manualStillSinceMs = nowMs
+                    if (nowMs - manualStillSinceMs >= MANUAL_STILL_CONFIRM_MS) {
+                        manualStillReady = true
+                        manualStillRssi = rssi
+                    }
+                } else {
+                    manualStillSinceMs = UNSET_MS
+                    manualStillReady = false
+                }
                 return false
             }
-            if (departureSameLinkFarSinceMs == UNSET_MS) departureSameLinkFarSinceMs = nowMs
-            if (nowMs - departureSameLinkFarSinceMs < SAME_LINK_FAR_CONFIRM_MS) return false
-            departureSameLinkFarQualifiedAtMs = nowMs
-            return false
-        }
+            if (!manualStillReady) return false
+            if (!manualReturnMoving) {
+                manualReturnMoving = true
+                manualStillRssi = minOf(manualStillRssi, rssi)
+            }
+            if (nowMs - departureSameLinkFarQualifiedAtMs < SAME_LINK_RETURN_GUARD_MS ||
+                rssi < unlockThreshold + UNLOCK_MARGIN_DB ||
+                rssi < manualStillRssi + MANUAL_RETURN_RISE_DB) return false
+        } else {
+            if (departureSameLinkFarQualifiedAtMs == UNSET_MS) {
+                if (!moving || rssi > farBoundary) {
+                    departureSameLinkFarSinceMs = UNSET_MS
+                    return false
+                }
+                if (departureSameLinkFarSinceMs == UNSET_MS) departureSameLinkFarSinceMs = nowMs
+                if (nowMs - departureSameLinkFarSinceMs < SAME_LINK_FAR_CONFIRM_MS) return false
+                departureSameLinkFarQualifiedAtMs = nowMs
+                return false
+            }
 
-        val separatedLongEnough =
-            nowMs - departureSameLinkFarQualifiedAtMs >= SAME_LINK_RETURN_GUARD_MS
-        val crossedArrivalEdge = rssi >= unlockThreshold + UNLOCK_MARGIN_DB
-        if (!moving || !separatedLongEnough || !crossedArrivalEdge) return false
+            val separatedLongEnough =
+                nowMs - departureSameLinkFarQualifiedAtMs >= SAME_LINK_RETURN_GUARD_MS
+            val crossedArrivalEdge = rssi >= unlockThreshold + UNLOCK_MARGIN_DB
+            if (!moving || !separatedLongEnough || !crossedArrivalEdge) return false
+        }
 
         departureLatched = false
         departureLinkEnded = false
+        manualDeparture = false
         resetSameLinkReturn()
         sawStrongNearWhileLocked = false
         departureObserved = false
@@ -233,6 +286,10 @@ internal class ProximityDecisionPolicy {
     private fun resetSameLinkReturn() {
         departureSameLinkFarSinceMs = UNSET_MS
         departureSameLinkFarQualifiedAtMs = UNSET_MS
+        manualStillSinceMs = UNSET_MS
+        manualStillReady = false
+        manualReturnMoving = false
+        manualStillRssi = 0
     }
 
     /** Starts a bounded departure guard for an unlock command that is already in flight. */
@@ -409,5 +466,7 @@ internal class ProximityDecisionPolicy {
         const val PENDING_UNLOCK_CANCEL_MS = 1_200L
         const val SAME_LINK_FAR_CONFIRM_MS = 2_500L
         const val SAME_LINK_RETURN_GUARD_MS = 3_000L
+        const val MANUAL_STILL_CONFIRM_MS = 1_500L
+        const val MANUAL_RETURN_RISE_DB = 2
     }
 }

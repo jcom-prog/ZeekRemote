@@ -7,6 +7,37 @@ import org.junit.Test
 
 class ProximityDecisionPolicyTest {
     @Test
+    fun manualLockRejectsMovingOnlyReboundEvenAfterLongFarSeparation() {
+        val policy = ProximityDecisionPolicy()
+        policy.onManualLockConfirmed()
+        for (time in 0L..8_000L step 200L) {
+            assertFalse(policy.shouldUnlock(time, -99, true, -86))
+        }
+        for (time in 8_200L..11_000L step 200L) {
+            assertFalse(policy.shouldUnlock(time, -85, true, -86))
+        }
+    }
+
+    @Test
+    fun manualLockNeedsQualifiedFarPauseAndNewMotionEdge() {
+        val policy = ProximityDecisionPolicy()
+        policy.onManualLockConfirmed()
+        for (time in 0L..4_000L step 200L) {
+            assertFalse(policy.shouldUnlock(time, -98, true, -86))
+        }
+        assertFalse(policy.shouldUnlock(4_200L, -86, false, -86))
+        assertFalse(policy.shouldUnlock(4_800L, -86, true, -86)) // short pause
+        assertFalse(policy.shouldUnlock(5_000L, -85, true, -86))
+        for (time in 5_200L..7_000L step 200L) {
+            assertFalse(policy.shouldUnlock(time, -86, false, -86))
+        }
+        assertFalse(policy.shouldUnlock(7_200L, -86, true, -86))
+        assertFalse(policy.shouldUnlock(7_400L, -83, true, -86))
+        assertFalse(policy.shouldUnlock(7_600L, -83, true, -86))
+        assertTrue(policy.shouldUnlock(7_800L, -83, true, -86))
+    }
+
+    @Test
     fun coldStartArrivalIsReadyAtFarThresholdAfterTwoSamples() {
         val policy = ProximityDecisionPolicy()
         policy.onPresenceMatch(0L, -87, true, -86)

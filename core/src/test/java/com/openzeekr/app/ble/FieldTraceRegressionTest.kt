@@ -104,6 +104,30 @@ class FieldTraceRegressionTest {
         assertFalse("captured approach dip cancelled the first unlock command", cancelled.any { it })
     }
 
+    @Test
+    fun v0135ManualLockWrongDirectionReplay() {
+        val policy = ProximityDecisionPolicy()
+        policy.onManualLockConfirmed()
+        val samples = trace("0.1.35-manual-lock-wrong-direction.csv")
+        var firstReturn: Long? = null
+        samples.forEach { sample ->
+            val unlock = policy.shouldUnlock(sample.elapsedMs, sample.rssi, sample.moving, UNLOCK_RSSI)
+            if (sample.elapsedMs < 51_099L) {
+                assertFalse("17:06:45 RSSI rebound while Motion is stale MOVING", unlock)
+            } else if (unlock && firstReturn == null) {
+                firstReturn = sample.elapsedMs
+                policy.onUnlockConfirmed(sample.elapsedMs)
+            }
+            if (firstReturn != null && sample.elapsedMs < 60_000L) {
+                assertFalse("real approach must not generate a walk-away lock",
+                    policy.onUnlockedSample(sample.elapsedMs, sample.rssi, sample.moving, LOCK_RSSI) ==
+                        ProximityDecisionPolicy.ArmedDecision.LOCK)
+            }
+        }
+        assertTrue("real return after 17:07:01 STILL -> MOVING must unlock", firstReturn != null)
+        assertTrue("return must be recognized before reaching the door", firstReturn!! < 60_000L)
+    }
+
     private fun replayLocked(policy: ProximityDecisionPolicy, name: String): List<Boolean> =
         replayLocked(policy, trace(name))
 
