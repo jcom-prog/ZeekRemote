@@ -29,6 +29,54 @@ class ProximityDecisionPolicyTest {
     }
 
     @Test
+    fun captured0134MidRangeColdArrivalCanRecoverAfterHandshake() {
+        val policy = ProximityDecisionPolicy()
+
+        // 0.1.34-aborted-arrival-no-response.log: the only offloaded presence callback arrived at
+        // -82 dBm while moving. BLE connected and SESSION_READY followed, then RSSI rose as high as
+        // -61, but the old -83 entry cut-off had permanently discarded the arrival epoch.
+        policy.onPresenceMatch(0L, -82, true, -86)
+        assertFalse(policy.shouldUnlock(100L, -80, true, -86))
+        assertTrue("a moving -82 presence followed by a sustained rise must qualify",
+            policy.shouldUnlock(300L, -80, true, -86))
+    }
+
+    @Test
+    fun midRangePresenceStillRequiresMotionAndRisingEvidence() {
+        val noMotion = ProximityDecisionPolicy()
+        noMotion.onPresenceMatch(0L, -82, false, -86)
+        assertFalse(noMotion.shouldUnlock(100L, -80, false, -86))
+        assertFalse(noMotion.shouldUnlock(300L, -78, false, -86))
+
+        val noRise = ProximityDecisionPolicy()
+        noRise.onPresenceMatch(0L, -82, true, -86)
+        assertFalse(noRise.shouldUnlock(100L, -82, true, -86))
+        assertFalse(noRise.shouldUnlock(300L, -83, true, -86))
+    }
+
+    @Test
+    fun strongNearBoundaryCannotCreatePresenceArrival() {
+        listOf(-72, -71, -58).forEach { entryRssi ->
+            val policy = ProximityDecisionPolicy()
+            policy.onPresenceMatch(0L, entryRssi, true, -86)
+            assertFalse("strong/ambiguous entry must remain rejected; rssi=$entryRssi",
+                policy.shouldUnlock(100L, -70, true, -86))
+            assertFalse(policy.shouldUnlock(300L, -68, true, -86))
+        }
+    }
+
+    @Test
+    fun midRangeReturnAfterLinkEndCanCreateFreshArrivalEpoch() {
+        val policy = ProximityDecisionPolicy()
+        policy.onDepartureLockStarted()
+        policy.onLinkEnded()
+
+        policy.onPresenceMatch(0L, -82, true, -86)
+        assertFalse(policy.shouldUnlock(100L, -80, true, -86))
+        assertTrue(policy.shouldUnlock(300L, -79, true, -86))
+    }
+
+    @Test
     fun captured031TurnaroundWithoutOpeningLocksBeforeSessionIsLost() {
         val policy = ProximityDecisionPolicy()
         var now = 0L

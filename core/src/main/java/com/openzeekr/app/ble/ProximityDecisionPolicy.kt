@@ -67,7 +67,7 @@ internal class ProximityDecisionPolicy {
     fun onPresenceMatch(nowMs: Long, rssi: Int, moving: Boolean, unlockThreshold: Int) {
         expirePresenceApproach(nowMs)
         if (departureLatched) {
-            if (!departureLinkEnded || !moving || rssi > unlockThreshold + PRESENCE_ENTRY_MARGIN_DB) {
+            if (!departureLinkEnded || !isEligiblePresenceEntry(rssi, moving)) {
                 return
             }
             // This is the first eligible presence event after the departure session ended: it owns a
@@ -80,9 +80,11 @@ internal class ProximityDecisionPolicy {
             return
         }
         // A first hit already strong at the door is ambiguous: it can be the start of a departure.
-        // Only a moving, edge-range hit starts an arrival epoch. 0.1.24 began at -58 and is rejected;
-        // both real 0.1.28 arrivals began at -83/-84 and are retained across the handshake/status 133.
-        if (moving && rssi <= unlockThreshold + PRESENCE_ENTRY_MARGIN_DB) {
+        // Admit a moving edge/mid-range hit provisionally, then require the rising, sustained proof
+        // in shouldUnlock(). The old unlock-relative cut-off rejected the captured 0.1.34 cold
+        // arrival at -82 by just 1 dB and could never recover, even though the signal then rose to
+        // -61. The absolute strong-near boundary still rejects the 0.1.24 departure hit at -58.
+        if (isEligiblePresenceEntry(rssi, moving)) {
             presenceApproachAtMs = nowMs
             presenceEntryRssi = rssi
             presencePeakRssi = rssi
@@ -371,6 +373,9 @@ internal class ProximityDecisionPolicy {
         presenceNearSinceMs = UNSET_MS
     }
 
+    private fun isEligiblePresenceEntry(rssi: Int, moving: Boolean): Boolean =
+        moving && rssi < STRONG_NEAR_RSSI
+
     private companion object {
         const val UNSET_MS = -1L
         const val STRONG_NEAR_RSSI = -72
@@ -381,7 +386,6 @@ internal class ProximityDecisionPolicy {
         const val APPROACH_CONFIRM_MS = 400L
         const val DOOR_CONFIRM_MS = 1_200L
         const val UNLOCK_EVIDENCE_TTL_MS = 5_000L
-        const val PRESENCE_ENTRY_MARGIN_DB = 3
         // The offloaded presence hit + real motion + a rising signal already prove an approach.
         // Requiring another +4 dB after the DK handshake delayed the field-proven 0.1.33 cold start
         // by ~1.35 s. Keep the two-sample confirmation, but allow readiness at the configured Far
