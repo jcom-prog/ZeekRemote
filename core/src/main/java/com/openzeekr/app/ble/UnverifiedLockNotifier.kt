@@ -15,7 +15,19 @@ internal object UnverifiedLockNotifier {
     private const val CHANNEL_ID = "unverified_lock"
     private const val NOTIFICATION_ID = 43
 
-    fun show(context: Context): Boolean = runCatching {
+    fun show(context: Context): Boolean = post(context,
+        "Vehicle lock not confirmed",
+        "ZeekRemote cannot confirm the car is locked. Automatic Lock is off in this test build. Lock manually and check the car.")
+
+    fun showManualLockRequired(context: Context): Boolean = post(context,
+        "Automatic Lock off: lock manually",
+        "This test build will not lock the car when you leave. Use Lock and check the car before walking away.")
+
+    fun showPossibleDeparture(context: Context): Boolean = post(context,
+        "Possible departure: lock manually",
+        "The car may still be unlocked. This test build will not send automatic Lock. Lock manually and check the car.")
+
+    private fun post(context: Context, title: String, message: String): Boolean = runCatching {
         val manager = NotificationManagerCompat.from(context)
         if (!manager.areNotificationsEnabled()) return false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -34,15 +46,15 @@ internal object UnverifiedLockNotifier {
             PendingIntent.getActivity(context, NOTIFICATION_ID, it,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         }
-        val message = "ZeekRemote cannot confirm the car is locked. Check the car and lock it if needed."
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_logo)
-            .setContentTitle("Vehicle lock not confirmed")
+            .setContentTitle(title)
             .setContentText(message)
             .setStyle(NotificationCompat.BigTextStyle().bigText(message))
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(false)
+            .setOngoing(true)
             .apply { tap?.let { setContentIntent(it) } }
             .build()
         manager.notify(NOTIFICATION_ID, notification)

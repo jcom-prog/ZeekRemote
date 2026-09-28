@@ -83,6 +83,12 @@ class MotionMonitor(context: Context) {
         private set
     val hasSource: Boolean get() = source != Source.NONE
 
+    /** Diagnostic only: counted step-detector events, when the sensor is available. */
+    @Volatile private var countedSteps = 0L
+    @Volatile private var diagnosticStepListenerActive = false
+    val observedSteps: Long? get() = if (diagnosticStepListenerActive || source == Source.STEP ||
+        (source == Source.ACTIVITY && nonWakeStepDetector != null)) countedSteps else null
+
     /** Invoked once on each STILL→MOVING edge (any source). Lets the caller cancel a long idle sleep. */
     @Volatile var onMovingEdge: (() -> Unit)? = null
 
@@ -123,10 +129,16 @@ class MotionMonitor(context: Context) {
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
         override fun onSensorChanged(event: SensorEvent) {
             if (!running) return
+            countedSteps++
             setMoving()
             stillHandler.removeCallbacks(stepStillRunnable)
             stillHandler.postDelayed(stepStillRunnable, STEP_STILL_TIMEOUT_MS)
         }
+    }
+    /** When hardware motion triggers own wake-up, count steps without changing that wake policy. */
+    private val diagnosticStepListener = object : SensorEventListener {
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+        override fun onSensorChanged(event: SensorEvent) { if (running) countedSteps++ }
     }
 
     fun start() {
@@ -136,6 +148,11 @@ class MotionMonitor(context: Context) {
         if (motionDetect != null || stationaryDetect != null) {
             armMotion(); armStationary()
             source = Source.SENSORS
+            val stepSensor = nonWakeStepDetector ?: wakeStepDetector
+            diagnosticStepListenerActive = stepSensor?.let {
+                runCatching { sensors?.registerListener(diagnosticStepListener, it,
+                    SensorManager.SENSOR_DELAY_NORMAL) == true }.getOrDefault(false)
+            } ?: false
             Logx.d("motion", "started via trigger sensors")
             return
         }
@@ -175,6 +192,8 @@ class MotionMonitor(context: Context) {
         runCatching { stationaryDetect?.let { sensors?.cancelTriggerSensor(onStationary, it) } }
         runCatching { significantMotion?.let { sensors?.cancelTriggerSensor(onSignificant, it) } }
         runCatching { sensors?.unregisterListener(onStep) }
+        runCatching { sensors?.unregisterListener(diagnosticStepListener) }
+        diagnosticStepListenerActive = false
         stillHandler.removeCallbacks(stepStillRunnable)
         stopActivityRecognition()
         active = null

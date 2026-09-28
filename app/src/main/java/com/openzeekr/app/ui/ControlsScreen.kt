@@ -268,7 +268,7 @@ private fun StatusRow(label: String, value: String?) {
     }
 }
 
-/** Approach-unlock / walk-away-lock: live RSSI, zone, tunable thresholds. */
+/** Approach unlock and passive departure diagnostics for this field-test build. */
 @Composable
 private fun ProximityCard(deps: Deps) {
     val context = LocalContext.current
@@ -314,7 +314,7 @@ private fun ProximityCard(deps: Deps) {
                     ) { Icon(Icons.Filled.Bolt, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp)) }
                     Column {
                         Text("Proximity unlock", fontWeight = FontWeight.SemiBold)
-                        Text("RSSI approach / walk-away", style = MaterialTheme.typography.bodySmall,
+                        Text("RSSI approach / departure observation", style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
@@ -331,11 +331,15 @@ private fun ProximityCard(deps: Deps) {
                 )
             }
 
+            Text("TEST MODE: automatic Lock is OFF. Lock manually and check the car before leaving.",
+                style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.error)
+
             AnimatedVisibility(visible = prox.running) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     val zone = when (prox.zone) {
                         ProximityController.Zone.NEAR -> "NEAR → unlock"
-                        ProximityController.Zone.FAR -> "FAR → lock"
+                        ProximityController.Zone.FAR -> "FAR → observe only"
                         ProximityController.Zone.UNKNOWN -> "—"
                     }
                     val phase = when (prox.phase) {

@@ -14,19 +14,18 @@ import kotlinx.coroutines.launch
 import kotlin.math.pow
 
 /**
- * Approach-unlock / walk-away-lock driven by BLE RSSI, with distance + trend hysteresis.
+ * Approach unlock and passive walk-away diagnosis driven by BLE RSSI.
  *
- * Rides the live keep-alive session (see [ProximityService]); it reads the connected-GATT RSSI
- * and never owns the connection. Connected RSSI is the accurate near-field ranging source.
+ * Rides the live keep-alive session (see [ProximityService]); it reads connected-GATT RSSI and
+ * never owns the connection. RSSI is NOT a reliable physical distance: the 0.1.42 field test
+ * produced the same confirmed departure pattern beside the car as during a real walk-away.
  *
  * Decision model (the tuning the user asked for):
- *  - **Latch**: once we auto-unlock we set [armedUnlocked] and won't unlock again until a lock
- *    happens — so no repeated unlock spam while you stand at the car.
- *  - **Trend**: unlock only while *approaching* (RSSI rising), lock only while *receding* — a flat
- *    signal (you're parked next to it, or the app just launched at the car) does nothing.
+ *  - **Latch**: after auto-unlock [armedUnlocked] prevents repeated unlocks until manual lock.
+ *  - **Observe only**: a departure candidate never sends an automatic BLE or cloud Lock.
  *  - **Hysteresis**: unlock at/above [ConfigStore.sensitivityUnlockRssi] (≈ near), lock at/below
  *    [ConfigStore.sensitivityLockRssi] (≈ farther). The gap between them stops flapping.
- *  - **Cooldown**: after any action, ignore new triggers for [ACTION_COOLDOWN_MS].
+ *  - **Cooldown**: after an action, ignore new triggers for [ACTION_COOLDOWN_MS].
  *  - **Adaptive cadence**: 200 ms burst polling while near a threshold or moving (cheap over an
  *    already-open link), 2 s when solidly far/near and steady (low power).
  *
@@ -108,6 +107,14 @@ class ProximityController(
     // so this is at least as persistent as unlock and falls back to a cloud lock if BLE won't confirm.
     private var lockJob: Job? = null
     private var lockConfirmationJob: Job? = null
+    private val autoLockGate = AutomaticLockGate() // Test build: observe departures; never actuate.
+    private var unlockObservedAtMs = 0L
+    private var stepsAtUnlock: Long? = null
+    private var strongestRssiSinceUnlock = Int.MIN_VALUE
+    private var lastStrongNearAtMs = 0L
+    private var lastShadowDepartureAtMs = 0L
+    private var shadowDepartureWarned = false
+    private var shadowRecoveryLogged = false
     // Set while the unlocked "activity watch" is idling; the car's next frame completes it (instant wake).
     @Volatile private var activityWake: CompletableDeferred<Unit>? = null
 
@@ -268,6 +275,10 @@ class ProximityController(
             } else {
                 // Keep drive authorization alive, but respect the user's disabled proximity toggle.
                 ble.noteUnlockConfirmed()
+                val posted = UnverifiedLockNotifier.showManualLockRequired(appContext)
+                _state.value = _state.value.copy(lastAction =
+                    "Automatic Lock OFF · lock manually after leaving")
+                Logx.w("prox", "manual Lock required after unlock; notification posted=$posted")
                 Logx.d("prox", "unlock confirmed ($source); proximity disabled/stopped -> walk-away not armed")
             }
         }
@@ -318,10 +329,21 @@ class ProximityController(
         armedUnlocked = true
         postUnlockFastUntilElapsedMs = android.os.SystemClock.elapsedRealtime() + POST_UNLOCK_FAST_MONITOR_MS
         decisionPolicy.onUnlockConfirmed(now)
+        unlockObservedAtMs = now
+        stepsAtUnlock = motion.observedSteps
+        strongestRssiSinceUnlock = Int.MIN_VALUE
+        lastStrongNearAtMs = 0L
+        lastShadowDepartureAtMs = 0L
+        shadowDepartureWarned = false
+        shadowRecoveryLogged = false
         lastTriggerMs = now
         _wakeLockNeeded.value = true
         activityWake?.complete(Unit)
-        Logx.d("prox", "unlock confirmed ($source) -> walk-away armed; fast RSSI for ${POST_UNLOCK_FAST_MONITOR_MS}ms")
+        val posted = UnverifiedLockNotifier.showManualLockRequired(appContext)
+        _state.value = _state.value.copy(lastAction =
+            "Automatic Lock OFF · lock manually after leaving")
+        Logx.d("prox", "unlock confirmed ($source) -> passive departure watch; " +
+            "auto Lock DISABLED; reminder posted=$posted; fast RSSI for ${POST_UNLOCK_FAST_MONITOR_MS}ms")
         if (ble.state.value !in setOf(DkBleManager.State.SESSION_READY, DkBleManager.State.CONNECTED)) {
             if (linkLostAtMs == 0L) linkLostAtMs = now
             queueUnverifiedLockAlert()
@@ -335,10 +357,13 @@ class ProximityController(
             decisionPolicy.onLinkEnded()
             linkLostAtMs = System.currentTimeMillis()
             // RSSI/body shielding and a real departure can both tear down the link. Neither a timer
-            // nor the last (possibly stale) RSSI can tell them apart. Only a confirmed departure while
-            // connected is allowed to initiate an automatic lock.
-            Logx.d("prox", "link down (lastRssi=$lostRssi armed=$armedUnlocked) " +
-                "-> reconnect only; no unverified automatic lock")
+            // nor the last (possibly stale) RSSI can tell them apart. This test build never auto-locks.
+            val observedStepsSinceUnlock = stepsAtUnlock?.let { baseline ->
+                motion.observedSteps?.let { (it - baseline).coerceAtLeast(0L) }
+            }
+            Logx.d("prox", "link down (lastRssi=$lostRssi armed=$armedUnlocked " +
+                "stepsSinceUnlock=${observedStepsSinceUnlock ?: "unavailable"}) " +
+                "-> reconnect only; no automatic lock")
             queueUnverifiedLockAlert()
             gattEma = null
             inCarSinceMs = 0L; steadyRef = null; steadySinceMs = 0L; lastCadence = ""
@@ -456,11 +481,42 @@ class ProximityController(
 
     private fun requestVerifiedWalkAwayLock(reason: String) {
         if (lockConfirmationJob?.isActive == true) return
+        if (System.currentTimeMillis() - lastShadowDepartureAtMs < SHADOW_REARM_MS) {
+            decisionPolicy.onWalkAwayVerificationFailed()
+            return
+        }
         lockConfirmationJob = scope.launch {
             if (confirmWalkAway() && armedUnlocked && _state.value.running &&
                 store.current().proximityEnabled) {
-                armedUnlocked = false
-                startLockLoop(reason)
+                when (autoLockGate.onVerifiedDeparture()) {
+                    AutomaticLockGate.Action.WARN_MANUAL_LOCK -> {
+                        lastShadowDepartureAtMs = System.currentTimeMillis()
+                        shadowRecoveryLogged = false
+                        val steps = stepsAtUnlock?.let { baseline ->
+                            motion.observedSteps?.let { (it - baseline).coerceAtLeast(0L) }
+                        }
+                        val lastStrongAgeMs = if (lastStrongNearAtMs == 0L) null
+                            else lastShadowDepartureAtMs - lastStrongNearAtMs
+                        // Do not buzz the user every time the noisy RSSI repeats the same candidate.
+                        val posted = if (!shadowDepartureWarned) {
+                            shadowDepartureWarned = true
+                            UnverifiedLockNotifier.showPossibleDeparture(appContext)
+                        } else false
+                        _state.value = _state.value.copy(lastAction =
+                            "Possible departure · auto Lock OFF · lock manually")
+                        Logx.w("prox", "SHADOW_DEPARTURE source=$reason " +
+                            "ageSinceUnlockMs=${lastShadowDepartureAtMs - unlockObservedAtMs} " +
+                            "stepsSinceUnlock=${steps ?: "unavailable"} " +
+                            "strongestRssi=$strongestRssiSinceUnlock " +
+                            "lastStrongAgeMs=${lastStrongAgeMs ?: "unavailable"} " +
+                            "motion=${motion.state.value} reminderPosted=$posted; NO LOCK SENT")
+                        decisionPolicy.onWalkAwayVerificationFailed()
+                    }
+                    AutomaticLockGate.Action.LOCK -> {
+                        armedUnlocked = false
+                        startLockLoop(reason)
+                    }
+                }
             } else {
                 decisionPolicy.onWalkAwayVerificationFailed()
             }
@@ -491,6 +547,17 @@ class ProximityController(
         lostRssi = smoothed    // diagnostic only; never sufficient to lock after link loss
 
         val now = System.currentTimeMillis()
+        if (armedUnlocked) {
+            strongestRssiSinceUnlock = maxOf(strongestRssiSinceUnlock, rssi)
+            if (rssi >= STRONG_NEAR_DIAGNOSTIC_RSSI) {
+                lastStrongNearAtMs = now
+                if (lastShadowDepartureAtMs != 0L && !shadowRecoveryLogged) {
+                    shadowRecoveryLogged = true
+                    Logx.d("prox", "SHADOW_RECOVERY strong signal after " +
+                        "${now - lastShadowDepartureAtMs}ms; manual Lock still required")
+                }
+            }
+        }
         val armedDecision = if (armedUnlocked) decisionPolicy.onUnlockedSample(
             now, smoothed, motion.state.value == MotionMonitor.Motion.MOVING, lockThresh,
         ) else ProximityDecisionPolicy.ArmedDecision.NONE
@@ -691,6 +758,11 @@ class ProximityController(
      * CLOUD lock so the car locks regardless. Runs to completion — unlike unlock there's nothing to cancel.
      */
     private fun startLockLoop(reason: String) {
+        // A second boundary guards future call sites. In observe mode no automatic BLE or cloud
+        // lock path may execute; manual commands from VehicleControl remain available.
+        check(autoLockGate.onVerifiedDeparture() == AutomaticLockGate.Action.LOCK) {
+            "Automatic Lock is disabled in this test build"
+        }
         if (lockJob?.isActive == true) return
         // A pending unlock loop is now moot (we've decided you're leaving) — stop it fighting us.
         needToUnlock = false; unlockJob?.cancel(); unlockJob = null
@@ -913,6 +985,8 @@ class ProximityController(
         // This delay suppresses a warning for brief reconnects; it NEVER authorizes a lock.
         private const val UNVERIFIED_LOCK_ALERT_DELAY_MS = 10_000L
         private const val UNVERIFIED_LOCK_ALERT_WAKE_MS = 15_000L
+        private const val SHADOW_REARM_MS = 15_000L
+        private const val STRONG_NEAR_DIAGNOSTIC_RSSI = -78
         private const val CLOUD_LOCK_MAX_REQUESTS = 2
         private const val CLOUD_LOCK_STATUS_POLLS = 3
         private const val CLOUD_LOCK_STATUS_POLL_MS = 2_000L
