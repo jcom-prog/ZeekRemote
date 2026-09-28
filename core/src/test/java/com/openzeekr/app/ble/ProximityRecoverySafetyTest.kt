@@ -41,4 +41,27 @@ class ProximityRecoverySafetyTest {
         assertEquals(ProximityDecisionPolicy.ArmedDecision.NONE,
             policy.onUnlockedSample(4_600L, -90, true, -82))
     }
+
+    @Test fun `remaining close never acquires a time based lock even during motion`() {
+        val policy = ProximityDecisionPolicy()
+        policy.onUnlockConfirmed(0L)
+        for (time in 0L..600_000L step 1_000L) {
+            val decision = policy.onUnlockedSample(time, -65, true, -82)
+            assertTrue(decision != ProximityDecisionPolicy.ArmedDecision.LOCK)
+        }
+    }
+
+    @Test fun `a moving departure still produces a lock candidate while connected`() {
+        val policy = ProximityDecisionPolicy()
+        policy.onUnlockConfirmed(0L)
+        for (time in 0L..2_000L step 200L) {
+            policy.onUnlockedSample(time, -65, true, -82)
+        }
+        var last = ProximityDecisionPolicy.ArmedDecision.NONE
+        for (time in 2_200L..5_800L step 200L) {
+            val rssi = -83 - ((time - 2_200L) / 400L).toInt()
+            last = policy.onUnlockedSample(time, rssi, true, -82)
+        }
+        assertEquals(ProximityDecisionPolicy.ArmedDecision.LOCK, last)
+    }
 }

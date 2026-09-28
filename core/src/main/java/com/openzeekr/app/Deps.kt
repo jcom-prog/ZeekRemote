@@ -131,6 +131,7 @@ class Deps(context: Context) {
         control,
         onUnlockConfirmed = proximity::onExternalUnlockConfirmed,
         onLockConfirmed = proximity::onExternalLockConfirmed,
+        onCloudLockAccepted = proximity::onExternalCloudLockAccepted,
     )
     /** Call after the base URL / sign algo changes so the HTTP client rebuilds. */
     fun onEndpointChanged() = apiClient.rebuild()

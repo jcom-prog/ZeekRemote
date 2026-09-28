@@ -24,6 +24,7 @@ class VehicleControl(
     private val cloud: RemoteControlRepository,
     private val onUnlockConfirmed: (String) -> Unit = {},
     private val onLockConfirmed: (String) -> Unit = {},
+    private val onCloudLockAccepted: () -> Unit = {},
 ) {
     /** DK 0x0110 control byte for a command, or null if it must go via the cloud. */
     private fun bleByte(cmd: Command): Byte? = when (cmd) {
@@ -65,12 +66,14 @@ class VehicleControl(
             }
             Logx.d("ctl", "${cmd.name}: BLE $r — falling back to cloud")
         }
+        // Cloud Ok acknowledges a request; it does not confirm physical lock actuation.
+        // Use a separate callback so proximity cannot confuse it with a BLE-confirmed lock.
         return cloud.send(cmd, extraParams).also { result ->
             if (cmd == Command.UNLOCK && result is CallResult.Ok) {
                 onUnlockConfirmed("manual cloud control")
             }
             if (cmd == Command.LOCK && result is CallResult.Ok) {
-                onLockConfirmed("manual cloud control")
+                onCloudLockAccepted()
             }
         }
     }
