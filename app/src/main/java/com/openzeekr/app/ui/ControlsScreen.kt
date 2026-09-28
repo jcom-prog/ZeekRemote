@@ -365,7 +365,7 @@ private fun ProximityCard(deps: Deps) {
 
             // Single knob: unlock threshold, floored at -65 dBm (can't be set weaker).
             // The lock threshold is derived (unlock − 5 dB) so the two never overlap.
-            Text("Unlock at ≥ ${cfg.effectiveUnlockRssi} dBm   ·   auto-lock at ≤ ${cfg.effectiveLockRssi} dBm",
+            Text("Unlock at ≥ ${cfg.effectiveUnlockRssi} dBm   ·   departure observed at ≤ ${cfg.effectiveLockRssi} dBm (no automatic Lock)",
                 style = MaterialTheme.typography.bodySmall)
             Slider(
                 value = cfg.effectiveUnlockRssi.toFloat(),

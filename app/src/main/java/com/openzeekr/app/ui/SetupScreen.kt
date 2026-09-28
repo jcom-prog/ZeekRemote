@@ -211,8 +211,9 @@ fun SetupScreen(
                     Icon(Icons.Filled.Sensors, null, tint = Brand.accent, modifier = Modifier.size(20.dp))
                 }
                 Column(Modifier.weight(1f)) {
-                    Text("Approach unlock & walk-away lock", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                    Text("Unlock as you near the car, lock when you leave.", color = Brand.muted, fontSize = 12.sp)
+                    Text("Approach unlock · Lock manually", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Text("TEST MODE: automatic Lock is OFF. Check the car before leaving.",
+                        color = Brand.crit, fontSize = 12.sp)
                 }
                 Switch(checked = cfg.proximityEnabled, onCheckedChange = { on -> config.update { it.copy(proximityEnabled = on) } }, colors = brandSwitchColors(Brand.good))
             }
@@ -226,8 +227,8 @@ fun SetupScreen(
                 Text(
                     when (cfg.proximitySensitivity) {
                         "veryclose" -> "Unlocks within arm's reach · most secure"
-                        "far" -> "Unlocks earlier while approaching · locks around ~3 m when leaving"
-                        else -> "Unlocks within ~1–2 m · locks as you walk away"
+                        "far" -> "Unlocks earlier while approaching · Lock manually before leaving"
+                        else -> "Unlocks within ~1–2 m · Lock manually before leaving"
                     },
                     color = Brand.faint, fontSize = 11.5.sp,
                 )
