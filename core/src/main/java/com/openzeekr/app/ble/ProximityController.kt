@@ -97,6 +97,8 @@ class ProximityController(
 
     // Hysteresis latch: true once the car has CONFIRMED our auto-unlock (next auto action is a lock).
     private var armedUnlocked = false
+    // A new unlock can be followed by a quiet walk-away before the car emits another status frame.
+    private var postUnlockFastUntilElapsedMs = 0L
     // Time-based evidence gate. This owns arrival/departure confirmation so neither the fast RSSI
     // path nor the periodic idle check can actuate from one noisy threshold crossing.
     private val decisionPolicy = ProximityDecisionPolicy()
@@ -153,6 +155,7 @@ class ProximityController(
         // Keep armedUnlocked as-is across start/stop toggles within a session isn't meaningful;
         // reset so a fresh monitor starts from a known state.
         armedUnlocked = false
+        postUnlockFastUntilElapsedMs = 0L
         decisionPolicy.resetLocked()
         needToUnlock = false; unlockJob?.cancel(); unlockJob = null
         farAsleep = false; nearRefDist = null; nearStillSinceMs = 0L
@@ -279,11 +282,12 @@ class ProximityController(
         val now = System.currentTimeMillis()
         ble.noteUnlockConfirmed()
         armedUnlocked = true
+        postUnlockFastUntilElapsedMs = android.os.SystemClock.elapsedRealtime() + POST_UNLOCK_FAST_MONITOR_MS
         decisionPolicy.onUnlockConfirmed(now)
         lastTriggerMs = now
         _wakeLockNeeded.value = true
         activityWake?.complete(Unit)
-        Logx.d("prox", "unlock confirmed ($source) -> walk-away armed")
+        Logx.d("prox", "unlock confirmed ($source) -> walk-away armed; fast RSSI for ${POST_UNLOCK_FAST_MONITOR_MS}ms")
     }
 
     // ---------------- no live session ----------------
@@ -338,7 +342,8 @@ class ProximityController(
     /**
      * Unlocked "activity watch" (replaces polling while armed). The car pushes status frames only on
      * CHANGE — bursts while you move, long silence while parked-still — so:
-     *  - SILENT (no inbound for ≥ ARMED_ACTIVE_MS): you're settled → idle with ZERO RSSI polling,
+     *  - SILENT (no inbound for ≥ ARMED_ACTIVE_MS, after the post-unlock window): idle with
+     *    periodic RSSI checks,
      *    BLOCKING on the car's next frame ([activityWake], completed by onInboundActivity for an instant
      *    wake) or a periodic safety timeout that does one RSSI check (catches a quiet drift-away).
      *  - ACTIVE (a frame just arrived = you're moving / getting out): track at FULL SPEED — read RSSI
@@ -351,7 +356,12 @@ class ProximityController(
             return
         }
         val quietMs = System.currentTimeMillis() - ble.lastInboundMs
-        if (quietMs >= ARMED_ACTIVE_MS) {
+        if (quietMs >= ARMED_ACTIVE_MS &&
+            android.os.SystemClock.elapsedRealtime() >= postUnlockFastUntilElapsedMs) {
+            if (postUnlockFastUntilElapsedMs != 0L) {
+                postUnlockFastUntilElapsedMs = 0L
+                Logx.d("prox", "post-unlock fast RSSI window ended; armed idle checks resumed")
+            }
             val wake = CompletableDeferred<Unit>()
             activityWake = wake
             val woke = try { withTimeoutOrNull(ARMED_IDLE_MAX_MS) { wake.await() } != null } finally { activityWake = null }
@@ -371,7 +381,8 @@ class ProximityController(
             }
             return
         }
-        // Recent car activity → full-speed RSSI track; onSample owns the walk-away-lock decision.
+        // Recent car activity OR the bounded post-unlock window: full-speed RSSI tracking.
+        // The car can stay silent while the user turns around and walks away immediately.
         val rssi = ble.pollRemoteRssi()
         if (rssi != null) { rssiNullStreak = 0; onSample(rssi) }
         else if (++rssiNullStreak >= RSSI_NULL_RECONNECT) { rssiNullStreak = 0; forceReconnect() }
@@ -668,9 +679,9 @@ class ProximityController(
             }
             if (!confirmed) {
                 Logx.w("prox", "$reason: BLE lock unconfirmed after $attempt attempts — falling back to CLOUD lock")
-                val cloud = runCatching { cloudLock() }.getOrDefault(false)
-                Logx.d("prox", "$reason: cloud lock -> ${if (cloud) "ok" else "FAILED"}")
-                _state.value = _state.value.copy(lastAction = "$reason · ${if (cloud) "cloud-locked ✓" else "LOCK FAILED ✗"}")
+                val cloudVerified = verifyCloudLock(reason)
+                _state.value = _state.value.copy(lastAction =
+                    "$reason · ${if (cloudVerified) "cloud status LOCKED (2×)" else "LOCK NOT VERIFIED ✗"}")
             } else {
                 _state.value = _state.value.copy(lastAction = "$reason · locked ✓")
             }
@@ -680,12 +691,12 @@ class ProximityController(
 
     /**
      * Out-of-range CLOUD lock backstop. Runs when the BLE link drops as a walk-away that the BLE
-     * walk-away-lock path won't cover (we didn't unlock it). Holds a dedicated ~20s wakelock so the
+     * walk-away-lock path won't cover (we didn't unlock it). Holds a bounded wakelock so the
      * check completes even as the CPU tries to suspend after the drop, waits [LINK_LOSS_LOCK_DELAY_MS]
      * to let a transient drop reconnect, then: if the link is back → skip; else read the cloud lock
      * state — if the car is already locked, do nothing; otherwise (unlocked or unknown) issue a cloud
-     * lock. Never leaves the car open on a missed lock. Idempotent: a cloud lock on an already-locked
-     * car is harmless, so "unknown" errs toward locking.
+     * lock. A cloud acknowledgment alone cannot prove the car physically locked; poll status and
+     * expose an unverified result rather than claiming success. "Unknown" still requests a lock.
      */
     private fun cloudLockSafetyNet(reason: String) {
         scope.launch {
@@ -706,15 +717,42 @@ class ProximityController(
                     _state.value = _state.value.copy(lastAction = "$reason · already locked ✓")
                     return@launch
                 }
-                val ok = runCatching { cloudLock() }.getOrDefault(false)
+                val verified = verifyCloudLock(reason)
                 Logx.d("prox", "$reason: car ${if (locked == false) "unlocked" else "state unknown"} " +
-                    "-> cloud lock ${if (ok) "ok" else "FAILED"}")
+                    "-> cloud status ${if (verified) "LOCKED twice" else "NOT VERIFIED"}")
                 _state.value = _state.value.copy(
-                    lastAction = "$reason · ${if (ok) "cloud-locked ✓" else "LOCK FAILED ✗"}",
+                    lastAction = "$reason · ${if (verified) "cloud status LOCKED (2×)" else "LOCK NOT VERIFIED ✗"}",
                 )
             } finally {
                 releaseSafetyWakelock(wl)
             }
+        }
+    }
+
+    /** A successful HTTP response acknowledges the request, not a physical door lock. */
+    private suspend fun verifyCloudLock(reason: String): Boolean {
+        val wl = acquireSafetyWakelock()
+        try {
+            repeat(CLOUD_LOCK_MAX_REQUESTS) { requestIndex ->
+                val accepted = runCatching { cloudLock() }.getOrDefault(false)
+                Logx.d("prox", "$reason: cloud lock request #${requestIndex + 1} " +
+                    if (accepted) "accepted; checking vehicle status" else "rejected")
+                if (!accepted) return@repeat
+                var consecutiveLocked = 0
+                repeat(CLOUD_LOCK_STATUS_POLLS) {
+                    delay(CLOUD_LOCK_STATUS_POLL_MS)
+                    val state = runCatching { cloudIsLocked() }.getOrNull()
+                    Logx.d("prox", "$reason: cloud lock vehicle state=" +
+                        when (state) { true -> "LOCKED"; false -> "UNLOCKED"; null -> "unknown" })
+                    if (state == true) {
+                        if (++consecutiveLocked >= 2) return true
+                    } else consecutiveLocked = 0
+                }
+            }
+            Logx.w("prox", "$reason: cloud lock status not verified; physical lock state unknown")
+            return false
+        } finally {
+            releaseSafetyWakelock(wl)
         }
     }
 
@@ -866,9 +904,12 @@ class ProximityController(
         private const val ALPHA_FAST = 0.6
         private const val ALPHA_SLOW = 0.35
         private const val LINK_LOSS_LOCK_DELAY_MS = 5_000L
-        // Out-of-range cloud lock backstop: hold the CPU up to ~20s (drop-settle delay + status GET +
-        // lock command) so the check completes even as the phone tries to sleep after a walk-away drop.
-        private const val CLOUD_NET_WAKELOCK_MS = 20_000L
+        // Out-of-range cloud lock backstop: bound the CPU hold while status and retries finish.
+        private const val CLOUD_NET_WAKELOCK_MS = 45_000L
+        private const val CLOUD_LOCK_MAX_REQUESTS = 2
+        private const val CLOUD_LOCK_STATUS_POLLS = 3
+        private const val CLOUD_LOCK_STATUS_POLL_MS = 2_000L
+        private const val POST_UNLOCK_FAST_MONITOR_MS = 25_000L
         // Approach-unlock BT-reset retry: time to let a teardown settle to IDLE, and to wait for
         // the fresh session to come up before the second (final) unlock attempt.
         private const val RESET_SETTLE_MS = 1_500L
