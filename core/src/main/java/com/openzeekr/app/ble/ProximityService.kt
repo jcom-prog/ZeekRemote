@@ -12,6 +12,7 @@ import android.bluetooth.BluetoothAdapter
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -299,6 +300,7 @@ class ProximityService : Service() {
                             presenceRecoveryActive = presenceRecoveryActive,
                             presenceArmed = deps.ble.presenceArmed,
                             normallyAggressive = normallyAggressive,
+                            screenInteractive = (getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive,
                         )
                         val aggressive = recoveryRoute == DeepSleepRecoveryPolicy.Route.FOREGROUND_SCAN
                         if (offload && !aggressive) {
@@ -315,7 +317,10 @@ class ProximityService : Service() {
                                 // This filtered PendingIntent scan stays in the BT controller and holds
                                 // no CPU wakelock, so it can listen all day without foreground scanning.
                                 val fast = moving && System.currentTimeMillis() < fastPresenceUntilMs
-                                deps.ble.armPresenceScan(approachMode = moving, lowLatency = fast)
+                                if (!deps.ble.armPresenceScan(approachMode = moving, lowLatency = fast)) {
+                                    Logx.w("svc", "keep-alive: hardware presence registration failed; trying foreground fallback")
+                                    runCatching { deps.ble.connect(null) }
+                                }
                             }
                         } else {
                             // Legacy (offload off), OR aggressive reconnect while walking up: foreground

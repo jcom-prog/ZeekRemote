@@ -106,6 +106,7 @@ class ProximityController(
     // Confirmed-lock loop (walk-away). Locking matters more than unlocking — never leave the car open —
     // so this is at least as persistent as unlock and falls back to a cloud lock if BLE won't confirm.
     private var lockJob: Job? = null
+    private var lockConfirmationJob: Job? = null
     // Set while the unlocked "activity watch" is idling; the car's next frame completes it (instant wake).
     @Volatile private var activityWake: CompletableDeferred<Unit>? = null
 
@@ -214,6 +215,7 @@ class ProximityController(
         monitorJob?.cancel(); monitorJob = null
         needToUnlock = false; unlockJob?.cancel(); unlockJob = null
         lockJob?.cancel(); lockJob = null
+        lockConfirmationJob?.cancel(); lockConfirmationJob = null
         ble.onInboundActivity = null; activityWake?.complete(Unit); activityWake = null
         motion.onMovingEdge = null; motionWake?.complete(Unit); motionWake = null
         motion.stop()
@@ -344,14 +346,18 @@ class ProximityController(
      * A hard link drop is handled by [onSessionDown] (locks if it can't reconnect = out of range).
      */
     private suspend fun armedWatch() {
+        if (lockConfirmationJob?.isActive == true) {
+            delay(MONITOR_FAST_MS)
+            return
+        }
         val quietMs = System.currentTimeMillis() - ble.lastInboundMs
         if (quietMs >= ARMED_ACTIVE_MS) {
             val wake = CompletableDeferred<Unit>()
             activityWake = wake
             val woke = try { withTimeoutOrNull(ARMED_IDLE_MAX_MS) { wake.await() } != null } finally { activityWake = null }
             if (woke) { Logx.d("prox", "armed idle -> woke on car activity (tracking full-speed)"); return }
-            // Safety re-check on the periodic timeout: a single RSSI read; lock if we've drifted far
-            // without the car ever pushing (rare — moving normally generates frames).
+            // Safety re-check on the periodic timeout. A single RSSI read may be stale or
+            // body-shadowed; confirm fresh separation before any idle walk-away lock.
             val rssi = ble.pollRemoteRssi()
             val idleDecision = if (rssi == null) ProximityDecisionPolicy.ArmedDecision.NONE else
                 decisionPolicy.onUnlockedSample(
@@ -360,9 +366,8 @@ class ProximityController(
                     store.current().sensitivityLockRssi,
                 )
             if (idleDecision == ProximityDecisionPolicy.ArmedDecision.LOCK) {
-                Logx.d("prox", "armed idle safety-check rssi=$rssi -> sustained walk-away, locking")
-                armedUnlocked = false
-                startLockLoop("idle-far-lock")
+                Logx.d("prox", "armed idle safety-check rssi=$rssi -> verifying fresh separation")
+                requestVerifiedWalkAwayLock("idle-far-lock")
             }
             return
         }
@@ -371,6 +376,46 @@ class ProximityController(
         if (rssi != null) { rssiNullStreak = 0; onSample(rssi) }
         else if (++rssiNullStreak >= RSSI_NULL_RECONNECT) { rssiNullStreak = 0; forceReconnect() }
         delay(MONITOR_FAST_MS)
+    }
+
+    /** A GATT poll returns the preceding asynchronous RSSI reading, which may be stale. */
+    private suspend fun confirmWalkAway(): Boolean {
+        val confirmation = WalkAwayLockConfirmation(store.current().sensitivityLockRssi)
+        // Discard the first poll: it can still contain the sample that triggered the candidate.
+        ble.pollRemoteRssi()
+        repeat(9) {
+            delay(MONITOR_FAST_MS)
+            if (ble.state.value != DkBleManager.State.SESSION_READY ||
+                motion.state.value != MotionMonitor.Motion.MOVING) return false
+            val rssi = ble.pollRemoteRssi() ?: return@repeat
+            when (confirmation.observe(rssi)) {
+                WalkAwayLockConfirmation.Decision.LOCK -> {
+                    Logx.d("prox", "walk-away: fresh sustained departure confirmed")
+                    return true
+                }
+                WalkAwayLockConfirmation.Decision.CANCEL -> {
+                    Logx.d("prox", "walk-away: signal recovered ($rssi), retaining unlock")
+                    return false
+                }
+                WalkAwayLockConfirmation.Decision.WAIT -> Unit
+            }
+        }
+        Logx.d("prox", "walk-away: separation not confirmed, retaining unlock")
+        return false
+    }
+
+    private fun requestVerifiedWalkAwayLock(reason: String) {
+        if (lockConfirmationJob?.isActive == true) return
+        lockConfirmationJob = scope.launch {
+            if (confirmWalkAway() && armedUnlocked && _state.value.running &&
+                store.current().proximityEnabled) {
+                armedUnlocked = false
+                startLockLoop(reason)
+            } else {
+                decisionPolicy.onWalkAwayVerificationFailed()
+            }
+            lockConfirmationJob = null
+        }
     }
 
     // ---------------- RSSI → distance → decision ----------------
@@ -535,9 +580,8 @@ class ProximityController(
         // A lock now requires time-based, moving-and-receding evidence from the shared policy. The same
         // rule is used by armedWatch, so its periodic safety sample cannot bypass this guard.
         if (armedUnlocked && armedDecision == ProximityDecisionPolicy.ArmedDecision.LOCK) {
-            armedUnlocked = false
-            Logx.d("prox", "walk-away-lock (rssi=$smoothed ~${"%.1f".format(dist)}m)")
-            startLockLoop("walk-away-lock")
+            Logx.d("prox", "walk-away candidate (rssi=$smoothed ~${"%.1f".format(dist)}m) -> verifying")
+            requestVerifiedWalkAwayLock("walk-away-lock")
             return
         }
 

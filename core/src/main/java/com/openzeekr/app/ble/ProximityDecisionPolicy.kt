@@ -200,11 +200,15 @@ internal class ProximityDecisionPolicy {
             departureLinkEnded = true
             manualDeparture = false
             resetSameLinkReturn()
-        } else if (!departureObserved) {
+        } else if (!departureObserved || farQualified) {
             // A failed setup can observe FAR long enough to set farQualified, then disconnect
             // before the phone reaches the car. On a later fresh connection at the door the
             // motion sensor may already say STILL. FAR proof from the dead link must not disable
-            // the guarded fresh-door fallback; preserve the separate departure protection.
+            // the guarded fresh-door fallback. Likewise, a PREVIOUS observed departure cannot
+            // suppress a new visit after a sustained FAR baseline and a completed link boundary.
+            // A short FAR blip retains departureObserved (the wrong-direction regression).
+            departureObserved = false
+            sawStrongNearWhileLocked = false
             farSinceMs = UNSET_MS
             farQualified = false
             nearCandidateSinceMs = UNSET_MS
@@ -498,6 +502,12 @@ internal class ProximityDecisionPolicy {
         walkAwayFarSinceMs = UNSET_MS
         walkAwayFarStartRssi = 0
         walkAwayWeakestRssi = 0
+    }
+
+    /** An unconfirmed RSSI candidate must gather new separation evidence before retrying. */
+    fun onWalkAwayVerificationFailed() {
+        resetWalkAwayCandidate()
+        resetAbortedArrivalDepartureEvidence()
     }
 
     private fun resetAbortedArrivalDepartureEvidence() {

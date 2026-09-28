@@ -14,7 +14,8 @@ internal object DeepSleepRecoveryPolicy {
         presenceRecoveryActive: Boolean,
         presenceArmed: Boolean,
         normallyAggressive: Boolean,
-    ): Route = if (presenceRecoveryActive && presenceArmed) Route.OFFLOADED_PRESENCE
+        screenInteractive: Boolean = true,
+    ): Route = if (!screenInteractive || (presenceRecoveryActive && presenceArmed)) Route.OFFLOADED_PRESENCE
         else if (normallyAggressive) Route.FOREGROUND_SCAN
         else Route.OFFLOADED_PRESENCE
 }
