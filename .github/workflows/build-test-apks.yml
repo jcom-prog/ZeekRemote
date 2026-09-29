@@ -10,6 +10,7 @@ on:
       - zeekremote-0.1.41-lock-verification
       - zeekremote-0.1.42-near-lock-safety
       - zeekremote-0.1.43-lock-observation
+      - zeekremote-0.1.44-departure-evidence
 
 permissions:
   contents: read
