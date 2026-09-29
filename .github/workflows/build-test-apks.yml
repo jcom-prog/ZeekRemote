@@ -71,12 +71,12 @@ jobs:
           unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -q 'assets/cars/car_7gt.png'
           grep -A2 'CarModel("7GT"' app/src/main/java/com/openzeekr/app/ui/CarCatalog.kt | grep -q 'PaintColor("Crystal White"'
 
-      - name: Verify manual Lock instructions on both proximity screens
+      - name: Verify conditional automatic Lock instructions on both proximity screens
         run: |
-          grep -Fq 'TEST MODE: automatic Lock is OFF.' app/src/main/java/com/openzeekr/app/ui/SetupScreen.kt
-          grep -Fq 'TEST MODE: automatic Lock is OFF.' app/src/main/java/com/openzeekr/app/ui/ControlsScreen.kt
-          ! grep -Fq 'Approach unlock & walk-away lock' app/src/main/java/com/openzeekr/app/ui/SetupScreen.kt
-          ! grep -Fq 'auto-lock at ≤' app/src/main/java/com/openzeekr/app/ui/ControlsScreen.kt
+          grep -Fq 'Auto Lock checks phone location when unlocking and leaving. If location is inaccurate, Lock manually and check the car.' app/src/main/java/com/openzeekr/app/ui/SetupScreen.kt
+          grep -Fq 'Auto Lock checks phone location when unlocking and leaving. If location is inaccurate, Lock manually and check the car.' app/src/main/java/com/openzeekr/app/ui/ControlsScreen.kt
+          grep -Fq 'AutomaticLockGate(AutomaticLockGate.Mode.ACTUATE)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'DepartureSafetyEvidence.confirmsDeparture(anchor, first, second, steps,' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
 
       - name: Verify permanent phone signing identity
         run: |
@@ -92,7 +92,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='80' versionName='0.1.43.2-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='82' versionName='0.1.44-work'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
           sha256sum "$APK"

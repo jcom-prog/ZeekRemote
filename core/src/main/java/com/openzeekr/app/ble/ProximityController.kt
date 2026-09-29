@@ -14,7 +14,7 @@ import kotlinx.coroutines.launch
 import kotlin.math.pow
 
 /**
- * Approach unlock and passive walk-away diagnosis driven by BLE RSSI.
+ * Approach unlock and independently corroborated walk-away lock.
  *
  * Rides the live keep-alive session (see [ProximityService]); it reads connected-GATT RSSI and
  * never owns the connection. RSSI is NOT a reliable physical distance: the 0.1.42 field test
@@ -22,7 +22,8 @@ import kotlin.math.pow
  *
  * Decision model (the tuning the user asked for):
  *  - **Latch**: after auto-unlock [armedUnlocked] prevents repeated unlocks until manual lock.
- *  - **Observe only**: a departure candidate never sends an automatic BLE or cloud Lock.
+ *  - **Independent departure**: weak BLE and motion only start an on-demand position check;
+ *    neither can authorize an automatic Lock without two fresh, accurate position fixes.
  *  - **Hysteresis**: unlock at/above [ConfigStore.sensitivityUnlockRssi] (≈ near), lock at/below
  *    [ConfigStore.sensitivityLockRssi] (≈ farther). The gap between them stops flapping.
  *  - **Cooldown**: after an action, ignore new triggers for [ACTION_COOLDOWN_MS].
@@ -109,7 +110,12 @@ class ProximityController(
     // so this is at least as persistent as unlock and falls back to a cloud lock if BLE won't confirm.
     private var lockJob: Job? = null
     private var lockConfirmationJob: Job? = null
-    private val autoLockGate = AutomaticLockGate() // Test build: observe departures; never actuate.
+    private val autoLockGate = AutomaticLockGate(AutomaticLockGate.Mode.ACTUATE)
+    private val departureLocationSource = DepartureLocationSource(appContext)
+    private var departureAnchor: DepartureFix? = null
+    private var departureAnchorJob: Job? = null
+    private var linkDepartureJob: Job? = null
+    private var departureProofAtMs = 0L
     private var unlockObservedAtMs = 0L
     private var stepsAtUnlock: Long? = null
     private var strongestRssiSinceUnlock = Int.MIN_VALUE
@@ -119,6 +125,8 @@ class ProximityController(
     private var shadowRecoveryLogged = false
     private var relockRecoveryPending = false
     private var relockProbeJob: Job? = null
+    private var relockProbeStartedAtElapsedMs = 0L
+    private var relockProbeLastAtElapsedMs = 0L
     // Set while the unlocked "activity watch" is idling; the car's next frame completes it (instant wake).
     @Volatile private var activityWake: CompletableDeferred<Unit>? = null
 
@@ -160,6 +168,9 @@ class ProximityController(
         pingInFlight = false; pingFailStreak = 0; lastPingMs = 0L
         linkLostAtMs = 0L; lostRssi = null
         relockRecoveryPending = false; relockProbeJob?.cancel(); relockProbeJob = null
+        departureAnchorJob?.cancel(); departureAnchorJob = null; departureAnchor = null
+        linkDepartureJob?.cancel(); linkDepartureJob = null
+        departureProofAtMs = 0L
         pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
         unverifiedLockAlertRaised = false
         // Keep armedUnlocked as-is across start/stop toggles within a session isn't meaningful;
@@ -176,6 +187,7 @@ class ProximityController(
         motion.onMovingEdge = {
             motionWake?.complete(Unit)   // wake the FAR-still approach sleep
             activityWake?.complete(Unit) // resume armed RSSI tracking on the first motion edge
+            if (linkLostAtMs != 0L && armedUnlocked) scope.launch { scheduleLinkDepartureCheck() }
         }
         motion.start()
         Logx.d("prox", "monitor start (distance+trend hysteresis; rides keep-alive session)")
@@ -185,9 +197,12 @@ class ProximityController(
                 when (ble.state.value) {
                     DkBleManager.State.SESSION_READY, DkBleManager.State.CONNECTED -> {
                         if (linkLostAtMs != 0L) {
+                            linkDepartureJob?.cancel(); linkDepartureJob = null
                             relockRecoveryPending = armedUnlocked &&
                                 System.currentTimeMillis() - linkLostAtMs >= 30_000L &&
                                 System.currentTimeMillis() - unlockObservedAtMs >= 90_000L
+                            relockProbeStartedAtElapsedMs = 0L
+                            relockProbeLastAtElapsedMs = 0L
                             linkLostAtMs = 0L
                             pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
                             if (unverifiedLockAlertRaised) {
@@ -240,6 +255,9 @@ class ProximityController(
 
     fun stop() {
         monitorJob?.cancel(); monitorJob = null
+        departureAnchorJob?.cancel(); departureAnchorJob = null; departureAnchor = null
+        linkDepartureJob?.cancel(); linkDepartureJob = null
+        departureProofAtMs = 0L
         relockRecoveryPending = false; relockProbeJob?.cancel(); relockProbeJob = null
         needToUnlock = false; unlockJob?.cancel(); unlockJob = null
         lockJob?.cancel(); lockJob = null
@@ -286,7 +304,7 @@ class ProximityController(
                 ble.noteUnlockConfirmed()
                 val posted = UnverifiedLockNotifier.showManualLockRequired(appContext)
                 _state.value = _state.value.copy(lastAction =
-                    "Automatic Lock OFF · lock manually after leaving")
+                    "Automatic Lock needs position proof · check car before leaving")
                 Logx.w("prox", "manual Lock required after unlock; notification posted=$posted")
                 Logx.d("prox", "unlock confirmed ($source); proximity disabled/stopped -> walk-away not armed")
             }
@@ -301,6 +319,9 @@ class ProximityController(
 
     private fun onManualLockAcknowledged(source: String, bleConfirmed: Boolean) {
         scope.launch {
+            departureAnchorJob?.cancel(); departureAnchorJob = null; departureAnchor = null
+            linkDepartureJob?.cancel(); linkDepartureJob = null
+            departureProofAtMs = 0L
             relockRecoveryPending = false; relockProbeJob?.cancel(); relockProbeJob = null
             pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
             if (bleConfirmed) {
@@ -332,6 +353,12 @@ class ProximityController(
 
     private fun recordUnlockConfirmed(source: String) {
         val now = System.currentTimeMillis()
+        val unlockElapsed = android.os.SystemClock.elapsedRealtime()
+        lockConfirmationJob?.cancel(); lockConfirmationJob = null
+        lockJob?.cancel(); lockJob = null
+        departureAnchorJob?.cancel(); departureAnchor = null
+        linkDepartureJob?.cancel(); linkDepartureJob = null
+        departureProofAtMs = 0L
         relockRecoveryPending = false; relockProbeJob?.cancel(); relockProbeJob = null
         pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
         unverifiedLockAlertRaised = false
@@ -341,6 +368,19 @@ class ProximityController(
         postUnlockFastUntilElapsedMs = android.os.SystemClock.elapsedRealtime() + POST_UNLOCK_FAST_MONITOR_MS
         decisionPolicy.onUnlockConfirmed(now)
         unlockObservedAtMs = now
+        departureAnchorJob = scope.launch {
+            val fix = runCatching { departureLocationSource.current() }.getOrNull()
+            if (armedUnlocked && unlockObservedAtMs == now && fix != null &&
+                fix.elapsedAtMs in (unlockElapsed - 1_000L)..(unlockElapsed + 7_000L)) {
+                departureAnchor = fix
+                Logx.d("prox", "departure location anchor available (accuracy category: " +
+                    (if (fix.accuracyM <= 8f) "usable)" else "insufficient)"))
+                if (linkLostAtMs != 0L && motion.state.value == MotionMonitor.Motion.MOVING)
+                    scheduleLinkDepartureCheck()
+            } else {
+                Logx.d("prox", "departure location anchor unavailable; automatic Lock needs manual fallback")
+            }
+        }
         stepsAtUnlock = motion.observedSteps
         strongestRssiSinceUnlock = Int.MIN_VALUE
         lastStrongNearAtMs = 0L
@@ -352,9 +392,9 @@ class ProximityController(
         activityWake?.complete(Unit)
         val posted = UnverifiedLockNotifier.showManualLockRequired(appContext)
         _state.value = _state.value.copy(lastAction =
-            "Automatic Lock OFF · lock manually after leaving")
-        Logx.d("prox", "unlock confirmed ($source) -> passive departure watch; " +
-            "auto Lock DISABLED; reminder posted=$posted; fast RSSI for ${POST_UNLOCK_FAST_MONITOR_MS}ms")
+            "Automatic Lock requires departure proof · check car before leaving")
+        Logx.d("prox", "unlock confirmed ($source) -> departure watch; " +
+            "independent position required; reminder posted=$posted; fast RSSI for ${POST_UNLOCK_FAST_MONITOR_MS}ms")
         if (ble.state.value !in setOf(DkBleManager.State.SESSION_READY, DkBleManager.State.CONNECTED)) {
             if (linkLostAtMs == 0L) linkLostAtMs = now
             queueUnverifiedLockAlert()
@@ -368,14 +408,15 @@ class ProximityController(
             decisionPolicy.onLinkEnded()
             linkLostAtMs = System.currentTimeMillis()
             // RSSI/body shielding and a real departure can both tear down the link. Neither a timer
-            // nor the last (possibly stale) RSSI can tell them apart. This test build never auto-locks.
+            // nor the last (possibly stale) RSSI can tell them apart; position must corroborate.
             val observedStepsSinceUnlock = stepsAtUnlock?.let { baseline ->
                 motion.observedSteps?.let { (it - baseline).coerceAtLeast(0L) }
             }
             Logx.d("prox", "link down (lastRssi=$lostRssi armed=$armedUnlocked " +
                 "stepsSinceUnlock=${observedStepsSinceUnlock ?: "unavailable"}) " +
-                "-> reconnect only; no automatic lock")
+                "-> independent departure check; no Lock from link loss alone")
             queueUnverifiedLockAlert()
+            if (motion.state.value == MotionMonitor.Motion.MOVING) scheduleLinkDepartureCheck()
             gattEma = null
             inCarSinceMs = 0L; steadyRef = null; steadySinceMs = 0L; lastCadence = ""
             rssiNullStreak = 0; pingInFlight = false; pingFailStreak = 0; lastPingMs = 0L
@@ -391,6 +432,25 @@ class ProximityController(
         farAsleep = false
         _wakeLockNeeded.value = motion.state.value == MotionMonitor.Motion.MOVING
         nextIntervalMs = MONITOR_MID_MS
+    }
+
+    private fun scheduleLinkDepartureCheck() {
+        if (!armedUnlocked || departureAnchor == null || linkDepartureJob?.isActive == true ||
+            lockJob?.isActive == true) return
+        linkDepartureJob = scope.launch {
+            repeat(3) {
+                delay(5_000L)
+                if (!armedUnlocked || !_state.value.running ||
+                    !store.current().proximityEnabled || lockJob?.isActive == true) return@launch
+                if (confirmPhysicalDeparture() && armedUnlocked &&
+                    autoLockGate.onVerifiedDeparture() == AutomaticLockGate.Action.LOCK) {
+                    Logx.d("prox", "link-down departure corroborated by position; sending Lock")
+                    startLockLoop("verified-link-departure")
+                    return@launch
+                }
+            }
+            Logx.w("prox", "link-down departure unverified; manual Lock required")
+        }
     }
 
     /** Warn after a sustained loss, without interpreting elapsed time as evidence to lock. */
@@ -490,8 +550,30 @@ class ProximityController(
         return false
     }
 
+    /** A fresh position change independent of BLE body shadowing is mandatory before any Lock. */
+    private suspend fun confirmPhysicalDeparture(): Boolean {
+        val anchor = departureAnchor
+        if (anchor == null) {
+            Logx.d("prox", "independent departure unverified: location anchor unavailable")
+            return false
+        }
+        val first = runCatching { departureLocationSource.current() }.getOrNull()
+        delay(1_600L)
+        val second = runCatching { departureLocationSource.current() }.getOrNull()
+        val steps = stepsAtUnlock?.let { baseline ->
+            motion.observedSteps?.let { (it - baseline).coerceAtLeast(0L) }
+        }
+        val nowElapsed = android.os.SystemClock.elapsedRealtime()
+        val confirmed = DepartureSafetyEvidence.confirmsDeparture(anchor, first, second, steps,
+            nowElapsed)
+        if (confirmed) departureProofAtMs = System.currentTimeMillis()
+        else Logx.d("prox", "independent departure unverified: " +
+            DepartureSafetyEvidence.diagnostic(anchor, first, second, steps, nowElapsed))
+        return confirmed
+    }
+
     private fun requestVerifiedWalkAwayLock(reason: String) {
-        if (lockConfirmationJob?.isActive == true) return
+        if (lockConfirmationJob?.isActive == true || lockJob?.isActive == true) return
         if (System.currentTimeMillis() - lastShadowDepartureAtMs < SHADOW_REARM_MS) {
             decisionPolicy.onWalkAwayVerificationFailed()
             return
@@ -524,8 +606,21 @@ class ProximityController(
                         decisionPolicy.onWalkAwayVerificationFailed()
                     }
                     AutomaticLockGate.Action.LOCK -> {
-                        armedUnlocked = false
-                        startLockLoop(reason)
+                        if (confirmPhysicalDeparture() && armedUnlocked &&
+                            _state.value.running && store.current().proximityEnabled) {
+                            Logx.d("prox", "departure corroborated by independent position; sending Lock")
+                            linkDepartureJob?.cancel(); linkDepartureJob = null
+                            startLockLoop(reason)
+                        } else {
+                            lastShadowDepartureAtMs = System.currentTimeMillis()
+                            val posted = if (!shadowDepartureWarned) {
+                                shadowDepartureWarned = true
+                                UnverifiedLockNotifier.showPossibleDeparture(appContext)
+                            } else false
+                            Logx.w("prox", "departure position unverified; NO LOCK SENT; " +
+                                "manual Lock required, reminderPosted=$posted")
+                            decisionPolicy.onWalkAwayVerificationFailed()
+                        }
                     }
                 }
             } else {
@@ -551,27 +646,37 @@ class ProximityController(
         val smoothed = smoothedD.toInt()
         val dist = rssiToDistance(smoothed)
 
-        if (armedUnlocked && relockRecoveryPending &&
+        if (armedUnlocked && relockRecoveryPending && relockProbeJob?.isActive != true &&
+            lockJob?.isActive != true && lockConfirmationJob?.isActive != true &&
             ble.state.value == DkBleManager.State.SESSION_READY &&
             smoothed >= unlockThresh + 3) {
-            relockRecoveryPending = false
-            val observedUnlockAt = unlockObservedAtMs
-            relockProbeJob = scope.launch {
-                val first = runCatching { cloudLockSnapshot() }.getOrNull()
-                delay(400L)
-                val second = runCatching { cloudLockSnapshot() }.getOrNull()
-                val confirmed = RelockRecoveryEvidence.confirmsRelock(
-                    first, second, observedUnlockAt, System.currentTimeMillis())
-                if (confirmed && armedUnlocked && unlockObservedAtMs == observedUnlockAt &&
-                    _state.value.running && ble.state.value == DkBleManager.State.SESSION_READY &&
-                    (_state.value.smoothedRssi ?: Int.MIN_VALUE) >= unlockThresh + 3) {
-                    armedUnlocked = false
-                    decisionPolicy.resetLocked()
-                    Logx.d("prox", "vehicle reports a newer confirmed Lock; rearming guarded approach unlock")
-                } else {
-                    Logx.d("prox", "vehicle relock unverified; keeping unlock latch (no blind rearm)")
+            val elapsed = android.os.SystemClock.elapsedRealtime()
+            if (relockProbeStartedAtElapsedMs == 0L) relockProbeStartedAtElapsedMs = elapsed
+            if (RelockProbeSchedule.expired(relockProbeStartedAtElapsedMs, elapsed)) {
+                relockRecoveryPending = false
+                Logx.d("prox", "vehicle relock not verified within recovery window; keeping unlock latch")
+            } else if (RelockProbeSchedule.due(relockProbeLastAtElapsedMs, elapsed)) {
+                relockProbeLastAtElapsedMs = elapsed
+                val observedUnlockAt = unlockObservedAtMs
+                relockProbeJob = scope.launch {
+                    val first = runCatching { cloudLockSnapshot() }.getOrNull()
+                    delay(400L)
+                    val second = runCatching { cloudLockSnapshot() }.getOrNull()
+                    val confirmed = RelockRecoveryEvidence.confirmsRelock(
+                        first, second, observedUnlockAt, System.currentTimeMillis())
+                    if (confirmed && armedUnlocked && unlockObservedAtMs == observedUnlockAt &&
+                        _state.value.running && ble.state.value == DkBleManager.State.SESSION_READY &&
+                        (_state.value.smoothedRssi ?: Int.MIN_VALUE) >= unlockThresh + 3) {
+                        relockRecoveryPending = false
+                        armedUnlocked = false
+                        decisionPolicy.resetLocked()
+                        Logx.d("prox", "vehicle reports a newer confirmed Lock; rearming guarded approach unlock")
+                    } else {
+                        val evidence = RelockRecoveryEvidence.diagnostic(first, second, observedUnlockAt)
+                        Logx.d("prox", "vehicle relock unverified ($evidence); keeping unlock latch (no blind rearm)")
+                    }
+                    relockProbeJob = null
                 }
-                relockProbeJob = null
             }
         }
 
@@ -805,16 +910,36 @@ class ProximityController(
         // A genuine later arrival is rearmed only by link-down + a fresh hardware presence hit.
         decisionPolicy.onDepartureLockStarted()
         lockJob = scope.launch {
-            lastTriggerMs = System.currentTimeMillis()   // start the action cooldown
+            val lockStartedAtMs = System.currentTimeMillis()
+            lastTriggerMs = lockStartedAtMs   // start the action cooldown
             var confirmed = false
             var attempt = 0
-            while (isActive && attempt < MAX_LOCK_ATTEMPTS) {
+            val maxAttempts = if (ble.state.value == DkBleManager.State.SESSION_READY)
+                MAX_LOCK_ATTEMPTS else 1 // a lost radio should reach the cloud fallback promptly
+            while (isActive && attempt < maxAttempts) {
+                if (System.currentTimeMillis() - departureProofAtMs > 5_000L &&
+                    !confirmPhysicalDeparture()) {
+                    val posted = UnverifiedLockNotifier.showPossibleDeparture(appContext)
+                    Logx.w("prox", "$reason: departure proof expired before BLE Lock; " +
+                        "NO LOCK SENT; reminderPosted=$posted")
+                    lockJob = null
+                    return@launch
+                }
                 attempt++
                 if (ble.state.value != DkBleManager.State.SESSION_READY &&
                     !awaitState(setOf(DkBleManager.State.SESSION_READY), LOCK_SESSION_WAIT_MS)) {
                     // No live session this round — kick a reconnect to the known car and try the next attempt.
                     if (!ble.reconnectLast()) runCatching { ble.connect(null) }
                     continue
+                }
+                if ((lastStrongNearAtMs > departureProofAtMs ||
+                    System.currentTimeMillis() - departureProofAtMs > 5_000L) &&
+                    !confirmPhysicalDeparture()) {
+                    val posted = UnverifiedLockNotifier.showPossibleDeparture(appContext)
+                    Logx.w("prox", "$reason: proximity recovered before BLE Lock; " +
+                        "NO LOCK SENT; reminderPosted=$posted")
+                    lockJob = null
+                    return@launch
                 }
                 val r = runCatching { ble.session.control(DkProtocol.CTRL_LOCK, LOCK_ACK_TIMEOUT_MS) }
                     .getOrDefault(ControlResult.WRITE_FAILED)
@@ -823,7 +948,20 @@ class ProximityController(
                 resetLink()   // write-fail / no-response / reject → clear the wedge and retry
                 delay(UNLOCK_RETRY_DELAY_MS)
             }
+            if (!isActive || !armedUnlocked) {
+                lockJob = null
+                return@launch
+            }
             if (!confirmed) {
+                // The user may have returned while a BLE reconnect was failing. A position that
+                // proved departure before those retries cannot authorize a later cloud command.
+                if (!confirmPhysicalDeparture() || !armedUnlocked || !_state.value.running) {
+                    val posted = UnverifiedLockNotifier.showPossibleDeparture(appContext)
+                    Logx.w("prox", "$reason: departure no longer verified before cloud fallback; " +
+                        "NO LOCK SENT; reminderPosted=$posted")
+                    lockJob = null
+                    return@launch
+                }
                 Logx.w("prox", "$reason: BLE lock unconfirmed after $attempt attempts — falling back to CLOUD lock")
                 val cloudStatusLocked = verifyCloudLock(reason)
                 // Repeated cloud status can be cached; it cannot replace the missing BLE receipt.
@@ -833,13 +971,37 @@ class ProximityController(
                 _state.value = _state.value.copy(lastAction =
                     "$reason · ${if (cloudStatusLocked) "cloud reports LOCKED (2×); physical lock unverified" else "LOCK NOT VERIFIED ✗"}; check car")
             } else {
+                armedUnlocked = false
                 pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
-                unverifiedLockAlertRaised = false
-                UnverifiedLockNotifier.clear(appContext)
-                _state.value = _state.value.copy(lastAction = "$reason · locked ✓")
+                if (verifyFreshLockStatus(lockStartedAtMs)) {
+                    unverifiedLockAlertRaised = false
+                    UnverifiedLockNotifier.clear(appContext)
+                    _state.value = _state.value.copy(lastAction = "$reason · vehicle reports locked ✓")
+                } else {
+                    val posted = UnverifiedLockNotifier.show(appContext)
+                    unverifiedLockAlertRaised = true
+                    _state.value = _state.value.copy(lastAction =
+                        "$reason · BLE Lock acknowledged; vehicle state unverified; check car")
+                    Logx.w("prox", "$reason: BLE Lock acknowledged but fresh vehicle lock state unavailable; " +
+                        "notification posted=$posted")
+                }
             }
             lockJob = null
         }
+    }
+
+    private suspend fun verifyFreshLockStatus(lockStartedAtMs: Long): Boolean {
+        return withTimeoutOrNull(30_000L) {
+            repeat(5) {
+                delay(2_000L)
+                val first = runCatching { cloudLockSnapshot() }.getOrNull()
+                delay(400L)
+                val second = runCatching { cloudLockSnapshot() }.getOrNull()
+                if (RelockRecoveryEvidence.confirmsRelock(first, second, lockStartedAtMs,
+                        System.currentTimeMillis())) return@withTimeoutOrNull true
+            }
+            false
+        } ?: false
     }
 
     /** A successful HTTP response acknowledges the request, not a physical door lock. */

@@ -9,6 +9,16 @@ internal object RelockRecoveryEvidence {
     private const val MAX_STATUS_AGE_MS = 2 * 60 * 60_000L
     private const val FUTURE_CLOCK_SKEW_MS = 60_000L
 
+    /** Bounded diagnostic; never log a raw cloud response or vehicle identifier. */
+    fun diagnostic(first: CloudLockSnapshot?, second: CloudLockSnapshot?, unlockedAtMs: Long): String = when {
+        first == null || second == null -> "cloud status unavailable"
+        !first.locked || !second.locked -> "cloud does not report two locked states"
+        first.updatedAtMs == null || second.updatedAtMs == null -> "cloud update time unavailable"
+        first.updatedAtMs <= unlockedAtMs || second.updatedAtMs < first.updatedAtMs ->
+            "cloud lock evidence precedes unlock or is out of order"
+        else -> "cloud time or local state fails safety gate"
+    }
+
     fun confirmsRelock(
         first: CloudLockSnapshot?, second: CloudLockSnapshot?,
         unlockedAtMs: Long, nowMs: Long,

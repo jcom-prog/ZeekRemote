@@ -268,7 +268,7 @@ private fun StatusRow(label: String, value: String?) {
     }
 }
 
-/** Approach unlock and passive departure diagnostics for this field-test build. */
+/** Approach unlock and verified departure status for this field-test build. */
 @Composable
 private fun ProximityCard(deps: Deps) {
     val context = LocalContext.current
@@ -331,7 +331,7 @@ private fun ProximityCard(deps: Deps) {
                 )
             }
 
-            Text("TEST MODE: automatic Lock is OFF. Lock manually and check the car before leaving.",
+            Text("Auto Lock checks phone location when unlocking and leaving. If location is inaccurate, Lock manually and check the car.",
                 style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.error)
 
