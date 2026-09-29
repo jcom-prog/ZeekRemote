@@ -3,6 +3,7 @@ package com.openzeekr.app.ble
 import com.openzeekr.app.config.ConfigStore
 import com.openzeekr.app.util.Logx
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -954,14 +955,8 @@ class ProximityController(
             }
             if (!confirmed) {
                 // The user may have returned while a BLE reconnect was failing. A position that
-                // proved departure before those retries cannot authorize a later cloud command.
-                if (!confirmPhysicalDeparture() || !armedUnlocked || !_state.value.running) {
-                    val posted = UnverifiedLockNotifier.showPossibleDeparture(appContext)
-                    Logx.w("prox", "$reason: departure no longer verified before cloud fallback; " +
-                        "NO LOCK SENT; reminderPosted=$posted")
-                    lockJob = null
-                    return@launch
-                }
+                // proved departure before those retries cannot authorize a later cloud command;
+                // verifyCloudLock checks fresh departure immediately before EACH request.
                 Logx.w("prox", "$reason: BLE lock unconfirmed after $attempt attempts — falling back to CLOUD lock")
                 val cloudStatusLocked = verifyCloudLock(reason)
                 // Repeated cloud status can be cached; it cannot replace the missing BLE receipt.
@@ -1009,7 +1004,20 @@ class ProximityController(
         val wl = acquireSafetyWakelock()
         try {
             repeat(CLOUD_LOCK_MAX_REQUESTS) { requestIndex ->
-                val accepted = runCatching { cloudLock() }.getOrDefault(false)
+                val accepted = DepartureCheckedLockAttempt.send(
+                    enabled = { armedUnlocked && _state.value.running &&
+                        store.current().proximityEnabled },
+                    departure = { confirmPhysicalDeparture() },
+                    command = {
+                        try { cloudLock() }
+                        catch (cancelled: CancellationException) { throw cancelled }
+                        catch (_: Exception) { false }
+                    },
+                ) ?: run {
+                    Logx.w("prox", "$reason: departure unverified before cloud request " +
+                        "#${requestIndex + 1}; NO LOCK SENT; manual Lock required")
+                    return false
+                }
                 Logx.d("prox", "$reason: cloud lock request #${requestIndex + 1} " +
                     if (accepted) "accepted; checking vehicle status" else "rejected")
                 if (!accepted) return@repeat
