@@ -124,6 +124,14 @@ class Deps(context: Context) {
                 ?.additionalVehicleStatus?.drivingSafetyStatus?.centralLockingStatus
                 ?.let { it == "1" }
         },
+        cloudLockSnapshot = {
+            (control.status() as? com.openzeekr.app.remote.CallResult.Ok)?.value?.let { status ->
+                val state = status.additionalVehicleStatus?.drivingSafetyStatus?.centralLockingStatus
+                if (state != "1" && state != "0") null
+                else com.openzeekr.app.ble.CloudLockSnapshot(
+                    locked = state == "1", updatedAtMs = status.updateTime)
+            }
+        },
     )
     /** BLE-first, cloud-fallback dispatcher; confirmed unlocks centrally arm walk-away monitoring. */
     val vehicleControl = com.openzeekr.app.remote.VehicleControl(

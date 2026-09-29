@@ -49,6 +49,8 @@ class ProximityController(
     /** Cloud lock-state probe (GET vehicle status → centralLockingStatus). true=locked, false=unlocked,
      *  null=unknown/failed. Used to verify an explicitly confirmed departure's cloud fallback. */
     private val cloudIsLocked: suspend () -> Boolean? = { null },
+    /** Vehicle-reported lock state with its own update time, for a new arrival after a lost link. */
+    private val cloudLockSnapshot: suspend () -> CloudLockSnapshot? = { null },
 ) {
     enum class Zone { UNKNOWN, FAR, NEAR }
     enum class Phase { PASSIVE, CONNECTING, MONITORING }
@@ -115,6 +117,8 @@ class ProximityController(
     private var lastShadowDepartureAtMs = 0L
     private var shadowDepartureWarned = false
     private var shadowRecoveryLogged = false
+    private var relockRecoveryPending = false
+    private var relockProbeJob: Job? = null
     // Set while the unlocked "activity watch" is idling; the car's next frame completes it (instant wake).
     @Volatile private var activityWake: CompletableDeferred<Unit>? = null
 
@@ -155,6 +159,7 @@ class ProximityController(
         rssiNullStreak = 0; pingJob?.cancel(); pingJob = null
         pingInFlight = false; pingFailStreak = 0; lastPingMs = 0L
         linkLostAtMs = 0L; lostRssi = null
+        relockRecoveryPending = false; relockProbeJob?.cancel(); relockProbeJob = null
         pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
         unverifiedLockAlertRaised = false
         // Keep armedUnlocked as-is across start/stop toggles within a session isn't meaningful;
@@ -180,6 +185,9 @@ class ProximityController(
                 when (ble.state.value) {
                     DkBleManager.State.SESSION_READY, DkBleManager.State.CONNECTED -> {
                         if (linkLostAtMs != 0L) {
+                            relockRecoveryPending = armedUnlocked &&
+                                System.currentTimeMillis() - linkLostAtMs >= 30_000L &&
+                                System.currentTimeMillis() - unlockObservedAtMs >= 90_000L
                             linkLostAtMs = 0L
                             pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
                             if (unverifiedLockAlertRaised) {
@@ -232,6 +240,7 @@ class ProximityController(
 
     fun stop() {
         monitorJob?.cancel(); monitorJob = null
+        relockRecoveryPending = false; relockProbeJob?.cancel(); relockProbeJob = null
         needToUnlock = false; unlockJob?.cancel(); unlockJob = null
         lockJob?.cancel(); lockJob = null
         lockConfirmationJob?.cancel(); lockConfirmationJob = null
@@ -292,6 +301,7 @@ class ProximityController(
 
     private fun onManualLockAcknowledged(source: String, bleConfirmed: Boolean) {
         scope.launch {
+            relockRecoveryPending = false; relockProbeJob?.cancel(); relockProbeJob = null
             pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
             if (bleConfirmed) {
                 unverifiedLockAlertRaised = false
@@ -322,6 +332,7 @@ class ProximityController(
 
     private fun recordUnlockConfirmed(source: String) {
         val now = System.currentTimeMillis()
+        relockRecoveryPending = false; relockProbeJob?.cancel(); relockProbeJob = null
         pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
         unverifiedLockAlertRaised = false
         UnverifiedLockNotifier.clear(appContext)
@@ -539,6 +550,30 @@ class ProximityController(
         gattEma = smoothedD
         val smoothed = smoothedD.toInt()
         val dist = rssiToDistance(smoothed)
+
+        if (armedUnlocked && relockRecoveryPending &&
+            ble.state.value == DkBleManager.State.SESSION_READY &&
+            smoothed >= unlockThresh + 3) {
+            relockRecoveryPending = false
+            val observedUnlockAt = unlockObservedAtMs
+            relockProbeJob = scope.launch {
+                val first = runCatching { cloudLockSnapshot() }.getOrNull()
+                delay(400L)
+                val second = runCatching { cloudLockSnapshot() }.getOrNull()
+                val confirmed = RelockRecoveryEvidence.confirmsRelock(
+                    first, second, observedUnlockAt, System.currentTimeMillis())
+                if (confirmed && armedUnlocked && unlockObservedAtMs == observedUnlockAt &&
+                    _state.value.running && ble.state.value == DkBleManager.State.SESSION_READY &&
+                    (_state.value.smoothedRssi ?: Int.MIN_VALUE) >= unlockThresh + 3) {
+                    armedUnlocked = false
+                    decisionPolicy.resetLocked()
+                    Logx.d("prox", "vehicle reports a newer confirmed Lock; rearming guarded approach unlock")
+                } else {
+                    Logx.d("prox", "vehicle relock unverified; keeping unlock latch (no blind rearm)")
+                }
+                relockProbeJob = null
+            }
+        }
 
         // Trend from the smoothed value vs the previous smoothed value. (Unlock no longer needs a
         // rising trend — arrival is detected from the zone crossing — but `receding` still gates lock.)
