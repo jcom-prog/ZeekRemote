@@ -62,7 +62,7 @@ internal object DepartureSafetyEvidence {
         }
     }
 
-    private fun valid(fix: DepartureFix): Boolean =
+    internal fun valid(fix: DepartureFix): Boolean =
         fix.latitude in -90.0..90.0 && fix.longitude in -180.0..180.0 &&
             fix.accuracyM > 0f && fix.accuracyM <= MAX_ACCURACY_M && fix.elapsedAtMs > 0L
 

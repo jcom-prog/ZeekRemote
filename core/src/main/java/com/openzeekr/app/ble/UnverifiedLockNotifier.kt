@@ -27,6 +27,10 @@ internal object UnverifiedLockNotifier {
         "Possible departure: lock manually",
         "Departure could not be verified. The car may still be unlocked. Lock manually and check the car.")
 
+    fun showLocationUnavailable(context: Context): Boolean = post(context,
+        "Automatic Lock unavailable",
+        "No accurate location reference is available. Lock manually and check the car before leaving.")
+
     private fun post(context: Context, title: String, message: String): Boolean = runCatching {
         val manager = NotificationManagerCompat.from(context)
         if (!manager.areNotificationsEnabled()) return false

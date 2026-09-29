@@ -370,16 +370,25 @@ class ProximityController(
         decisionPolicy.onUnlockConfirmed(now)
         unlockObservedAtMs = now
         departureAnchorJob = scope.launch {
-            val fix = runCatching { departureLocationSource.current() }.getOrNull()
-            if (armedUnlocked && unlockObservedAtMs == now && fix != null &&
-                fix.elapsedAtMs in (unlockElapsed - 1_000L)..(unlockElapsed + 7_000L)) {
+            val fix = DepartureAnchorAcquisition.acquire(
+                unlockedAtElapsedMs = unlockElapsed,
+                now = { android.os.SystemClock.elapsedRealtime() },
+                enabled = { armedUnlocked && unlockObservedAtMs == now &&
+                    _state.value.running && store.current().proximityEnabled },
+                current = { runCatching { departureLocationSource.current() }.getOrNull() },
+            )
+            if (fix != null) {
                 departureAnchor = fix
-                Logx.d("prox", "departure location anchor available (accuracy category: " +
-                    (if (fix.accuracyM <= 8f) "usable)" else "insufficient)"))
+                Logx.d("prox", "usable departure location anchor available")
                 if (linkLostAtMs != 0L && motion.state.value == MotionMonitor.Motion.MOVING)
                     scheduleLinkDepartureCheck()
-            } else {
-                Logx.d("prox", "departure location anchor unavailable; automatic Lock needs manual fallback")
+            } else if (armedUnlocked && unlockObservedAtMs == now && _state.value.running &&
+                store.current().proximityEnabled) {
+                val posted = UnverifiedLockNotifier.showLocationUnavailable(appContext)
+                _state.value = _state.value.copy(lastAction =
+                    "Auto Lock unavailable · no accurate location reference; Lock manually")
+                Logx.w("prox", "usable departure location anchor unavailable after bounded acquisition; " +
+                    "automatic Lock unavailable; manual Lock required; reminderPosted=$posted")
             }
         }
         stepsAtUnlock = motion.observedSteps

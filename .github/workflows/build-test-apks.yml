@@ -11,6 +11,7 @@ on:
       - zeekremote-0.1.42-near-lock-safety
       - zeekremote-0.1.43-lock-observation
       - zeekremote-0.1.44-departure-evidence
+      - zeekremote-0.1.45-anchor-recovery
 
 permissions:
   contents: read
@@ -78,6 +79,8 @@ jobs:
           grep -Fq 'Auto Lock checks phone location when unlocking and leaving. If location is inaccurate, Lock manually and check the car.' app/src/main/java/com/openzeekr/app/ui/ControlsScreen.kt
           grep -Fq 'AutomaticLockGate(AutomaticLockGate.Mode.ACTUATE)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'DepartureSafetyEvidence.confirmsDeparture(anchor, first, second, steps,' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'DepartureAnchorAcquisition.acquire(' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq '"Automatic Lock unavailable"' core/src/main/java/com/openzeekr/app/ble/UnverifiedLockNotifier.kt
 
       - name: Verify permanent phone signing identity
         run: |
@@ -93,7 +96,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='82' versionName='0.1.44-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='83' versionName='0.1.45-work'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
           sha256sum "$APK"
