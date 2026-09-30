@@ -376,6 +376,9 @@ class ProximityController(
                 enabled = { armedUnlocked && unlockObservedAtMs == now &&
                     _state.value.running && store.current().proximityEnabled },
                 current = { runCatching { departureLocationSource.current() }.getOrNull() },
+                diagnostic = { attempt, reason ->
+                    Logx.d("prox", "departure anchor attempt=$attempt outcome=$reason")
+                },
             )
             if (fix != null) {
                 departureAnchor = fix
