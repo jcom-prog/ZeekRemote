@@ -15,6 +15,7 @@ on:
       - zeekremote-0.1.46-location-diagnostics
       - zeekremote-0.1.47-relock-arrival-journal
       - zeekremote-0.1.48-near-anchor-acquisition
+      - zeekremote-0.1.49-departure-location-window
 
 permissions:
   contents: read
@@ -91,9 +92,11 @@ jobs:
           grep -Fq 'Auto Lock checks phone location when unlocking and leaving. If location is inaccurate, Lock manually and check the car.' app/src/main/java/com/openzeekr/app/ui/SetupScreen.kt
           grep -Fq 'Auto Lock checks phone location when unlocking and leaving. If location is inaccurate, Lock manually and check the car.' app/src/main/java/com/openzeekr/app/ui/ControlsScreen.kt
           grep -Fq 'AutomaticLockGate(AutomaticLockGate.Mode.ACTUATE)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
-          grep -Fq 'DepartureSafetyEvidence.confirmsDeparture(anchor, first, second, steps,' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'DepartureSafetyEvidence.confirmsDeparture(anchor, previous, current, steps, nowMs)' core/src/main/java/com/openzeekr/app/ble/DepartureObservationWindow.kt
           grep -Fq 'departureLocationSource.nearAnchor(nearAnchor)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq '.setDurationMillis(NearDepartureAnchor.WINDOW_MS)' core/src/main/java/com/openzeekr/app/ble/DepartureLocationSource.kt
+          grep -Fq '.setDurationMillis(DepartureObservationWindow.WINDOW_MS)' core/src/main/java/com/openzeekr/app/ble/DepartureLocationSource.kt
+          grep -Fq 'departureLocationSource.confirmsDeparture(anchor, steps = {' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq '"Automatic Lock unavailable"' core/src/main/java/com/openzeekr/app/ble/UnverifiedLockNotifier.kt
 
       - name: Verify permanent phone signing identity
@@ -110,7 +113,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='86' versionName='0.1.48-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='87' versionName='0.1.49-work'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
           sha256sum "$APK"

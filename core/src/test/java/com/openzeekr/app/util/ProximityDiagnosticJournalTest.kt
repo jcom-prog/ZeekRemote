@@ -6,6 +6,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ProximityDiagnosticJournalTest {
+    @Test fun departureObservationReasonsRetainNoPositionData() {
+        val outcomes = listOf("accuracy_over_eight_meters", "waiting_for_pair",
+            "departure_confirmed", "departure_returning", "departure_clearance_insufficient",
+            "departure_fix_stale", "request_timeout")
+        for (outcome in outcomes) assertEquals("LOCATION $outcome",
+            ProximityDiagnosticJournal.event("prox", "departure location outcome=$outcome"))
+        assertNull(ProximityDiagnosticJournal.event("prox",
+            "departure location outcome=departure_confirmed latitude=51 longitude=5"))
+    }
     private fun withFile(test: (File) -> Unit) {
         val dir = Files.createTempDirectory("proximity-journal-test").toFile()
         try { test(File(dir, "events.log")) } finally { dir.deleteRecursively() }

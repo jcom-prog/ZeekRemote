@@ -29,7 +29,10 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
             "window_expired_during_request", "no_fix", "invalid_or_inaccurate_fix",
             "fix_predates_unlock", "future_fix", "accepted", "coordinates_invalid", "accuracy_invalid",
             "accuracy_over_eight_meters", "fix_time_invalid", "near_unverified", "near_window_expired",
-            "near_stale", "near_fix_stale")
+            "near_stale", "near_fix_stale", "waiting_for_pair", "observation_expired",
+            "departure_fix_stale", "departure_time_not_advancing", "departure_confirmed",
+            "departure_steps_insufficient", "departure_returning", "departure_timing_invalid",
+            "departure_accuracy_invalid", "departure_clearance_insufficient")
 
         internal fun event(area: String, message: String): String? {
             if (area == "prox") {

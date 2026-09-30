@@ -6,19 +6,17 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Looper
 import androidx.core.content.ContextCompat
-import com.google.android.gms.location.CurrentLocationRequest
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.Priority
-import com.google.android.gms.tasks.CancellationTokenSource
 import com.openzeekr.app.util.Logx
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
-/** An on-demand fix; never persists coordinates or runs a continuous location listener. */
+/** Bounded live position requests; coordinates remain in memory and listeners are removed. */
 internal class DepartureLocationSource(context: Context) {
     private val appContext = context.applicationContext
     private val client = LocationServices.getFusedLocationProviderClient(appContext)
@@ -86,58 +84,82 @@ internal class DepartureLocationSource(context: Context) {
         }
     }
 
-    suspend fun current(): DepartureFix? {
+    /** Keep one request alive while evaluating a fresh pair, including after poor early fixes. */
+    suspend fun confirmsDeparture(
+        anchor: DepartureFix,
+        steps: () -> Long?,
+        enabled: () -> Boolean,
+    ): Boolean {
+        if (!enabled()) return false
         if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION) !=
             PackageManager.PERMISSION_GRANTED) {
             Logx.d("prox", "departure location outcome=fine_permission_missing")
-            return null
+            return false
         }
-        var completed = false
-        val result = withTimeoutOrNull(7_000L) {
-            suspendCancellableCoroutine { continuation ->
-                val cancellation = CancellationTokenSource()
-                continuation.invokeOnCancellation { cancellation.cancel() }
-                val request = CurrentLocationRequest.Builder()
-                    .setPriority(Priority.PRIORITY_HIGH_ACCURACY)
-                    .setMaxUpdateAgeMillis(1_000L)
-                    .setDurationMillis(6_000L)
-                    .build()
-                try {
-                    client.getCurrentLocation(request, cancellation.token).addOnCompleteListener { task ->
-                        if (continuation.isActive) {
-                            val fix = if (task.isSuccessful) task.result else null
-                            val mock = fix != null && (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-                                fix.isMock else fix.isFromMockProvider)
-                            val outcome = when {
-                                task.isCanceled -> "provider_cancelled"
-                                !task.isSuccessful -> "provider_failure"
-                                fix == null -> "provider_no_fix"
-                                !fix.hasAccuracy() -> "accuracy_missing"
-                                mock -> "mock_rejected"
-                                else -> "fix_received"
+        val window = DepartureObservationWindow(anchor, android.os.SystemClock.elapsedRealtime())
+        var callback: LocationCallback? = null
+        try {
+            val result = withTimeoutOrNull(DepartureObservationWindow.WINDOW_MS) {
+                suspendCancellableCoroutine<Boolean> { continuation ->
+                    val listener = object : LocationCallback() {
+                        override fun onLocationResult(result: LocationResult) {
+                            if (!continuation.isActive) return
+                            if (!enabled()) {
+                                Logx.d("prox", "departure location outcome=session_disabled")
+                                continuation.resume(false)
+                                return
                             }
-                            Logx.d("prox", "departure location outcome=$outcome")
-                            completed = true
-                            continuation.resume(fix?.takeIf {
-                                it.hasAccuracy() &&
-                                    !(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-                                        it.isMock else it.isFromMockProvider)
-                            }?.let {
-                                DepartureFix(it.latitude, it.longitude, it.accuracy,
-                                    it.elapsedRealtimeNanos / 1_000_000L)
-                            })
+                            // Process every batched observation, using its real monotonic timestamp.
+                            for (location in result.locations) {
+                                val mock = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                                    location.isMock else location.isFromMockProvider
+                                val fix = if (!mock && location.hasAccuracy()) DepartureFix(
+                                    location.latitude, location.longitude, location.accuracy,
+                                    location.elapsedRealtimeNanos / 1_000_000L) else null
+                                val confirmed = window.observe(fix, steps(), android.os.SystemClock.elapsedRealtime())
+                                val outcome = when {
+                                    mock -> "mock_rejected"
+                                    !location.hasAccuracy() -> "accuracy_missing"
+                                    else -> window.outcome
+                                }
+                                Logx.d("prox", "departure location outcome=$outcome")
+                                if (confirmed && enabled()) {
+                                    continuation.resume(true)
+                                    return
+                                }
+                            }
                         }
                     }
-                } catch (_: SecurityException) {
-                    if (continuation.isActive) {
-                        Logx.d("prox", "departure location outcome=security_exception")
-                        completed = true
-                        continuation.resume(null)
+                    callback = listener
+                    val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1_000L)
+                        .setMinUpdateIntervalMillis(1_000L)
+                        .setMaxUpdateAgeMillis(0L)
+                        .setWaitForAccurateLocation(true)
+                        .setDurationMillis(DepartureObservationWindow.WINDOW_MS)
+                        .build()
+                    try {
+                        client.requestLocationUpdates(request, listener, Looper.getMainLooper())
+                            .addOnSuccessListener {
+                                if (!continuation.isActive) client.removeLocationUpdates(listener)
+                            }
+                            .addOnFailureListener {
+                                if (continuation.isActive) {
+                                    Logx.d("prox", "departure location outcome=provider_failure")
+                                    continuation.resume(false)
+                                }
+                            }
+                    } catch (_: SecurityException) {
+                        if (continuation.isActive) {
+                            Logx.d("prox", "departure location outcome=security_exception")
+                            continuation.resume(false)
+                        }
                     }
                 }
             }
+            if (result == null) Logx.d("prox", "departure location outcome=request_timeout")
+            return result ?: false
+        } finally {
+            callback?.let { listener -> runCatching { client.removeLocationUpdates(listener) } }
         }
-        if (!completed) Logx.d("prox", "departure location outcome=request_timeout")
-        return result
     }
 }

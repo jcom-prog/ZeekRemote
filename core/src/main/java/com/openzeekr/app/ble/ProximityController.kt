@@ -571,23 +571,22 @@ class ProximityController(
             Logx.d("prox", "independent departure unverified: location anchor unavailable")
             return false
         }
-        val first = runCatching { departureLocationSource.current() }.getOrNull()
-        delay(1_600L)
-        val second = runCatching { departureLocationSource.current() }.getOrNull()
-        val steps = stepsAtUnlock?.let { baseline ->
-            motion.observedSteps?.let { (it - baseline).coerceAtLeast(0L) }
-        }
-        val nowElapsed = android.os.SystemClock.elapsedRealtime()
-        val confirmed = DepartureSafetyEvidence.confirmsDeparture(anchor, first, second, steps,
-            nowElapsed)
+        val observedUnlockAt = unlockObservedAtMs
+        fun sameSession(): Boolean = armedUnlocked && unlockObservedAtMs == observedUnlockAt &&
+            _state.value.running && store.current().proximityEnabled && departureAnchor === anchor
+        val confirmed = departureLocationSource.confirmsDeparture(anchor, steps = {
+            stepsAtUnlock?.let { baseline ->
+                motion.observedSteps?.let { (it - baseline).coerceAtLeast(0L) }
+            }
+        }, enabled = ::sameSession) && sameSession()
         if (confirmed) departureProofAtMs = System.currentTimeMillis()
-        else Logx.d("prox", "independent departure unverified: " +
-            DepartureSafetyEvidence.diagnostic(anchor, first, second, steps, nowElapsed))
+        else Logx.d("prox", "independent departure unverified: bounded live location proof unavailable")
         return confirmed
     }
 
     private fun requestVerifiedWalkAwayLock(reason: String) {
-        if (lockConfirmationJob?.isActive == true || lockJob?.isActive == true) return
+        if (lockConfirmationJob?.isActive == true || linkDepartureJob?.isActive == true ||
+            lockJob?.isActive == true) return
         if (System.currentTimeMillis() - lastShadowDepartureAtMs < SHADOW_REARM_MS) {
             decisionPolicy.onWalkAwayVerificationFailed()
             return
