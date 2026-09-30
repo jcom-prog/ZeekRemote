@@ -104,6 +104,7 @@ class ProximityController(
     // Time-based evidence gate. This owns arrival/departure confirmation so neither the fast RSSI
     // path nor the periodic idle check can actuate from one noisy threshold crossing.
     private val decisionPolicy = ProximityDecisionPolicy()
+    private val relockApproachEvidence = RelockApproachEvidence()
     // Confirmed-unlock retry loop: true while actively trying to unlock; the job is the loop itself.
     @Volatile private var needToUnlock = false
     private var unlockJob: Job? = null
@@ -204,6 +205,7 @@ class ProximityController(
                                 System.currentTimeMillis() - unlockObservedAtMs >= 90_000L
                             relockProbeStartedAtElapsedMs = 0L
                             relockProbeLastAtElapsedMs = 0L
+                            relockApproachEvidence.clear()
                             linkLostAtMs = 0L
                             pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
                             if (unverifiedLockAlertRaised) {
@@ -659,6 +661,11 @@ class ProximityController(
         val smoothed = smoothedD.toInt()
         val dist = rssiToDistance(smoothed)
 
+        if (relockRecoveryPending) {
+            relockApproachEvidence.observe(System.currentTimeMillis(), smoothed,
+                motion.state.value == MotionMonitor.Motion.MOVING)
+        } else relockApproachEvidence.clear()
+
         if (armedUnlocked && relockRecoveryPending && relockProbeJob?.isActive != true &&
             lockJob?.isActive != true && lockConfirmationJob?.isActive != true &&
             ble.state.value == DkBleManager.State.SESSION_READY &&
@@ -682,7 +689,8 @@ class ProximityController(
                         (_state.value.smoothedRssi ?: Int.MIN_VALUE) >= unlockThresh + 3) {
                         relockRecoveryPending = false
                         armedUnlocked = false
-                        decisionPolicy.resetLocked()
+                        relockApproachEvidence.restoreAfterVerifiedRelock(
+                            decisionPolicy, System.currentTimeMillis(), unlockThresh)
                         Logx.d("prox", "vehicle reports a newer confirmed Lock; rearming guarded approach unlock")
                     } else {
                         val evidence = RelockRecoveryEvidence.diagnostic(first, second, observedUnlockAt)

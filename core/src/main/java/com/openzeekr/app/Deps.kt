@@ -55,6 +55,8 @@ class Deps(context: Context) {
 
     val config: ConfigStore = ConfigStore.get(context)
         .also {
+            com.openzeekr.app.util.Logx.attachDiagnosticJournal(
+                java.io.File(appCtx.filesDir, "proximity-diagnostics.log"))
             com.openzeekr.app.util.Logx.setHttp(it.current().logHttp)
             com.openzeekr.app.util.Logx.setBle(it.current().logBle)
         }

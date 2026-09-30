@@ -7,6 +7,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.io.File
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
 /**
  * App-wide logging with two INDEPENDENT category gates, both driven by Settings switches:
@@ -25,7 +29,9 @@ import java.util.Locale
  *    only added to the on-device buffer while EITHER category is ON.
  *
  * The ring buffer is a [StateFlow] the UI shows on-device (handy at the car with no debugger).
- * It is cleared when BOTH categories go off. Nothing is persisted, so a restart clears it too.
+ * It is cleared when BOTH categories go off; a restart clears the ring buffer too.
+ * With BLE logging enabled, a separate private bounded journal retains only selected categorical
+ * proximity events. It excludes HTTP bodies, BLE frames, keys and coordinates.
  *
  * Secrets: helper [preview] keeps sensitive values out of the log while still showing enough
  * to debug (length + last 4 chars).
@@ -33,6 +39,12 @@ import java.util.Locale
 object Logx {
     private const val TAG = "openzeekr"
     private const val MAX = 500
+    @Volatile private var journal: ProximityDiagnosticJournal? = null
+    private val journalExecutor = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue<Runnable>(128), { task -> Thread(task, "proximity-diagnostics").apply { isDaemon = true } })
+
+    /** Private event-only recording; enabled by the BLE logging switch. */
+    fun attachDiagnosticJournal(file: File) { journal = ProximityDiagnosticJournal(file) }
 
     private val _lines = MutableStateFlow<List<String>>(emptyList())
     val lines: StateFlow<List<String>> = _lines.asStateFlow()
@@ -97,6 +109,20 @@ object Logx {
     private fun emit(level: Char, area: String, msg: String) {
         if (!anyOn) return
         val line = "${clock.format(Date())} $level/$area  $msg"
+        if (bleOn && ProximityDiagnosticJournal.event(area, msg) != null) {
+            val sink = journal
+            if (sink != null) {
+                val at = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
+                try {
+                    journalExecutor.execute {
+                        try { sink.append(at, area, msg) }
+                        catch (_: Exception) { Log.w(TAG, "[diagnostics] private event journal write failed") }
+                    }
+                } catch (_: java.util.concurrent.RejectedExecutionException) {
+                    Log.w(TAG, "[diagnostics] private event journal queue full")
+                }
+            }
+        }
         val cur = _lines.value
         _lines.value = (if (cur.size >= MAX) cur.drop(cur.size - MAX + 1) else cur) + line
     }

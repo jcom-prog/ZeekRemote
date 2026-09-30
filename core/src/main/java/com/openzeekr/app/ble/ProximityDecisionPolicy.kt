@@ -54,6 +54,8 @@ internal class ProximityDecisionPolicy {
     private var manualWeakNearSinceMs = UNSET_MS
     private var pendingUnlockFarSinceMs = UNSET_MS
 
+    internal fun isStrongNear(rssi: Int): Boolean = rssi >= STRONG_NEAR_RSSI
+
     fun resetLocked() {
         sawStrongNearWhileLocked = false
         departureObserved = false
