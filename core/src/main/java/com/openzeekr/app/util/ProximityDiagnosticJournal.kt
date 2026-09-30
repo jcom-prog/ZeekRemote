@@ -22,14 +22,21 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
     companion object {
         private val location = Regex("departure location outcome=([a-z_]+)")
         private val anchor = Regex("departure anchor attempt=([1-3]) outcome=([a-z_]+)")
+        private val nearAnchor = Regex("departure near anchor outcome=([a-z_]+)")
         private val outcomes = setOf("fine_permission_missing", "provider_cancelled", "provider_failure",
             "provider_no_fix", "accuracy_missing", "mock_rejected", "fix_received", "security_exception",
             "request_timeout", "session_disabled", "window_expired_before_request",
             "window_expired_during_request", "no_fix", "invalid_or_inaccurate_fix",
-            "fix_predates_unlock", "future_fix", "accepted")
+            "fix_predates_unlock", "future_fix", "accepted", "coordinates_invalid", "accuracy_invalid",
+            "accuracy_over_eight_meters", "fix_time_invalid", "near_unverified", "near_window_expired",
+            "near_stale", "near_fix_stale")
 
         internal fun event(area: String, message: String): String? {
             if (area == "prox") {
+                nearAnchor.matchEntire(message)?.let {
+                    return it.groupValues[1].takeIf { outcome -> outcome in outcomes }
+                        ?.let { outcome -> "NEAR_ANCHOR $outcome" }
+                }
                 location.matchEntire(message)?.let {
                     return it.groupValues[1].takeIf { outcome -> outcome in outcomes }?.let { outcome -> "LOCATION $outcome" }
                 }
@@ -54,7 +61,21 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                 "-> STILL" -> "MOTION_STILL"
                 else -> null
             }
-            return if (area == "svc" && message.startsWith("security sleep:")) "SECURITY_SLEEP" else null
+            if (area == "ble") return when {
+                message.startsWith("presence scan ARMED (") -> "BLE_PRESENCE_ARMED"
+                message.startsWith("scanning (UNFILTERED,") -> "BLE_SCAN_STARTED"
+                message.startsWith("connectGatt ") -> "BLE_CONNECT_STARTED"
+                message == "DK session READY" -> "BLE_SESSION_READY"
+                message.startsWith("onConnectionStateChange status=133 ") -> "BLE_STATUS_133"
+                else -> null
+            }
+            if (area == "svc") return when (message) {
+                "departure location foreground=enabled" -> "LOCATION_FOREGROUND_ENABLED"
+                "departure location foreground=unavailable" -> "LOCATION_FOREGROUND_UNAVAILABLE"
+                "departure location foreground=rejected" -> "LOCATION_FOREGROUND_REJECTED"
+                else -> if (message.startsWith("security sleep:")) "SECURITY_SLEEP" else null
+            }
+            return null
         }
     }
 }

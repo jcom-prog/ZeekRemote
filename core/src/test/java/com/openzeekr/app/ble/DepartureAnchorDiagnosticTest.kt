@@ -9,7 +9,7 @@ class DepartureAnchorDiagnosticTest {
 
     @Test fun unavailableAndPoorAccuracyHaveDifferentReasons() {
         assertEquals("no_fix", DepartureAnchorDiagnostic.rejection(null, 10_000L, 11_000L))
-        assertEquals("invalid_or_inaccurate_fix",
+        assertEquals("accuracy_over_eight_meters",
             DepartureAnchorDiagnostic.rejection(fix.copy(accuracyM = 20f), 10_000L, 11_000L))
     }
 

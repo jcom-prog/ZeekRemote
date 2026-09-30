@@ -14,6 +14,7 @@ on:
       - zeekremote-0.1.45-anchor-recovery
       - zeekremote-0.1.46-location-diagnostics
       - zeekremote-0.1.47-relock-arrival-journal
+      - zeekremote-0.1.48-near-anchor-acquisition
 
 permissions:
   contents: read
@@ -70,6 +71,16 @@ jobs:
       - name: Test core and build phone APK
         run: ./gradlew :core:test :app:assembleDebug --stacktrace
 
+      - name: Verify departure location foreground service is packaged
+        run: |
+          set -euo pipefail
+          AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt -type f | sort -V | tail -n 1)
+          test -n "$AAPT"
+          "$AAPT" dump permissions app/build/outputs/apk/debug/app-debug.apk \
+            | grep -F 'android.permission.FOREGROUND_SERVICE_LOCATION'
+          "$AAPT" dump xmltree app/build/outputs/apk/debug/app-debug.apk AndroidManifest.xml \
+            | grep -F 'android:foregroundServiceType' | grep -F '(type 0x11)0x18'
+
       - name: Verify Crystal White 7GT hero is packaged and defaulted
         run: |
           unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -q 'assets/cars/car_7gt.png'
@@ -98,7 +109,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='85' versionName='0.1.47-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='86' versionName='0.1.48-work'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
           sha256sum "$APK"

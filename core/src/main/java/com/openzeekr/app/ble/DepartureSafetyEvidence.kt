@@ -23,7 +23,7 @@ internal object DepartureSafetyEvidence {
     private const val MIN_FIX_SEPARATION_MS = 1_500L
     private const val MIN_STEPS = 10L
     private const val REQUIRED_CLEARANCE_M = 4.0
-    private const val MIN_OUTWARD_PROGRESS_M = 2.0
+    private const val RETURN_PROGRESS_M = 2.0
 
     /** Categorical reasons only; never include a phone or vehicle position in logs. */
     fun diagnostic(
@@ -38,8 +38,8 @@ internal object DepartureSafetyEvidence {
             second.elapsedAtMs - first.elapsedAtMs < MIN_FIX_SEPARATION_MS ||
             second.elapsedAtMs > nowElapsedMs ||
             nowElapsedMs - second.elapsedAtMs > MAX_FIX_AGE_MS -> "location timing invalid"
-        distanceM(anchor, second) - distanceM(anchor, first) < MIN_OUTWARD_PROGRESS_M ->
-            "outward movement unverified"
+        distanceM(anchor, second) < distanceM(anchor, first) - RETURN_PROGRESS_M ->
+            "returning toward car"
         else -> "distance lower bound insufficient"
     }
 
@@ -54,8 +54,8 @@ internal object DepartureSafetyEvidence {
             second.elapsedAtMs - first.elapsedAtMs < MIN_FIX_SEPARATION_MS ||
             second.elapsedAtMs > nowElapsedMs ||
             nowElapsedMs - second.elapsedAtMs > MAX_FIX_AGE_MS) return false
-        if (distanceM(anchor, second) - distanceM(anchor, first) < MIN_OUTWARD_PROGRESS_M)
-            return false // already away but walking back is not a departure
+        if (distanceM(anchor, second) < distanceM(anchor, first) - RETURN_PROGRESS_M)
+            return false // a clearly observed return cancels the command
         return listOf(first, second).all {
             val lowerBoundM = distanceM(anchor, it) - 2.0 * (anchor.accuracyM + it.accuracyM)
             lowerBoundM >= REQUIRED_CLEARANCE_M

@@ -8,6 +8,7 @@
     <!-- Keep the BLE digital-key session alive in the background -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- Keep the CPU awake while the keep-alive/proximity loop runs with the screen off; a FGS
@@ -46,7 +47,7 @@
         <service
             android:name="com.openzeekr.app.ble.ProximityService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
+            android:foregroundServiceType="connectedDevice|location" />
 
         <!-- Receives the hardware-offloaded presence scan (PendingIntent from the BLE controller):
              ALL_MATCHES wakes the app on the next car advert. exported=false is fine —

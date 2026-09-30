@@ -10,6 +10,9 @@ import android.content.BroadcastReceiver
 import android.content.IntentFilter
 import android.bluetooth.BluetoothAdapter
 import android.content.pm.ServiceInfo
+import android.content.pm.PackageManager
+import android.Manifest
+import android.location.LocationManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -564,9 +567,28 @@ class ProximityService : Service() {
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
 
-        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+        val connectedType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE else 0
-        ServiceCompat.startForeground(this, NOTIF_ID, notification, type)
+        val fine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+        val background = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+        val locationEnabled = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
+            getSystemService(LocationManager::class.java)?.isLocationEnabled == true else false
+        val locationType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            DepartureForegroundPolicy.allowLocation(fine, background, locationEnabled))
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0
+        try {
+            ServiceCompat.startForeground(this, NOTIF_ID, notification, connectedType or locationType)
+            Logx.d("svc", "departure location foreground=" + if (locationType != 0) "enabled" else "unavailable")
+        } catch (error: SecurityException) {
+            if (locationType == 0) throw error
+            // Permission/location switches can change between the check and startForeground.
+            // Keep the digital key running instead of crashing the connected-device service.
+            ServiceCompat.startForeground(this, NOTIF_ID, notification, connectedType)
+            Logx.w("svc", "departure location foreground=rejected")
+        }
     }
 
     private fun createChannel() {

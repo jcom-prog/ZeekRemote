@@ -35,4 +35,23 @@ class ProximityDiagnosticJournalTest {
         journal.append("12:01", "prox", "unlock confirmed (secret payload) -> departure watch")
         assertEquals("12:01 UNLOCK_CONFIRMED\n", file.readText())
     }
+
+    @Test fun foregroundAndNearRecoveryReasonsRemainCategorical() = withFile { file ->
+        val journal = ProximityDiagnosticJournal(file)
+        journal.append("12:00", "svc", "departure location foreground=enabled")
+        journal.append("12:01", "prox", "departure near anchor outcome=accuracy_over_eight_meters")
+        journal.append("12:02", "prox", "departure near anchor outcome=accepted")
+        assertEquals(listOf("12:00 LOCATION_FOREGROUND_ENABLED",
+            "12:01 NEAR_ANCHOR accuracy_over_eight_meters", "12:02 NEAR_ANCHOR accepted"), file.readLines())
+    }
+
+    @Test fun connectAndReadyTimingIsRetainedWithoutDeviceAddressOrKeyMaterial() = withFile { file ->
+        val journal = ProximityDiagnosticJournal(file)
+        journal.append("12:00", "ble", "connectGatt PRIVATE_DEVICE_ADDRESS")
+        journal.append("12:01", "ble", "DK session READY")
+        journal.append("12:02", "ble", "onConnectionStateChange status=133 newState=0")
+        assertEquals(listOf("12:00 BLE_CONNECT_STARTED", "12:01 BLE_SESSION_READY",
+            "12:02 BLE_STATUS_133"), file.readLines())
+        assertFalse(file.readText().contains("PRIVATE_DEVICE_ADDRESS"))
+    }
 }

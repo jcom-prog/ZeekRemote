@@ -116,6 +116,7 @@ class ProximityController(
     private val departureLocationSource = DepartureLocationSource(appContext)
     private var departureAnchor: DepartureFix? = null
     private var departureAnchorJob: Job? = null
+    private var nearDepartureAnchor: NearDepartureAnchor? = null
     private var linkDepartureJob: Job? = null
     private var departureProofAtMs = 0L
     private var unlockObservedAtMs = 0L
@@ -371,28 +372,26 @@ class ProximityController(
         postUnlockFastUntilElapsedMs = android.os.SystemClock.elapsedRealtime() + POST_UNLOCK_FAST_MONITOR_MS
         decisionPolicy.onUnlockConfirmed(now)
         unlockObservedAtMs = now
+        val nearAnchor = NearDepartureAnchor(unlockElapsed)
+        nearDepartureAnchor = nearAnchor
         departureAnchorJob = scope.launch {
-            val fix = DepartureAnchorAcquisition.acquire(
-                unlockedAtElapsedMs = unlockElapsed,
-                now = { android.os.SystemClock.elapsedRealtime() },
-                enabled = { armedUnlocked && unlockObservedAtMs == now &&
-                    _state.value.running && store.current().proximityEnabled },
-                current = { runCatching { departureLocationSource.current() }.getOrNull() },
-                diagnostic = { attempt, reason ->
-                    Logx.d("prox", "departure anchor attempt=$attempt outcome=$reason")
-                },
-            )
+            val fix = departureLocationSource.nearAnchor(nearAnchor) {
+                armedUnlocked && unlockObservedAtMs == now &&
+                    _state.value.running && store.current().proximityEnabled
+            }
             if (fix != null) {
+                if (!armedUnlocked || unlockObservedAtMs != now || !_state.value.running ||
+                    !store.current().proximityEnabled) return@launch
                 departureAnchor = fix
                 Logx.d("prox", "usable departure location anchor available")
-                if (linkLostAtMs != 0L && motion.state.value == MotionMonitor.Motion.MOVING)
+                if (linkLostAtMs != 0L)
                     scheduleLinkDepartureCheck()
             } else if (armedUnlocked && unlockObservedAtMs == now && _state.value.running &&
                 store.current().proximityEnabled) {
                 val posted = UnverifiedLockNotifier.showLocationUnavailable(appContext)
                 _state.value = _state.value.copy(lastAction =
                     "Auto Lock unavailable · no accurate location reference; Lock manually")
-                Logx.w("prox", "usable departure location anchor unavailable after bounded acquisition; " +
+                Logx.w("prox", "usable departure location anchor unavailable after bounded near acquisition; " +
                     "automatic Lock unavailable; manual Lock required; reminderPosted=$posted")
             }
         }
@@ -431,7 +430,7 @@ class ProximityController(
                 "stepsSinceUnlock=${observedStepsSinceUnlock ?: "unavailable"}) " +
                 "-> independent departure check; no Lock from link loss alone")
             queueUnverifiedLockAlert()
-            if (motion.state.value == MotionMonitor.Motion.MOVING) scheduleLinkDepartureCheck()
+            scheduleLinkDepartureCheck()
             gattEma = null
             inCarSinceMs = 0L; steadyRef = null; steadySinceMs = 0L; lastCadence = ""
             rssiNullStreak = 0; pingInFlight = false; pingFailStreak = 0; lastPingMs = 0L
@@ -459,12 +458,12 @@ class ProximityController(
                     !store.current().proximityEnabled || lockJob?.isActive == true) return@launch
                 if (confirmPhysicalDeparture() && armedUnlocked &&
                     autoLockGate.onVerifiedDeparture() == AutomaticLockGate.Action.LOCK) {
-                    Logx.d("prox", "link-down departure corroborated by position; sending Lock")
+                    Logx.d("prox", "pending departure corroborated by position; sending Lock")
                     startLockLoop("verified-link-departure")
                     return@launch
                 }
             }
-            Logx.w("prox", "link-down departure unverified; manual Lock required")
+            Logx.w("prox", "pending departure unverified; manual Lock required")
         }
     }
 
@@ -635,11 +634,15 @@ class ProximityController(
                             Logx.w("prox", "departure position unverified; NO LOCK SENT; " +
                                 "manual Lock required, reminderPosted=$posted")
                             decisionPolicy.onWalkAwayVerificationFailed()
+                            scheduleLinkDepartureCheck()
                         }
                     }
                 }
             } else {
                 decisionPolicy.onWalkAwayVerificationFailed()
+                // Stopping after the walk can cancel RSSI confirmation. It cannot erase two fresh
+                // positions outside the conservative clearance; check them independently.
+                scheduleLinkDepartureCheck()
             }
             lockConfirmationJob = null
         }
@@ -709,6 +712,8 @@ class ProximityController(
 
         val now = System.currentTimeMillis()
         if (armedUnlocked) {
+            if (ble.state.value == DkBleManager.State.SESSION_READY)
+                nearDepartureAnchor?.observe(smoothed, android.os.SystemClock.elapsedRealtime())
             strongestRssiSinceUnlock = maxOf(strongestRssiSinceUnlock, rssi)
             if (rssi >= STRONG_NEAR_DIAGNOSTIC_RSSI) {
                 lastStrongNearAtMs = now

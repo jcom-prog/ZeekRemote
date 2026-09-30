@@ -51,4 +51,17 @@ class DepartureSafetyEvidenceTest {
             DepartureFix(51.00030, 5.0000, 3f, 22_000L),
             35L, 22_100L))
     }
+
+    @Test fun stoppedAfterWalkingAwayCanLockFromTwoFreshFarFixes() {
+        val far = DepartureFix(51.00030, 5.00000, 3f, 20_000L)
+        assertTrue(DepartureSafetyEvidence.confirmsDeparture(car, far,
+            far.copy(elapsedAtMs = 22_000L), 35L, 22_100L))
+    }
+
+    @Test fun stoppedBesideCarAndGpsJitterDoNotBecomeDeparture() {
+        assertFalse(DepartureSafetyEvidence.confirmsDeparture(car,
+            DepartureFix(51.00003, 5.00000, 3f, 20_000L),
+            DepartureFix(51.00004, 5.00000, 3f, 22_000L),
+            35L, 22_100L))
+    }
 }
