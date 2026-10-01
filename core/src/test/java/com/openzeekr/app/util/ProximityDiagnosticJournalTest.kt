@@ -6,6 +6,23 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ProximityDiagnosticJournalTest {
+    @Test fun capabilityObservationWhitelistsOnlyCategories() {
+        val value = "noSense=ADVERTISED peMode=UNKNOWN calibration=NOT_ADVERTISED"
+        assertEquals("VEHICLE_CAPABILITIES $value", ProximityDiagnosticJournal.event("dk", "vehicle capabilities observed $value"))
+        assertNull(ProximityDiagnosticJournal.event("dk", "vehicle capabilities observed $value VIN=private"))
+        assertNull(ProximityDiagnosticJournal.event("dk", "vehicle capabilities observed request_failed token=private"))
+        assertNull(ProximityDiagnosticJournal.event("dk", "vehicle capabilities observed noSense=SUPPORTED"))
+        assertEquals("VEHICLE_CAPABILITIES binding_rejected", ProximityDiagnosticJournal.event("dk", "vehicle capabilities observed binding_rejected"))
+    }
+
+    @Test fun vehicleStatusRecordsOnlyWhitelistedRawBits() {
+        val line = "vehicle status observed session=42 approach=1 walkAway=0 pe=1 ps=0 central=3"
+        assertEquals("VEHICLE_STATUS 42 1 0 1 0 3", ProximityDiagnosticJournal.event("dk", line))
+        assertNull(ProximityDiagnosticJournal.event("dk", line + " VIN=private"))
+        assertNull(ProximityDiagnosticJournal.event("dk", line.replace("central=3", "central=4")))
+        assertNull(ProximityDiagnosticJournal.event("dk", "raw body=private"))
+        assertNull(ProximityDiagnosticJournal.event("dk", line.replace("session=42", "session=-1")))
+    }
     @Test fun departureObservationReasonsRetainNoPositionData() {
         val outcomes = listOf("accuracy_over_eight_meters", "waiting_for_pair",
             "departure_confirmed", "departure_returning", "departure_clearance_insufficient",

@@ -23,6 +23,7 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
         private val location = Regex("departure location outcome=([a-z_]+)")
         private val anchor = Regex("departure anchor attempt=([1-3]) outcome=([a-z_]+)")
         private val nearAnchor = Regex("departure near anchor outcome=([a-z_]+)")
+        private val vehicleStatus = Regex("vehicle status observed session=([1-9][0-9]{0,18}) approach=([01]) walkAway=([01]) pe=([01]) ps=([01]) central=([0-3])")
         private val outcomes = setOf("fine_permission_missing", "provider_cancelled", "provider_failure",
             "provider_no_fix", "accuracy_missing", "mock_rejected", "fix_received", "security_exception",
             "request_timeout", "session_disabled", "window_expired_before_request",
@@ -35,6 +36,20 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
             "departure_accuracy_invalid", "departure_clearance_insufficient")
 
         internal fun event(area: String, message: String): String? {
+            if (area == "dk") {
+                val prefix = "vehicle capabilities observed "
+                if (message.startsWith(prefix)) {
+                    val value = message.removePrefix(prefix)
+                    if (value in setOf("identity_missing", "binding_rejected", "response_rejected", "request_failed") ||
+                        Regex("noSense=(UNKNOWN|ADVERTISED|NOT_ADVERTISED) peMode=(UNKNOWN|ADVERTISED|NOT_ADVERTISED) calibration=(UNKNOWN|ADVERTISED|NOT_ADVERTISED)").matches(value))
+                        return "VEHICLE_CAPABILITIES $value"
+                    return null
+                }
+                vehicleStatus.matchEntire(message)?.let {
+                        return "VEHICLE_STATUS " + it.groupValues.drop(1).joinToString(" ")
+                    }
+                return null
+            }
             if (area == "prox") {
                 nearAnchor.matchEntire(message)?.let {
                     return it.groupValues[1].takeIf { outcome -> outcome in outcomes }

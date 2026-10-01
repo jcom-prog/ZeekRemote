@@ -134,6 +134,10 @@ class ConfigStore private constructor(private val prefs: SharedPreferences) {
         return c
     }
 
+    @Volatile private var revision = 0L
+    /** Conservative diagnostic epoch: even an A -> B -> A change invalidates a response. */
+    @Synchronized fun diagnosticSnapshot(): Pair<Long, SecretsConfig> = revision to _config.value
+
     fun current(): SecretsConfig = _config.value
 
     fun update(transform: (SecretsConfig) -> SecretsConfig) {
@@ -150,7 +154,8 @@ class ConfigStore private constructor(private val prefs: SharedPreferences) {
         persist(next)
     }
 
-    private fun persist(cfg: SecretsConfig) {
+    @Synchronized private fun persist(cfg: SecretsConfig) {
+        revision++
         prefs.edit().putString(KEY_CONFIG, json.encodeToString(SecretsConfig.serializer(), cfg)).apply()
         _config.value = cfg
     }

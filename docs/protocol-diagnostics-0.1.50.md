@@ -1,0 +1,13 @@
+# 0.1.50-work: read-only proximity diagnostics
+
+This candidate gathers missing vehicle evidence; it does not fix walk-away Lock or approach distance. The 0.1.49 control policy, independent departure protection, motion sleep and watch behaviour remain in place. No native proximity mode is enabled by diagnostics.
+
+Settings exposes **Read vehicle capabilities**, available with BLE logging enabled. A single GET reports only categorical capability evidence. Actual request authorization, encrypted VIN and endpoint host must match the captured configuration. Every persisted configuration change increments a conservative epoch; changes away and back also invalidate an in-flight response. HTTP/envelope failures cannot produce positive capability evidence. Empty/malformed data remains UNKNOWN. ADVERTISED is not enabled, calibrated, accepted or physically working.
+
+Authenticated BLE status transitions record session-scoped raw approach/walkAway/PE/PS/central bits. Reset and reauthentication invalidate previous observations. The private bounded journal stores only whitelisted categories and raw bits, with timestamps; it does not store credentials, VIN, coordinates or packet bodies in these new records. Existing verbose BLE logging remains sensitive and private. Session numbers are process-local, not permanent vehicle IDs. Raw bits do not prove distance or physical lock state.
+
+Local validation perspectives: protocol/schema decoding; session/config lifecycle and wrong request identity; rejection semantics and journal privacy. 198 core tests pass per debug/release variant, and the local phone debug build succeeds. These are not vehicle or end-to-end cloud tests. Actual cloud response shape and hardware values remain unverified.
+
+The local debug certificate differs from the permanent test signer: do not install the local artifact. GitHub CI must pass tests, build, service registration, artwork/instructions, identity and permanent signer checks before any artifact is offered. Preserve the 0.1.38 fallback. No practice logs, derived traces or original APK contents belong in this branch.
+
+Planned short field observation after release: preserve the screen-off >=3-minute initial approach wait; open/close a door after unlock; use the capability button near the car; observe deliberate manual Lock/Unlock transitions without a departure loop; finish manually locked and physically checked. Stop if initial unlock fails or an unexpected near-car lock occurs. Supply the exact protocol, compact template and guarded PowerShell journal export when the signed artifact has passed all release checks. No claim of a repaired walk-away Lock.

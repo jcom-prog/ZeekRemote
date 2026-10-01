@@ -67,6 +67,7 @@ class RealDkSession(
     private val pending = ConcurrentHashMap<Int, CompletableDeferred<ByteArray>>()
     /** Serializes encrypted 0x0110 commands which share the 0x0111/0x0112 response slots. */
     private val controlMutex = Mutex()
+    private val vehicleObservations = VehicleObservationSession()
 
     /** Fire-and-forget scope for the transport ACK (onRawInbound is not a coroutine). */
     private val ackScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -236,6 +237,7 @@ class RealDkSession(
         }.onFailure { Logx.w("dk", "coef upload: ${it.message}") }
 
         isEstablished = true
+        vehicleObservations.authenticated()
         Logx.d("dk", "=== DK session established ===")
     }
 
@@ -405,6 +407,7 @@ class RealDkSession(
      * keys) but leaves the transport handler live so the re-handshake still receives frames.
      */
     fun reset() {
+        vehicleObservations.reset()
         isEstablished = false; cryptoReady = false; cmacKeyCache = null
         // Complete (don't bare-cancel) each in-flight waiter with a typed error. A bare .cancel()
         // makes an awaiting handshake step throw a CancellationException whose obfuscated class name
@@ -592,12 +595,20 @@ class RealDkSession(
 
     /** Called by the transport for each reassembled+CRC-checked inbound frame. */
     private fun onRawInbound(cmdId: Int, rawBody: ByteArray) {
+        val observationGeneration = vehicleObservations.capture()
         // Liveness: ANY frame (even one we can't decrypt, e.g. a NAK) proves the car is talking.
         pingWaiter?.let { it.complete(cmdId); pingWaiter = null }
         val body = try {
             if (cryptoReady && DkProtocol.isEncrypted(cmdId)) DkCrypto.gcmDecrypt(sKey, iv, rawBody) else rawBody
         } catch (e: Exception) {
             Logx.w("dk", "decrypt ${hex(cmdId)} failed: ${e.message} rawBody(${rawBody.size}B)=${hexOf(rawBody)}"); return
+        }
+        // Read-only status transitions. Never decode raw pre-authentication data as CAN status.
+        if (cmdId == DkProtocol.CMD_V2A_VSTATUS_SYNC && isEstablished && cryptoReady &&
+            Logx.isBleEnabled) {
+            vehicleObservations.changedStatus(observationGeneration, body)?.let {
+                Logx.d("dk", it)
+            }
         }
         // Diagnostic tap (active only during a probeControl window): see every frame the car returns.
         probeSink?.invoke(cmdId, body)

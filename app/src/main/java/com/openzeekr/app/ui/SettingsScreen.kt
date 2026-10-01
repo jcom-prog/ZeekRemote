@@ -74,6 +74,7 @@ fun SettingsScreen(deps: Deps, modifier: Modifier = Modifier) {
     val liveCfg by store.config.collectAsState()
     var cfg by remember { mutableStateOf(store.current()) }
     var status by remember { mutableStateOf("") }
+    var observingCapabilities by remember { mutableStateOf(false) }
     var showHeroLab by remember { mutableStateOf(false) }
     var confirmSignOut by remember { mutableStateOf(false) }
     // Which log category is pending a sensitive-data confirmation: "http", "ble", or null.
@@ -197,6 +198,16 @@ fun SettingsScreen(deps: Deps, modifier: Modifier = Modifier) {
                 )
             }
             if (liveCfg.logHttp || liveCfg.logBle) LogViewer()
+            Text("Diagnostic build: proximity behaviour is unchanged. Capability observation is read-only.", fontSize = 12.sp)
+            OutlinedButton(enabled = liveCfg.logBle && !observingCapabilities, onClick = {
+                observingCapabilities = true
+                scope.launch {
+                    try { status = deps.control.observeProximityCapabilities() }
+                    finally { observingCapabilities = false }
+                }
+            }, modifier = Modifier.fillMaxWidth()) {
+                Text(if (observingCapabilities) "Reading vehicle capabilities…" else "Read vehicle capabilities")
+            }
             // In-development tool: gated behind developer mode (tap the version 10x in About) so it
             // isn't shown to normal users between releases.
             if (liveCfg.devMode) OutlinedButton(onClick = { showHeroLab = true }, modifier = Modifier.fillMaxWidth()) {

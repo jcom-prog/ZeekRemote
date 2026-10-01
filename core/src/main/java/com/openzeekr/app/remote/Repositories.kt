@@ -1,6 +1,7 @@
 package com.openzeekr.app.remote
 
 import android.util.Base64
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import com.openzeekr.app.config.ConfigStore
 import com.openzeekr.app.net.ApiClient
 import com.openzeekr.app.net.model.LoginRequest
@@ -105,6 +106,29 @@ class RemoteControlRepository(private val store: ConfigStore, private val client
     /** Per-VIN supported functions (drives button visibility). Fail-open on error. */
     suspend fun capabilities(): CallResult<com.openzeekr.app.net.model.VehicleCapabilities> = withContext(Dispatchers.IO) {
         guarded { com.openzeekr.app.net.model.VehicleCapabilityParse.parse(client.api.vehicleCapability().data) }
+    }
+
+    /** One user-triggered GET; never actuates, retries, enables native modes, or authorizes Lock. */
+    suspend fun observeProximityCapabilities(): String = withContext(Dispatchers.IO) {
+        if (!com.openzeekr.app.util.Logx.isBleEnabled) return@withContext "BLE logging must be enabled."
+        val (epoch, cfg) = store.diagnosticSnapshot()
+        val outcome = try {
+            if (cfg.vin.isBlank() || cfg.accessToken.isBlank() || cfg.vinKey.isBlank() || cfg.vinIv.isBlank()) {
+                "identity_missing"
+            } else {
+                val expectedVin = com.openzeekr.app.net.VinCrypto.encryptVin(cfg.vin, cfg.vinKey, cfg.vinIv)
+                val expectedHost = cfg.baseUrl.toHttpUrl().host
+                val response = client.api.vehicleCapabilityDiagnostic()
+                val request = response.raw().request
+                com.openzeekr.app.net.model.CapabilityObservation.evaluate(
+                    epoch, store.diagnosticSnapshot().first, cfg.accessToken, request.header("authorization"),
+                    expectedVin, request.header("x-vin"), expectedHost, request.url.host,
+                    response.isSuccessful, response.body())
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (_: Exception) { "request_failed" }
+        com.openzeekr.app.util.Logx.d("dk", "vehicle capabilities observed $outcome")
+        "Vehicle capability observation: $outcome. Read-only; not a Lock confirmation."
     }
 
     /** The car's connectivity data-plan usage (eSIM "traffic volume"). VIN via X-VIN header. */

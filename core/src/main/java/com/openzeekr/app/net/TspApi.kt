@@ -100,6 +100,10 @@ interface TspApi {
     @GET("ms-vehicle-capability/api/v1.0/vehicle/function/model/info")
     suspend fun vehicleCapability(): BaseResponse<kotlinx.serialization.json.JsonElement>
 
+    /** Read-only diagnostic: retain actual request headers for vehicle/account binding. */
+    @GET("ms-vehicle-capability/api/v1.0/vehicle/function/model/info")
+    suspend fun vehicleCapabilityDiagnostic(): retrofit2.Response<BaseResponse<kotlinx.serialization.json.JsonElement>>
+
     // ---- connectivity data-plan usage (the car's eSIM "traffic volume"). VIN via X-VIN header. ----
     @GET("ms-mno-service/api/v1.0/app/vehicle/data/usage/info")
     suspend fun trafficReport(): BaseResponse<com.openzeekr.app.net.model.TrafficReport>
