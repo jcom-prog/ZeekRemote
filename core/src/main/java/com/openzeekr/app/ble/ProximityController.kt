@@ -197,6 +197,7 @@ class ProximityController(
         monitorJob = scope.launch {
             while (isActive) {
                 farAsleep = false   // onSample sets it true only for FAR + still; cleared each tick
+                val pollCycleAtMs = android.os.SystemClock.elapsedRealtime()
                 when (ble.state.value) {
                     DkBleManager.State.SESSION_READY, DkBleManager.State.CONNECTED -> {
                         if (linkLostAtMs != 0L) {
@@ -237,7 +238,9 @@ class ProximityController(
                     }
                     else -> onSessionDown()
                 }
-                if (farAsleep) sleepUntilMotion() else delay(nextIntervalMs)
+                if (farAsleep) sleepUntilMotion() else delay(
+                    (nextIntervalMs - (android.os.SystemClock.elapsedRealtime() - pollCycleAtMs))
+                        .coerceAtLeast(0L))
             }
         }
     }
@@ -532,22 +535,28 @@ class ProximityController(
         }
         // Recent car activity, the initial unlock window, or observed phone movement keeps RSSI
         // sampling fast. A silent car must not force a three-second cadence while walking away.
+        val pollStartedAtMs = android.os.SystemClock.elapsedRealtime()
         val rssi = ble.pollRemoteRssi()
         if (rssi != null) { rssiNullStreak = 0; onSample(rssi) }
         else if (++rssiNullStreak >= RSSI_NULL_RECONNECT) { rssiNullStreak = 0; forceReconnect() }
-        delay(MONITOR_FAST_MS)
+        delay((MONITOR_FAST_MS - (android.os.SystemClock.elapsedRealtime() - pollStartedAtMs))
+            .coerceAtLeast(0L))
     }
 
-    /** A GATT poll returns the preceding asynchronous RSSI reading, which may be stale. */
+    /** Require independent, newly completed GATT reads throughout departure confirmation. */
     private suspend fun confirmWalkAway(): Boolean {
         val confirmation = WalkAwayLockConfirmation(store.current().sensitivityLockRssi)
-        // Discard the first poll: it can still contain the sample that triggered the candidate.
-        ble.pollRemoteRssi()
+        var previousPollStartedAtMs = android.os.SystemClock.elapsedRealtime()
         repeat(9) {
-            delay(MONITOR_FAST_MS)
+            delay((MONITOR_FAST_MS -
+                (android.os.SystemClock.elapsedRealtime() - previousPollStartedAtMs)).coerceAtLeast(0L))
+            previousPollStartedAtMs = android.os.SystemClock.elapsedRealtime()
             if (ble.state.value != DkBleManager.State.SESSION_READY ||
                 motion.state.value != MotionMonitor.Motion.MOVING) return false
             val rssi = ble.pollRemoteRssi() ?: return@repeat
+            // Awaiting a callback can outlive a motion transition or session shutdown.
+            if (ble.state.value != DkBleManager.State.SESSION_READY ||
+                motion.state.value != MotionMonitor.Motion.MOVING) return false
             when (confirmation.observe(rssi)) {
                 WalkAwayLockConfirmation.Decision.LOCK -> {
                     Logx.d("prox", "walk-away: fresh sustained departure confirmed")

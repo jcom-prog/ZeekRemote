@@ -156,13 +156,8 @@ class DkBleManager(base: Context) : DkTransport {
     val hasCredential: Boolean get() = credential != null
 
     // ---- live RSSI of the connected car (for the RPA proximity gate) ----
-    @Volatile private var lastRemoteRssi: Int? = null
-    // True between initiating a readRemoteRssi and its onReadRemoteRssi callback. If a NEW read is
-    // initiated while this is still set, the PREVIOUS read never called back -> the link is wedged
-    // (its cached value is stale), so pollRemoteRssi reports null rather than a stale reading. This is
-    // what lets ProximityController's null-streak reconnect actually fire; a half-dead GATT
-    // (DeadObjectException on read, or a read that never calls back) otherwise looked "alive" forever.
-    @Volatile private var rssiReadPending = false
+    private val rssiReads = PendingRssiRead()
+    private val rssiPollLock = Mutex()
 
     /** Epoch-ms of the last inbound DK frame from the car. The car pushes status (0x121 VSTATUS_SYNC
      *  etc.) when the vehicle state CHANGES (movement/doors) — bursts with long silent gaps while
@@ -174,34 +169,30 @@ class DkBleManager(base: Context) : DkTransport {
      *  controller uses it to wake instantly from its unlocked idle-wait the moment the car speaks. */
     @Volatile var onInboundActivity: (() -> Unit)? = null
 
-    /**
-     * Trigger a remote-RSSI read and return the value from the PREVIOUS read's callback (the read is
-     * async). Returns null when the link is not usable, so callers treat null as a liveness failure:
-     *  - the read can't be initiated (no GATT, or readRemoteRssi throws DeadObjectException / returns
-     *    false on a dead binder), or
-     *  - the PREVIOUS read never called back (rssiReadPending still set) -> the cached value is stale.
-     * A dead/half-dead GATT that never emits onConnectionStateChange(DISCONNECTED) used to keep
-     * returning the last good RSSI forever; now it surfaces as null and the null-streak reconnect fires.
+    /** Await this request's callback, never a scan result or the previous request's RSSI.
+     * A timeout leaves the request pending until its late callback drains or GATT resets.
      */
     @SuppressLint("MissingPermission")
-    fun pollRemoteRssi(): Int? {
-        // If Bluetooth is OFF (user toggled it, mid-session), don't even attempt the transact — a
-        // readRemoteRssi() on the now-dead IBluetoothGatt binder throws DeadObjectException and Android
-        // floods logcat ("Too many transaction errors"). Report null so callers treat it as a dead link.
-        if (!bluetoothAvailable || gatt == null) { lastRemoteRssi = null; rssiReadPending = false; return null }
-        val initiated = runCatching { gatt?.readRemoteRssi() == true }.getOrDefault(false)
-        if (!initiated) {
-            // Dead binder / no GATT: the reading is meaningless. Drop the stale cache and report null.
-            lastRemoteRssi = null; rssiReadPending = false
-            return null
+    suspend fun pollRemoteRssi(): Int? = rssiPollLock.withLock {
+        val current = gatt
+        if (!bluetoothAvailable || current == null) {
+            rssiReads.clear()
+            return@withLock null
         }
-        val prevAnswered = !rssiReadPending   // did the previous read's callback land?
-        rssiReadPending = true
-        return if (prevAnswered) lastRemoteRssi else null
+        // Register before calling Android: a fast callback may run before readRemoteRssi returns.
+        val request = rssiReads.begin(current) ?: return@withLock null
+        val initiated = runCatching { current.readRemoteRssi() }.getOrDefault(false)
+        if (!initiated) {
+            rssiReads.rejected(request)
+            return@withLock null
+        }
+        val sample = withTimeoutOrNull(600L) { request.reply.await() }
+        if (gatt === current && bluetoothAvailable)
+            sample?.valueAt(android.os.SystemClock.elapsedRealtime()) else null
     }
 
     // ---- GATT state ----
-    private var gatt: BluetoothGatt? = null
+    @Volatile private var gatt: BluetoothGatt? = null
     private var chWrite1: BluetoothGattCharacteristic? = null
     private var chWrite2: BluetoothGattCharacteristic? = null
     private var chNotify1: BluetoothGattCharacteristic? = null
@@ -371,10 +362,8 @@ class DkBleManager(base: Context) : DkTransport {
         advBroadcastRnd = rnd
         lastDevice = result.device
         lastRnd = rnd
-        // Seed only the first asynchronous GATT-RSSI cycle. The proximity policy still requires
-        // sustained direction evidence, so this cannot turn one stale advert into an unlock.
-        lastRemoteRssi = result.rssi
-        rssiReadPending = false
+        // Advertising RSSI remains approach evidence; it must not masquerade as a GATT read.
+        rssiReads.clear()
         Logx.d("ble", "presence direct-connect ${result.device.address} rssi=${result.rssi} " +
             "rnd=${rnd.joinToString("") { "%02x".format(it) }}")
         _state.value = State.CONNECTING
@@ -646,7 +635,7 @@ class DkBleManager(base: Context) : DkTransport {
         gatt = null
         chWrite1 = null; chWrite2 = null; chNotify1 = null; chNotify2 = null
         reasm1.reset(); reasm2.reset()
-        lastRemoteRssi = null; rssiReadPending = false
+        rssiReads.clear()
         _state.value = State.IDLE
     }
 
@@ -692,7 +681,7 @@ class DkBleManager(base: Context) : DkTransport {
                 (session as? RealDkSession)?.reset()
                 chWrite1 = null; chWrite2 = null; chNotify1 = null; chNotify2 = null
                 reasm1.reset(); reasm2.reset()
-                lastRemoteRssi = null; rssiReadPending = false
+                rssiReads.clear()
                 val wasReady = _state.value == State.SESSION_READY
                 runCatching { g.close() }
                 gatt = null
@@ -779,8 +768,9 @@ class DkBleManager(base: Context) : DkTransport {
         }
 
         override fun onReadRemoteRssi(g: BluetoothGatt, rssi: Int, status: Int) {
-            rssiReadPending = false   // the read answered (success or not) -> link is alive
-            if (status == BluetoothGatt.GATT_SUCCESS) lastRemoteRssi = rssi
+            if (g !== gatt) return
+            rssiReads.response(g, if (status == BluetoothGatt.GATT_SUCCESS) rssi else null,
+                android.os.SystemClock.elapsedRealtime())
         }
 
         // API < 33

@@ -35,6 +35,7 @@ internal class ProximityDecisionPolicy {
     private var walkAwayFarSinceMs = UNSET_MS
     private var walkAwayFarStartRssi = 0
     private var walkAwayWeakestRssi = 0
+    private var lastUnlockedSampleAtMs = UNSET_MS
     // A confirmed departure decision is terminal for the current BLE session. RSSI multipath can
     // rebound immediately after the lock (captured in the first 0.1.29 fast-walk test), but that is
     // not a new arrival. Rearming requires both a link end and a fresh offloaded presence event.
@@ -65,6 +66,7 @@ internal class ProximityDecisionPolicy {
         unlockQualifiedAtMs = UNSET_MS
         clearPresenceApproach()
         unlockConfirmedAtMs = UNSET_MS
+        lastUnlockedSampleAtMs = UNSET_MS
         arrivalStrongSinceMs = UNSET_MS
         arrivalConfirmed = false
         resetAbortedArrivalCandidate()
@@ -165,6 +167,7 @@ internal class ProximityDecisionPolicy {
     }
 
     fun onUnlockConfirmed(nowMs: Long) {
+        lastUnlockedSampleAtMs = UNSET_MS
         pendingUnlockFarSinceMs = UNSET_MS
         clearPresenceApproach()
         unlockConfirmedAtMs = nowMs
@@ -422,6 +425,17 @@ internal class ProximityDecisionPolicy {
      * A STILL sample or an RSSI recovery cancels the candidate immediately.
      */
     fun onUnlockedSample(nowMs: Long, rssi: Int, moving: Boolean, lockThreshold: Int): ArmedDecision {
+        val previousSampleAt = lastUnlockedSampleAtMs
+        lastUnlockedSampleAtMs = nowMs
+        if (previousSampleAt != UNSET_MS &&
+            (nowMs <= previousSampleAt || nowMs - previousSampleAt > MAX_DEPARTURE_SAMPLE_GAP_MS)) {
+            // Time without observations is not evidence of sustained separation. The idle-watch
+            // path must gather a new, continuous window rather than consume an old FAR candidate.
+            resetWalkAwayCandidate()
+            resetAbortedArrivalDepartureEvidence()
+            arrivalStrongSinceMs = UNSET_MS
+            if (nowMs <= previousSampleAt) return ArmedDecision.NONE
+        }
         if (!arrivalConfirmed) {
             preArrivalPeakRssi = maxOf(preArrivalPeakRssi, rssi)
             if (rssi >= ARRIVAL_STRONG_RSSI) {
@@ -565,6 +579,7 @@ internal class ProximityDecisionPolicy {
         const val ABORTED_ARRIVAL_DROP_DB = 8
         const val ABORTED_ARRIVAL_FAR_MARGIN_DB = 4
         const val WALK_AWAY_CONFIRM_MS = 2_000L
+        const val MAX_DEPARTURE_SAMPLE_GAP_MS = 1_000L
         const val WALK_AWAY_DROP_DB = 3
         const val WALK_AWAY_RECOVERY_DB = 3
         const val PENDING_UNLOCK_FAR_MARGIN_DB = 3

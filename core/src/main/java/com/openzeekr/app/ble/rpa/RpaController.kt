@@ -29,8 +29,8 @@ class RpaController(
     private val scope: CoroutineScope,
     /** Live phone-status byte packed into each frame (in-call / background gate). */
     private val phoneStatus: () -> Byte = { PhoneStatus.NORMAL.code.toByte() },
-    /** Latest measured BLE RSSI of the car (dBm), streamed to its proximity gate. */
-    private val rssi: (() -> Int?)? = null,
+    /** Newly measured BLE RSSI (dBm); awaiting it uses only the separate RSSI stream job. */
+    private val rssi: (suspend () -> Int?)? = null,
 ) {
     enum class Phase { IDLE, CONNECTING, READY, PARKING_IN, PARKING_OUT, MOVING, PAUSED, DONE, ERROR }
 
@@ -238,8 +238,10 @@ class RpaController(
         rssiJob = scope.launch {
             // Stop when the session drops (Bluetooth off / link lost) instead of spinning a dead poll.
             while (isActive && session.isEstablished) {
+                val startedAtMs = android.os.SystemClock.elapsedRealtime()
                 provider()?.let { reportRssi(it) }
-                delay(RpaConst.HEARTBEAT_MS)
+                delay((RpaConst.HEARTBEAT_MS -
+                    (android.os.SystemClock.elapsedRealtime() - startedAtMs)).coerceAtLeast(0L))
             }
         }
     }
