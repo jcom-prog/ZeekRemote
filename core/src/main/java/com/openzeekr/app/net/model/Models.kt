@@ -778,6 +778,14 @@ data class VehicleCapabilities(
     /** Cooled/ventilated seats — not all models have them. Fail CLOSED like the roof features: only
      *  true when the capability list positively advertises seat ventilation. */
     val seatCoolConfirmed: Boolean = false,
+    /**
+     * REAR-seat ventilation specifically (ported from upstream OpenZeekr 0.1.9, issue #20). The single
+     * [seatCool] flag cannot tell a fitted front vent from an absent rear vent: on a 7GT the rear seats
+     * can be heat-only. The capability paramCode "new_seat_ventilation_position" enumerates only the
+     * seats that actually have ventilation (second_row_left / second_row_right for the rear). True
+     * only when a rear position is positively advertised; fail CLOSED otherwise.
+     */
+    val rearSeatCoolConfirmed: Boolean = false,
 ) {
     private fun has(vararg keys: String): Boolean =
         !known || keys.any { k -> codes.any { it.contains(k, ignoreCase = true) } }
@@ -815,6 +823,8 @@ data class VehicleCapabilities(
     // fetched yet, known=false) still reads true via has()'s fail-open, so the control isn't hidden
     // before the list loads. ([seatCoolConfirmed] kept for reference.)
     val seatCool get() = has("seat_ventilation_level") || has("seat_ventilation")
+    // Rear-seat ventilation: fail CLOSED (see [rearSeatCoolConfirmed]), also while the list is unknown.
+    val rearSeatCool get() = rearSeatCoolConfirmed
     val steeringHeat get() = has("steering_wheel_heating")
     val charging get() = has("V_RCS", "RCS")
     val glovebox get() = has("storageBox_codeLock", "T_ZAP", "ZAD")
@@ -859,8 +869,16 @@ object VehicleCapabilityParse {
             (o["functionCode"] as? JsonPrimitive)?.contentOrNull == "seat_ventilation" &&
                 (o["paramValueUse"] as? JsonPrimitive)?.contentOrNull?.trim() == "Y"
         }
+        // Rear-seat ventilation (per-zone, fail closed): paramCode "new_seat_ventilation_position" with
+        // a rear-row paramValueCode. A car whose vent positions list only the front seats omits these.
+        val rearSeatCool = beans.any { o ->
+            val pos = (o["paramValueCode"] as? JsonPrimitive)?.contentOrNull
+            (o["paramCode"] as? JsonPrimitive)?.contentOrNull == "new_seat_ventilation_position" &&
+                (pos == "second_row_left" || pos == "second_row_right")
+        }
         return VehicleCapabilities(
             codes, sunroofConfirmed = sunroof, sunshadeConfirmed = sunshade, seatCoolConfirmed = seatCool,
+            rearSeatCoolConfirmed = rearSeatCool,
         )
     }
 }
@@ -1018,9 +1036,15 @@ data class ElectricStatusVo(
     /** Charge-port lid state: "1" = open, else closed (AC / DC flaps). */
     val chargeLidAcStatus: String? = null,
     val chargeLidDcAcStatus: String? = null,
-    /** Live AC charge current (A) and voltage (V); their product is the real charge power. */
+    /** Live AC charge current (A) and voltage (V). On 1-phase the product is the charge power; on
+     *  3-phase chargeUAct is the ~400 V line-to-line voltage, so real power = sqrt(3)*U*I (see
+     *  [chargePowerW]; ported from upstream OpenZeekr 0.1.8, issue #9). */
     val chargeIAct: String? = null,
     val chargeUAct: String? = null,
+    /** DC fast-charge pile live current (A) and voltage (V); their product is DC charge power
+     *  directly (no phase factor). Populated only during a DC session. */
+    val dcChargePileIAct: String? = null,
+    val dcChargePileUAct: String? = null,
     /** EV range on battery only. */
     val distanceToEmptyOnBatteryOnly: String? = null,
     /** Battery temperature regulation / preconditioning active. */
@@ -1042,13 +1066,30 @@ data class ElectricStatusVo(
     /** Charge-port (AC or DC flap) open. */
     val chargePortOpen: Boolean get() = chargeLidAcStatus == "1" || chargeLidDcAcStatus == "1"
 
-    /** Real charge power in watts from live current×voltage, or null if unavailable. */
+    /**
+     * Real charge power in watts, or null when not charging / unavailable.
+     *  - DC fast charge: dcChargePileUAct * dcChargePileIAct (direct DC, no phase factor).
+     *  - AC 1-phase: chargeUAct * chargeIAct.
+     *  - AC 3-phase: sqrt(3) * chargeUAct * chargeIAct - chargeUAct is the ~400 V line-to-line voltage,
+     *    so the plain product undercounts by sqrt(3) (e.g. 400*16 = 6.4 kW shown vs 11.1 kW real).
+     * Phase count is inferred from the AC voltage (>= 300 V => 3-phase line-to-line) because the live
+     * status carries no phase-count field. Heuristic for EU 230/400 V.
+     */
     val chargePowerW: Double?
         get() {
+            dcPower()?.let { return it }
             val a = chargeIAct?.toDoubleOrNull() ?: return null
             val v = chargeUAct?.toDoubleOrNull() ?: return null
-            return a * v
+            if (a <= 0.0 || v <= 0.0) return null
+            return if (v >= AC_3PHASE_MIN_V) kotlin.math.sqrt(3.0) * v * a else v * a
         }
+
+    /** DC pile power (W) when a DC session reports live values, else null. */
+    private fun dcPower(): Double? {
+        val a = dcChargePileIAct?.toDoubleOrNull() ?: return null
+        val v = dcChargePileUAct?.toDoubleOrNull() ?: return null
+        return if (a > 0.0 && v > 0.0) a * v else null
+    }
 
     /** Actively charging — by chargerState enum (isCharging is dead), power as fallback. */
     val chargingActive: Boolean
@@ -1082,6 +1123,8 @@ data class ElectricStatusVo(
         const val CHARGE_POWER_ON_W = 100.0
         private val CHARGING_STATES = setOf(2, 15, 24, 28, 30)
         private val CONNECTED_STATES = setOf(1, 2, 3)
+        /** AC voltage at/above which the session is treated as 3-phase (line-to-line ~400 V). */
+        private const val AC_3PHASE_MIN_V = 300.0
     }
 }
 

@@ -139,6 +139,10 @@ class OverseasAppAuthInterceptor(private val store: ConfigStore) : Interceptor {
         val req = chain.request()
         if (!req.isOverseasApp()) return chain.proceed(req)
         val cfg = store.current()
+        // The overseas-app HMAC AK/SK are optional (blank for most users). Signing with a blank
+        // secret throws "Empty key" in SecretKeySpec and crashes the OkHttp dispatcher thread, so
+        // proceed unsigned: the request fails cleanly (401) instead (ported from upstream 0.1.9).
+        if (cfg.overseasAccessKey.isBlank() || cfg.overseasSecretKey.isBlank()) return chain.proceed(req)
         val xDate = OverseasSign.dateHeader()
         val bodyBytes = req.body?.let { body -> Buffer().use { buf -> body.writeTo(buf); buf.readByteArray() } } ?: ByteArray(0)
         val sig = OverseasSign.signature(

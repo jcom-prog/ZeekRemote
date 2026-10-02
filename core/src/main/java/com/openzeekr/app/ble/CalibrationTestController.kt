@@ -78,7 +78,7 @@ class CalibrationTestController(
      */
     val stepPrompts: List<String> = listOf(
         "1/4  Phone flat on the DRIVER's DOOR HANDLE. Then tap Continue.",
-        "2/4  Outside, ~6 m to the LEFT of the car. Then tap Continue.",
+        "2/4  Outside, ~6 m out on the DRIVER'S SIDE of the car (left for LHD, right for RHD). Then tap Continue.",
         "3/4  Outside, ~6 m behind the REAR of the car. Then tap Continue.",
         "4/4  Inside the car, phone on the WIRELESS CHARGING pad. Then tap Continue.",
     )

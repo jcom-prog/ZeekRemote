@@ -325,12 +325,25 @@ class InboxRepository(private val store: ConfigStore, private val client: ApiCli
         guarded { require(store.current().overseasReady) { NOT_CONFIGURED }; client.api.inboxMarkRead("$INBOX/$id"); Unit }
     }
 
-    /** Mark every message read. */
+    /**
+     * Mark every message read (ported from upstream OpenZeekr 0.1.8). Stock never calls a bulk
+     * `/read-all` in any capture; the only verified read operation is `PUT /inbox/{id}`. So mark each
+     * currently-fetched message individually, then fire `/read-all` as a best-effort catch-all.
+     */
     suspend fun markAllRead(): CallResult<Unit> = withContext(Dispatchers.IO) {
         guarded {
             val cfg = store.current()
             require(cfg.overseasReady) { NOT_CONFIGURED }
-            client.api.inboxReadAll("$INBOX/read-all", com.openzeekr.app.net.model.MarkAllReadRequest(vin = cfg.vin.ifBlank { null })); Unit
+            val ids = when (val r = messages(page = 1)) {
+                is CallResult.Ok -> r.value.mapNotNull { it.id }.distinct()
+                is CallResult.Err -> emptyList()
+            }
+            for (id in ids) runCatching { client.api.inboxMarkRead("$INBOX/$id") }
+            runCatching {
+                client.api.inboxReadAll("$INBOX/read-all", com.openzeekr.app.net.model.MarkAllReadRequest(vin = cfg.vin.ifBlank { null }))
+            }
+            com.openzeekr.app.util.Logx.d("inbox", "markAllRead: PUT ${ids.size} message(s) + read-all best-effort")
+            Unit
         }
     }
 

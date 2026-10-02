@@ -404,8 +404,26 @@ class AccountLogin(private val store: ConfigStore) {
         val code = root["code"]?.jsonPrimitive?.contentOrNull
         if (!success && code != "000000") {
             val msg = root["msg"]?.jsonPrimitive?.contentOrNull ?: root["message"]?.jsonPrimitive?.contentOrNull
-            error("request failed ($code ${msg ?: ""}) @ ${url.substringAfterLast('/').substringBefore('?')}")
+            val hint = friendlyLoginError(code, msg)
+            // Keep the raw ($code $msg) suffix - it is what we read back from a shared log.
+            error("${hint ?: "request failed"} ($code ${msg ?: ""}) @ ${url.substringAfterLast('/').substringBefore('?')}")
         }
+    }
+}
+
+/**
+ * Human-readable hint for a known user-center business code, so a failed login shows something
+ * actionable instead of a bare "request failed (9007)" (ported from upstream OpenZeekr 0.1.8). The
+ * server often returns msg:null; a server message is preferred when present. Null = no specific hint.
+ */
+internal fun friendlyLoginError(code: String?, msg: String?): String? {
+    if (!msg.isNullOrBlank()) return null
+    return when (code) {
+        // 9007 = no such registered user in this region's user-center: a mistyped email, or an
+        // account registered in a different region than the one selected in Settings.
+        "9007" -> "Account not found in this region - check the email spelling and that the correct region is selected in Settings"
+        "9300", "9301" -> "Login rejected - check your password"
+        else -> null
     }
 }
 

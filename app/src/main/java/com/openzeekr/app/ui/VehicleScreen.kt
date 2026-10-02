@@ -325,7 +325,7 @@ fun VehicleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = M
         onLimitSet = { pct -> deps.config.update { it.copy(chargeLimitPct = pct) } },
         onDismiss = { showCharge = false })
     if (showClimate) ClimateSheet(status?.additionalVehicleStatus?.climateStatus,
-        initialTemp = targetTemp, showSeatCool = caps.seatCool,
+        initialTemp = targetTemp, showSeatCool = caps.seatCool, showRearSeatCool = caps.rearSeatCool,
         onTempChange = { t -> targetTemp = t; writeTargetTemp(ctx, t) },
         onCmd = { c, extra -> fireQuiet("Climate") { deps.control.send(c, extra) } }, onDismiss = { showClimate = false })
     // Window/trunk actions close the sheet first, THEN fire — the snackbar host lives behind the modal
@@ -602,6 +602,7 @@ private fun ClimateSheet(
     climate: ClimateStatusVo?,
     initialTemp: Double,
     showSeatCool: Boolean,
+    showRearSeatCool: Boolean,
     onTempChange: (Double) -> Unit,
     onCmd: (Command, List<ServiceParameter>) -> Unit,
     onDismiss: () -> Unit,
@@ -668,9 +669,9 @@ private fun ClimateSheet(
                 }
                 // rear row
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SeatCabinTile("Rear L", "21", climate?.rlHeatingSts, climate?.rlVentDetail, showSeatCool, Modifier.weight(1f), onCmd)
+                    SeatCabinTile("Rear L", "21", climate?.rlHeatingSts, climate?.rlVentDetail, showRearSeatCool, Modifier.weight(1f), onCmd)
                     Spacer(Modifier.width(20.dp))
-                    SeatCabinTile("Rear R", "29", climate?.rrHeatingSts, climate?.rrVentDetail, showSeatCool, Modifier.weight(1f), onCmd)
+                    SeatCabinTile("Rear R", "29", climate?.rrHeatingSts, climate?.rrVentDetail, showRearSeatCool, Modifier.weight(1f), onCmd)
                 }
             }
 

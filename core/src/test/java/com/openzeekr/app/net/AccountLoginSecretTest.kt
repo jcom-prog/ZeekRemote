@@ -16,3 +16,12 @@ class AccountLoginSecretTest {
         assertThrows(IllegalArgumentException::class.java) { requireOfficialAppSecret("   ", "   ") }
     }
 }
+
+class FriendlyLoginErrorTest {
+    @Test
+    fun `9007 explains the region and a server message is preferred`() {
+        assertEquals(true, friendlyLoginError("9007", null)?.contains("region"))
+        assertEquals(null, friendlyLoginError("9007", "user not exist"))
+        assertEquals(null, friendlyLoginError("1234", null))
+    }
+}
