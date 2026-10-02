@@ -145,13 +145,12 @@ fun VehicleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = M
     val maint = status?.additionalVehicleStatus?.maintenanceStatus
     val climate = status?.additionalVehicleStatus?.climateStatus
 
-    // Driving vs idle (ported from upstream OpenZeekr 0.1.9): engineStatus "engine-off" = parked; anything
-    // else = the car is on. A road speed > 0 means it's moving; then the hero shows the current speed
-    // (car-native km/h, converted to the user's unit). Display only - nothing here drives the key logic.
+    // Driving (ported from upstream OpenZeekr 0.1.9): a road speed > 0 means the car is moving; then the
+    // hero shows the current speed (car-native km/h, converted to the user's unit). Engine status is not
+    // used (unverified value set). Display only - nothing here drives the key logic.
     val basic = status?.basicVehicleStatus
-    val engineOn = basic?.engineStatus?.let { it.isNotBlank() && !it.equals("engine-off", ignoreCase = true) } ?: false
     val speedKmh = basic?.speed?.takeIf { it > 0 }
-    val driving = engineOn || speedKmh != null
+    val driving = speedKmh != null
     val heroSpeed = speedKmh?.let { Units.speedValue(it, cfg.distanceUnit) }
     val heroSpeedUnit = Units.speedUnitLabel(cfg.distanceUnit)
 

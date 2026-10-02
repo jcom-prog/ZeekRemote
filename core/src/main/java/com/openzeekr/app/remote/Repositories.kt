@@ -283,13 +283,15 @@ class OtaRepository(private val store: ConfigStore, private val client: ApiClien
             // The versionV2 body wants the raw platform codes (modelCode=year, seriesCode/vehicleModelNo=
             // appModelCode); pull them from the vehicle-list for the active VIN.
             val all = VehicleGarage.parseAll(client.api.vehicleList(needSharedCar = true).data)
-            val info = all.firstOrNull { it.vin == vin } ?: all.firstOrNull()
-            val seriesCode = info?.appModelCode.orEmpty()
+            // Never send one car's platform codes with another car's VIN.
+            val info = all.firstOrNull { it.vin == vin }
+            requireNotNull(info) { "Selected car not found in the vehicle list" }
+            val seriesCode = info.appModelCode.orEmpty()
             val url = "${cfg.azureHost.trimEnd('/')}/overseas-app/ota/os/versionV2"
             val resp = client.api.otaVersion(
                 url,
                 com.openzeekr.app.net.model.OtaVersionRequest(
-                    modelCode = info?.appYearCode.orEmpty(),
+                    modelCode = info.appYearCode.orEmpty(),
                     seriesCode = seriesCode,
                     vehicleModelNo = seriesCode,
                     vehicleVin = vin,

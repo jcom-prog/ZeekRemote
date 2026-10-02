@@ -51,6 +51,9 @@ class UpstreamPortsTest {
         val none = Ota.parse(Json.parseToJsonElement("""{"currentVehicleVersion":{"displayVersion":"1.2.0"}}"""))
         assertFalse(none.updateAvailable)
         assertNull(Ota.parse(null).currentVersion)
+        val same = Ota.parse(Json.parseToJsonElement(
+            """{"currentVehicleVersion":{"displayVersion":"1.3.0"},"targetVehicleVersion":{"displayVersion":"1.3.0"}}"""))
+        assertFalse("installed target is not an update", same.updateAvailable)
     }
 
     @Test fun vehicleListCarriesPlatformCodesForTheStatusQuery() {

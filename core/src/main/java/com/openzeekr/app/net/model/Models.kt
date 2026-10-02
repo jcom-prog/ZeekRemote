@@ -462,7 +462,8 @@ object Ota {
         return OtaStatus(
             currentVersion = current,
             targetVersion = target,
-            updateAvailable = hasNew || target != null,
+            // A target that differs from the installed version also counts (review 0.1.57: not any target).
+            updateAvailable = hasNew || (target != null && target != current),
             releaseNotes = if (targetNotes.isNotEmpty()) targetNotes else currentNotes,
         )
     }

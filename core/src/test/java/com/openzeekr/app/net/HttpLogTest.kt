@@ -22,4 +22,11 @@ class HttpLogTest {
         assertFalse(scrubbed.contains("opaque.token-value"))
         assertFalse(scrubbed.contains(jwt))
     }
+
+    @Test
+    fun `scrubs the vin in the software status request`() {
+        val scrubbed = HttpLog.scrub("""{"modelCode":"2025","seriesCode":"CC1E","vehicleVin":"TESTVIN456"}""")
+        assertFalse(scrubbed.contains("TESTVIN456"))
+        assertTrue(scrubbed.contains("CC1E"))
+    }
 }

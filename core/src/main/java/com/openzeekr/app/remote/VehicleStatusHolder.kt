@@ -48,14 +48,12 @@ class VehicleStatusHolder(
         }
     }
 
-    /** Poll interval for the NEXT cycle, decided from the status we just read: fast while driving, slow
-     *  when idle. (A `null`/blank status keeps the slow default.) engineStatus "engine-off" = parked;
-     *  a road speed > 0 means it's moving. */
+    /** Poll interval for the NEXT cycle, decided from the status we just read: fast only while the car
+     *  reports a road speed > 0, slow otherwise. Engine status is deliberately not used: its value set is
+     *  unverified, and a fail-open match would poll a parked car every 5 s (review 0.1.57). */
     private fun nextPollMs(): Long {
         val basic = _state.value?.basicVehicleStatus ?: return POLL_MS
-        val engineOn = basic.engineStatus?.let { it.isNotBlank() && !it.equals("engine-off", ignoreCase = true) } ?: false
-        val moving = (basic.speed ?: 0) > 0
-        return if (engineOn || moving) POLL_DRIVING_MS else POLL_MS
+        return if ((basic.speed ?: 0) > 0) POLL_DRIVING_MS else POLL_MS
     }
 
     fun stop() { job?.cancel(); job = null; burstJob?.cancel(); burstJob = null }

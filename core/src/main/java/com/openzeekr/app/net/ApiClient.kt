@@ -109,7 +109,7 @@ object HttpLog {
         "signature", "sign", "appSecret", "secret",
         "openId", "deviceIdentifier", "deviceId",
         "cmacKey", "digitalKey", "privateKey", "priKey", "csr", "cert",
-        "phoneNumber", "mobile", "vin",
+        "phoneNumber", "mobile", "vin", "vehicleVin",
         "email", "authCode", "identifier", "proprietary",
         "sk", "ak",
     )
