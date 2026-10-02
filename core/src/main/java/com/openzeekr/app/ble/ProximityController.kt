@@ -269,7 +269,8 @@ class ProximityController(
         motionWake = wake
         // Linked + locked on an Activity-Recognition-only phone: re-check far sooner (LinkedApproachWatch).
         val cap = if (LinkedApproachWatch.applies(ble.state.value == DkBleManager.State.SESSION_READY,
-                armedUnlocked, motionWakesOnSteps())) LinkedApproachWatch.LINKED_SLEEP_MS else FAR_SLEEP_SAFETY_MS
+                armedUnlocked, motionWakesOnSteps()) && linkedWatchForMs() < LinkedApproachWatch.WATCH_MAX_MS)
+            LinkedApproachWatch.LINKED_SLEEP_MS else FAR_SLEEP_SAFETY_MS
         val woke = try { withTimeoutOrNull(cap) { wake.await() } != null } finally { motionWake = null }
         _wakeLockNeeded.value = true
         farAsleep = false
@@ -984,7 +985,8 @@ class ProximityController(
                     nextIntervalMs = if (steady) MONITOR_STILL_NOSENSOR_MS else blindInterval(dist)
                 }
                 LinkedApproachWatch.holdAwake(ble.state.value == DkBleManager.State.SESSION_READY,
-                    armedUnlocked, motionWakesOnSteps(), smoothed) &&
+                    armedUnlocked, motionWakesOnSteps(), smoothed, motion.hasStepAssist,
+                    linkedWatchForMs()) &&
                     motion.state.value != MotionMonitor.Motion.MOVING -> {
                     // Linked, locked, signal not far, but the motion source cannot wake us on steps:
                     // keep the CPU so the step assist can report MOVING, and keep sampling.
@@ -1408,6 +1410,18 @@ class ProximityController(
      *  from the closest distance seen. Making inward progress (dist drops past the still band) re-arms the
      *  deadline from the new distance, so a genuine long walk isn't cut off; a stall beyond the window
      *  returns false → the caller treats it as still and sleeps. */
+    // Start of the current linked watch without MOVING (elapsed); 0 = not watching.
+    private var linkedWatchSinceElapsedMs = 0L
+
+    /** How long the linked watch has held the CPU without MOVING; resets on MOVING or link loss. */
+    private fun linkedWatchForMs(): Long {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (ble.state.value != DkBleManager.State.SESSION_READY ||
+            motion.state.value == MotionMonitor.Motion.MOVING) { linkedWatchSinceElapsedMs = 0L; return 0L }
+        if (linkedWatchSinceElapsedMs == 0L) linkedWatchSinceElapsedMs = now
+        return now - linkedWatchSinceElapsedMs
+    }
+
     /** True when the motion source itself wakes the CPU per step / on motion (no linked watch needed). */
     private fun motionWakesOnSteps(): Boolean =
         motion.source == MotionMonitor.Source.STEP || motion.source == MotionMonitor.Source.SENSORS

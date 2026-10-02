@@ -52,7 +52,7 @@ internal object UnverifiedLockNotifier {
         val posted = post(context, CHANNEL_ID, NOTIFICATION_ID, title, message, alarm = false)
         if (LockAlertPolicy.audible(event)) {
             val now = android.os.SystemClock.elapsedRealtime()
-            if (!LockAlertPolicy.alarmShouldSound(alarmRaisedAtElapsedMs, now)) {
+            if (!LockAlertPolicy.alarmShouldSound(alarmRaisedAtElapsedMs, now, alarmShowing(context))) {
                 com.openzeekr.app.util.Logx.w("prox", "lock alarm suppressed (${event.name})")
                 return posted
             }
@@ -125,6 +125,11 @@ internal object UnverifiedLockNotifier {
         manager.notify(id, notification)
         true
     }.getOrDefault(false)
+
+    private fun alarmShowing(context: Context): Boolean = runCatching {
+        context.getSystemService(NotificationManager::class.java)?.activeNotifications
+            ?.any { it.id == ALARM_NOTIFICATION_ID } == true
+    }.getOrDefault(true)
 
     /** Stops a sounding alarm but keeps the visible record (e.g. the user is back in range). */
     fun silenceAlarm(context: Context) {

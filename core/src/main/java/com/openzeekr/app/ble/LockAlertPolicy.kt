@@ -73,10 +73,11 @@ internal object LockAlertPolicy {
     /**
      * One alarm per episode: a second audible event while an alarm raised less than
      * [ALARM_EPISODE_MS] ago is still unresolved (no Lock, no return, no new unlock) only updates
-     * the visible record (field test 0.1.54 part B: two alarms 22 s apart).
+     * the visible record (field test 0.1.54 part B: two alarms 22 s apart). Once the user has opened or
+     * dismissed the alarm, a new audible event sounds again.
      */
-    fun alarmShouldSound(lastAlarmAtElapsedMs: Long, nowElapsedMs: Long): Boolean =
-        lastAlarmAtElapsedMs == 0L || nowElapsedMs - lastAlarmAtElapsedMs >= ALARM_EPISODE_MS
+    fun alarmShouldSound(lastAlarmAtElapsedMs: Long, nowElapsedMs: Long, alarmStillShowing: Boolean = true): Boolean =
+        !alarmStillShowing || lastAlarmAtElapsedMs == 0L || nowElapsedMs - lastAlarmAtElapsedMs >= ALARM_EPISODE_MS
 
     const val ALARM_EPISODE_MS = 120_000L
 

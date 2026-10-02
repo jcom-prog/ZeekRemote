@@ -17,6 +17,15 @@ class LinkedApproachWatchTest {
         assertTrue(LinkedApproachWatch.applies(true, false, false))
     }
 
+    @Test fun holdingTheCpuIsBoundedAndNeedsAStepAssist() {
+        // Review 0.1.55 F1: motion can stay UNKNOWN (no security sleep) -> own cap per linked session.
+        assertTrue(LinkedApproachWatch.holdAwake(true, false, false, -85, hasStepAssist = true, watchingForMs = 0L))
+        assertFalse(LinkedApproachWatch.holdAwake(true, false, false, -85, hasStepAssist = true,
+            watchingForMs = LinkedApproachWatch.WATCH_MAX_MS))
+        // F2: nothing could report MOVING while awake -> do not hold the CPU for nothing.
+        assertFalse(LinkedApproachWatch.holdAwake(true, false, false, -85, hasStepAssist = false))
+    }
+
     @Test fun noChangeWhenUnlockedUnlinkedOrStepsCanWakeTheCpu() {
         assertFalse(LinkedApproachWatch.applies(sessionReady = true, unlocked = true, wakesOnSteps = false))
         assertFalse(LinkedApproachWatch.applies(sessionReady = false, unlocked = false, wakesOnSteps = false))

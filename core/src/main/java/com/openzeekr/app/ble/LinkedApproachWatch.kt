@@ -27,9 +27,18 @@ internal object LinkedApproachWatch {
     /** FAR sleep re-check while linked and locked, outside the band. */
     const val LINKED_SLEEP_MS = 5_000L
 
+    /**
+     * Upper bound on holding the CPU per linked session without any MOVING, independent of the
+     * security sleep (which needs a confirmed STILL and so does not bound an UNKNOWN motion state).
+     */
+    const val WATCH_MAX_MS = 150_000L
+
     fun applies(sessionReady: Boolean, unlocked: Boolean, wakesOnSteps: Boolean): Boolean =
         sessionReady && !unlocked && !wakesOnSteps
 
-    fun holdAwake(sessionReady: Boolean, unlocked: Boolean, wakesOnSteps: Boolean, smoothedRssi: Int): Boolean =
-        applies(sessionReady, unlocked, wakesOnSteps) && smoothedRssi >= WATCH_RSSI
+    /** Hold the CPU only when a step assist can actually report MOVING, and only for a bounded time. */
+    fun holdAwake(sessionReady: Boolean, unlocked: Boolean, wakesOnSteps: Boolean, smoothedRssi: Int,
+                  hasStepAssist: Boolean = true, watchingForMs: Long = 0L): Boolean =
+        applies(sessionReady, unlocked, wakesOnSteps) && hasStepAssist &&
+            smoothedRssi >= WATCH_RSSI && watchingForMs < WATCH_MAX_MS
 }

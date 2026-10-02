@@ -55,6 +55,8 @@ class LockAlertPolicyTest {
         assertTrue(LockAlertPolicy.alarmShouldSound(0L, first))
         assertFalse(LockAlertPolicy.alarmShouldSound(first, first + 22_000L))
         assertTrue(LockAlertPolicy.alarmShouldSound(first, first + LockAlertPolicy.ALARM_EPISODE_MS))
+        // Review 0.1.55 F4: a dismissed/opened alarm does not suppress the next genuine one.
+        assertTrue(LockAlertPolicy.alarmShouldSound(first, first + 22_000L, alarmStillShowing = false))
     }
 
     @Test fun missingGnssReferenceIsNotNewsWhileTheBleRouteCanLock() {

@@ -82,6 +82,8 @@ class MotionMonitor(context: Context) {
     @Volatile var source: Source = Source.NONE
         private set
     val hasSource: Boolean get() = source != Source.NONE
+    /** A (non-wake-up) step detector exists that can report MOVING while the CPU is held awake. */
+    val hasStepAssist: Boolean get() = nonWakeStepDetector != null
 
     /** Diagnostic only: counted step-detector events, when the sensor is available. */
     @Volatile private var countedSteps = 0L
