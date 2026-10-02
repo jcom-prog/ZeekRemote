@@ -22,6 +22,7 @@ on:
       - zeekremote-0.1.53-lock-alarm
       - zeekremote-0.1.54-departure-alarm
       - zeekremote-0.1.55-alarm-episode
+      - zeekremote-0.1.56-manual-return
 
 permissions:
   contents: read
@@ -137,7 +138,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='93' versionName='0.1.55-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='94' versionName='0.1.56-work'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
           sha256sum "$APK"

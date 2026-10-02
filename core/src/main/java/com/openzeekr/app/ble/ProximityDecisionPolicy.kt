@@ -48,6 +48,7 @@ internal class ProximityDecisionPolicy {
     private var manualStillReady = false
     private var manualReturnMoving = false
     private var manualStillRssi = 0
+    private var manualStillRebound = false
     private var manualNearPeakRssi = Int.MIN_VALUE
     private var manualWeakStillSinceMs = UNSET_MS
     private var manualWeakestRssi = 0
@@ -276,10 +277,17 @@ internal class ProximityDecisionPolicy {
                     if (nowMs - manualStillSinceMs >= MANUAL_STILL_CONFIRM_MS) {
                         manualStillReady = true
                     }
+                } else if (manualStillReady && rssi < STRONG_NEAR_RSSI) {
+                    // Field test 0.1.55: a single -82 orientation rebound during a 13 s stop at
+                    // ~20 m erased the proven pause and the walk back never rearmed. A completed
+                    // pause is kept; only a strong at-the-car reading while standing voids it.
+                    // The kept rebound is no distance proof: see the motion-edge check below.
+                    manualStillRebound = true
                 } else {
                     manualStillSinceMs = UNSET_MS
                     manualStillReady = false
                     manualStillRssi = 0
+                    manualStillRebound = false
                 }
                 return false
             }
@@ -297,6 +305,19 @@ internal class ProximityDecisionPolicy {
                 }
             }
             if (!manualReturnMoving) {
+                if (manualStillRebound) {
+                    // After a kept rebound the lagging EMA can still be in the arrival band while
+                    // the user walks further away (review 0.1.56). The walk must start outside
+                    // the band, and the return rise is measured from that motion start.
+                    if (rssi > unlockThreshold + UNLOCK_MARGIN_DB) {
+                        manualStillSinceMs = UNSET_MS
+                        manualStillReady = false
+                        manualStillRssi = 0
+                        manualStillRebound = false
+                        return false
+                    }
+                    manualStillRssi = rssi
+                }
                 manualReturnMoving = true
                 manualStillRssi = minOf(manualStillRssi, rssi)
             }
@@ -387,6 +408,7 @@ internal class ProximityDecisionPolicy {
         manualStillReady = false
         manualReturnMoving = false
         manualStillRssi = 0
+        manualStillRebound = false
         manualNearPeakRssi = Int.MIN_VALUE
         manualWeakStillSinceMs = UNSET_MS
         manualWeakestRssi = 0

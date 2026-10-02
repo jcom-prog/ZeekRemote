@@ -52,6 +52,79 @@ class ProximityDecisionPolicyTest {
     }
 
     @Test
+    fun manualLockStillPauseSurvivesMildReboundWhileStanding() {
+        // Field shape 0.1.55 (02/10 20:29, ~20 m walk): FAR while walking away, a 13 s stop at
+        // -85..-88 with one -82 orientation rebound, ~1 s STILL before walking back. The rebound
+        // erased the qualified pause and the return to the door never rearmed.
+        val policy = ProximityDecisionPolicy()
+        policy.onManualLockConfirmed()
+        for (time in 0L..6_000L step 200L) assertFalse(policy.shouldUnlock(time, -57, false, -86))
+        for (time in 10_000L..21_400L step 200L) assertFalse(policy.shouldUnlock(time, -89, true, -86))
+        val still = listOf(-87, -87, -88, -88, -87, -85, -85, -85, -86, -87, -86, -85, -82, -87)
+        still.forEachIndexed { i, rssi ->
+            assertFalse(policy.shouldUnlock(21_600L + i * 1_000L, rssi, false, -86))
+        }
+        // Next MOVING edge after ~1 s, still FAR, then the walk back rises to the door.
+        assertFalse(policy.shouldUnlock(35_600L, -88, true, -86))
+        assertFalse(policy.shouldUnlock(35_800L, -89, true, -86))
+        assertFalse(policy.shouldUnlock(37_200L, -86, true, -86))
+        assertFalse(policy.shouldUnlock(37_400L, -80, true, -86))
+        assertFalse(policy.shouldUnlock(37_600L, -76, true, -86))
+        assertTrue(policy.shouldUnlock(37_800L, -75, true, -86))
+    }
+
+    @Test
+    fun manualLockStillPauseIsVoidedByStrongNearWhileStanding() {
+        // Back at the car while the motion sensor still says STILL: a later shuffle is not a return.
+        val policy = ProximityDecisionPolicy()
+        policy.onManualLockConfirmed()
+        for (time in 0L..3_000L step 200L) assertFalse(policy.shouldUnlock(time, -90, true, -86))
+        for (time in 3_200L..6_000L step 1_000L) assertFalse(policy.shouldUnlock(time, -88, false, -86))
+        assertFalse(policy.shouldUnlock(7_000L, -66, false, -86))
+        assertFalse(policy.shouldUnlock(7_400L, -66, false, -86))
+        for (time in 7_600L..12_000L step 200L) assertFalse(policy.shouldUnlock(time, -64, true, -86))
+    }
+
+    @Test
+    fun manualLockKeptReboundCannotRearmWhileWalkingFurtherAway() {
+        // Review 0.1.56: rebound kept while standing at 8-10 m, then the user walks away while the
+        // smoothed signal still lags in the arrival band.
+        val policy = ProximityDecisionPolicy()
+        policy.onManualLockConfirmed()
+        for (time in 0L..6_000L step 200L) assertFalse(policy.shouldUnlock(time, -57, true, -86))
+        for (time in 10_000L..13_000L step 200L) assertFalse(policy.shouldUnlock(time, -89, true, -86))
+        for (time in 13_200L..15_000L step 200L) assertFalse(policy.shouldUnlock(time, -87, false, -86))
+        for (time in 16_000L..20_000L step 200L) assertFalse(policy.shouldUnlock(time, -80, false, -86))
+        val away = listOf(-80, -82, -84, -84, -85, -86, -88, -90)
+        away.forEachIndexed { i, rssi -> assertFalse(policy.shouldUnlock(20_200L + i * 200L, rssi, true, -86)) }
+    }
+
+    @Test
+    fun manualLockKeptReboundThenMotionJitterAtTenMetresStaysLocked() {
+        val policy = ProximityDecisionPolicy()
+        policy.onManualLockConfirmed()
+        for (time in 0L..3_000L step 200L) assertFalse(policy.shouldUnlock(time, -90, true, -86))
+        for (time in 3_200L..6_000L step 1_000L) assertFalse(policy.shouldUnlock(time, -88, false, -86))
+        for (time in 7_000L..20_000L step 1_000L) assertFalse(policy.shouldUnlock(time, -82, false, -86))
+        for (time in 20_200L..20_600L step 200L) assertFalse(policy.shouldUnlock(time, -83, true, -86))
+        for (time in 20_800L..35_000L step 1_000L) assertFalse(policy.shouldUnlock(time, -84, false, -86))
+    }
+
+    @Test
+    fun manualLockKeptReboundThenRealWalkBackStillUnlocks() {
+        val policy = ProximityDecisionPolicy()
+        policy.onManualLockConfirmed()
+        for (time in 0L..3_000L step 200L) assertFalse(policy.shouldUnlock(time, -90, true, -86))
+        for (time in 3_200L..6_000L step 1_000L) assertFalse(policy.shouldUnlock(time, -88, false, -86))
+        assertFalse(policy.shouldUnlock(7_000L, -81, false, -86))
+        assertFalse(policy.shouldUnlock(8_000L, -87, false, -86))
+        assertFalse(policy.shouldUnlock(8_200L, -87, true, -86))
+        assertFalse(policy.shouldUnlock(8_400L, -84, true, -86))
+        assertFalse(policy.shouldUnlock(8_600L, -78, true, -86))
+        assertTrue(policy.shouldUnlock(8_800L, -74, true, -86))
+    }
+
+    @Test
     fun manualWeakSleepDoesNotRearmAfterBriefDip() {
         val policy = ProximityDecisionPolicy()
         policy.onManualLockConfirmed()
