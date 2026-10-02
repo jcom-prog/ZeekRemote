@@ -18,7 +18,7 @@ class LockStateViewTest {
 
     @Test fun newerCloudReportOverridesAnOlderKeyReceipt() {
         // e.g. the car relocked itself after an unused unlock; only the cloud saw it.
-        val view = LockView.resolve(cloudLocked = true, cloudUpdatedAtMs = t + 60_000L,
+        val view = LockView.resolve(cloudLocked = true, cloudUpdatedAtMs = t + 2 * LockView.CLOUD_OVERRIDE_MARGIN_MS,
             local = LocalLockEvent(locked = false, atMs = t))
         assertEquals(LockView.LOCKED, view)
         assertFalse(view.tapLocks)

@@ -241,7 +241,7 @@ fun VehicleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = M
             // fallback). Trunk is ALWAYS shown; the sheet offers Open/Close on a powered tailgate, else
             // latch unlock/lock. The tile reflects the live open/closed state (trunkOpen).
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Ctl(if (locked) Icons.Filled.Lock else Icons.Filled.LockOpen, lockLabel,
+                Ctl(if (lockView == com.openzeekr.app.remote.LockView.UNLOCKED) Icons.Filled.LockOpen else Icons.Filled.Lock, lockLabel,
                     tint = if (locked) Brand.good else Brand.energy, active = true, modifier = Modifier.weight(1f)) { door(lockView.tapLocks) }
                 Ctl(climateIcon, "Climate", tint = climateTint, active = acOn, modifier = Modifier.weight(1f)) { showClimate = true }
                 // Always open the sheet — charge limit, battery pre-conditioning (a PRE-charge

@@ -25,8 +25,11 @@ enum class LockView {
     val tapLocks: Boolean get() = this != LOCKED
 
     companion object {
-        /** A cloud report must be this much newer than a key receipt to override it (clock skew). */
-        const val CLOUD_OVERRIDE_MARGIN_MS = 5_000L
+        /**
+         * A cloud report must be this much newer than a key receipt to override it (car/phone clock
+         * skew, same budget as relock recovery). A larger margin only ever favours the key receipt.
+         */
+        const val CLOUD_OVERRIDE_MARGIN_MS = 60_000L
 
         fun resolve(cloudLocked: Boolean?, cloudUpdatedAtMs: Long?, local: LocalLockEvent?): LockView {
             val cloudView = when (cloudLocked) { true -> LOCKED; false -> UNLOCKED; null -> UNKNOWN }

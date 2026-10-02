@@ -40,14 +40,21 @@ internal object UnverifiedLockNotifier {
             Event.AUTO_LOCK_UNCONFIRMED, Event.AUTO_LOCK_STATE_UNVERIFIED, Event.LINK_LOST_WHILE_UNLOCKED,
             Event.LINK_LOST_STATIONARY,
             Event.MANUAL_CLOUD_LOCK_UNVERIFIED -> NOT_CONFIRMED_TITLE to NOT_CONFIRMED_TEXT
-            Event.DEPARTURE_UNVERIFIED, Event.PROXIMITY_RECOVERED_BEFORE_LOCK ->
+            Event.DEPARTURE_UNVERIFIED, Event.DEPARTURE_CANDIDATE_UNVERIFIED, Event.PROXIMITY_RECOVERED_BEFORE_LOCK ->
                 POSSIBLE_DEPARTURE_TITLE to POSSIBLE_DEPARTURE_TEXT
+            Event.AUTO_LOCK_CLOUD_CONFIRMED -> "Car reported locked via cloud" to
+                "The Bluetooth Lock was not confirmed; a newer cloud report says the car is locked. Check the car if in doubt."
             Event.LOCATION_REFERENCE_UNAVAILABLE -> "Automatic Lock unavailable" to
                 "No accurate location reference is available. Lock manually and check the car before leaving."
         }
         val posted = post(context, CHANNEL_ID, NOTIFICATION_ID, title, message, alarm = false)
-        if (LockAlertPolicy.audible(event))
-            post(context, ALARM_CHANNEL_ID, ALARM_NOTIFICATION_ID, title, message, alarm = true)
+        if (LockAlertPolicy.audible(event)) {
+            val sounded = post(context, ALARM_CHANNEL_ID, ALARM_NOTIFICATION_ID, title, message, alarm = true)
+            com.openzeekr.app.util.Logx.w("prox", "lock alarm ${if (sounded) "raised" else "unavailable"} (${event.name})")
+        } else {
+            // A newer, non-audible state (back at the car, own cloud Lock, ...) ends a sounding alarm.
+            silenceAlarm(context)
+        }
         return posted
     }
 
@@ -99,11 +106,8 @@ internal object UnverifiedLockNotifier {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .apply { tap?.let { setContentIntent(it) } }
         if (alarm) {
-            // Pre-O devices take the sound from the notification itself.
-            builder.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM), android.media.AudioManager.STREAM_ALARM)
-                .setVibrate(longArrayOf(0, 800, 400, 800, 400, 800))
-                .setAutoCancel(true)
-                .setTimeoutAfter(ALARM_TIMEOUT_MS)
+            // Sound and vibration come from the alarm channel (minSdk 26).
+            builder.setAutoCancel(true).setTimeoutAfter(ALARM_TIMEOUT_MS)
         } else {
             // The visible record stays until Lock is confirmed; it never makes sound itself.
             builder.setSilent(true).setAutoCancel(false).setOngoing(true)
@@ -113,6 +117,11 @@ internal object UnverifiedLockNotifier {
         manager.notify(id, notification)
         true
     }.getOrDefault(false)
+
+    /** Stops a sounding alarm but keeps the visible record (e.g. the user is back in range). */
+    fun silenceAlarm(context: Context) {
+        runCatching { NotificationManagerCompat.from(context).cancel(ALARM_NOTIFICATION_ID) }
+    }
 
     /** Clear only when a new unlock starts, or an explicit BLE/manual lock was confirmed. */
     fun clear(context: Context) {

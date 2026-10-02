@@ -53,6 +53,11 @@ class ProximityDiagnosticJournalTest {
             "ble departure route disabled (uncalibrated preset)"))
         assertEquals("BLE_DEPARTURE_SUSPENDED", ProximityDiagnosticJournal.event("prox",
             "ble departure route suspended for this epoch after unconfirmed Lock"))
+        assertEquals("LOCK_ALARM raised DEPARTURE_UNVERIFIED", ProximityDiagnosticJournal.event("prox",
+            "lock alarm raised (DEPARTURE_UNVERIFIED)"))
+        assertEquals("LOCK_ALARM unavailable LINK_LOST_WHILE_UNLOCKED", ProximityDiagnosticJournal.event("prox",
+            "lock alarm unavailable (LINK_LOST_WHILE_UNLOCKED)"))
+        assertNull(ProximityDiagnosticJournal.event("prox", "lock alarm raised (lat=51)"))
         // Existing manual-lock events keep their meaning.
         assertEquals("LOCK_CONFIRMED", ProximityDiagnosticJournal.event("prox", "lock confirmed (manual) -> departure latched"))
     }

@@ -26,6 +26,7 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
         // Whitelisted categorical values only; anything else is not journaled.
         private val autoLockConfirmed = Regex(
             "auto lock confirmed \\((ble-departure|verified-link-departure|walk-away-lock|idle-far-lock)\\) by BLE receipt")
+        private val lockAlarm = Regex("lock alarm (raised|unavailable) \\(([A-Z_]{1,40})\\)")
         private val bleDepartureRevoked = Regex(
             "ble departure revoked \\((strong_near|signal_recovered|time_not_advancing)\\)")
         private val vehicleStatus = Regex("vehicle status observed session=([1-9][0-9]{0,18}) approach=([01]) walkAway=([01]) pe=([01]) ps=([01]) central=([0-3])")
@@ -77,6 +78,8 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                     message.startsWith("approach-unlock ARM (") -> "UNLOCK_STARTED"
                     message.startsWith("independent departure unverified:") -> "DEPARTURE_UNVERIFIED"
                     message == "ble departure confirmed" -> "BLE_DEPARTURE_CONFIRMED"
+                    message.startsWith("lock alarm ") -> lockAlarm.matchEntire(message)
+                        ?.let { "LOCK_ALARM ${it.groupValues[1]} ${it.groupValues[2]}" }
                     message == "ble departure route disabled (uncalibrated preset)" -> "BLE_DEPARTURE_ROUTE disabled"
                     message.startsWith("ble departure route enabled (") -> "BLE_DEPARTURE_ROUTE enabled"
                     message == "ble departure route suspended for this epoch after unconfirmed Lock" ->

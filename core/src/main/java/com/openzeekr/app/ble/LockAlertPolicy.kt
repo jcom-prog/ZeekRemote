@@ -13,7 +13,9 @@ internal object LockAlertPolicy {
     enum class Event {
         /** Automatic BLE Lock failed after its retries (cloud fallback may or may not have worked). */
         AUTO_LOCK_UNCONFIRMED,
-        /** Automatic BLE Lock acknowledged, but no fresh vehicle state confirmed it. */
+        /** Automatic BLE Lock failed, but a cloud report newer than the attempt says locked. */
+        AUTO_LOCK_CLOUD_CONFIRMED,
+        /** Automatic BLE Lock acknowledged by the car, but no fresh cloud state confirmed it yet. */
         AUTO_LOCK_STATE_UNVERIFIED,
         /** The key link stayed down while the car was unlocked and the user was walking. */
         LINK_LOST_WHILE_UNLOCKED,
@@ -21,6 +23,8 @@ internal object LockAlertPolicy {
         LINK_LOST_STATIONARY,
         /** Departure was suspected but could not be verified: no Lock was sent. */
         DEPARTURE_UNVERIFIED,
+        /** A weak-signal departure candidate that may be body shadowing at the car: no Lock sent. */
+        DEPARTURE_CANDIDATE_UNVERIFIED,
         /** A pending Lock was withheld because the phone is near the car again. */
         PROXIMITY_RECOVERED_BEFORE_LOCK,
         /** The user's own cloud Lock was accepted, but its actuation is unverified. */
@@ -32,9 +36,12 @@ internal object LockAlertPolicy {
     /** True when the event must produce sound even with the screen off. */
     fun audible(event: Event): Boolean = when (event) {
         Event.AUTO_LOCK_UNCONFIRMED,
-        Event.AUTO_LOCK_STATE_UNVERIFIED,
         Event.LINK_LOST_WHILE_UNLOCKED,
         Event.DEPARTURE_UNVERIFIED -> true
+        // The car acknowledged the Lock; the cloud often lags by minutes (review 0.1.53).
+        Event.AUTO_LOCK_STATE_UNVERIFIED,
+        Event.AUTO_LOCK_CLOUD_CONFIRMED,
+        Event.DEPARTURE_CANDIDATE_UNVERIFIED,
         Event.LINK_LOST_STATIONARY,
         Event.PROXIMITY_RECOVERED_BEFORE_LOCK,
         Event.MANUAL_CLOUD_LOCK_UNVERIFIED,
