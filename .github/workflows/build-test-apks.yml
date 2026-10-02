@@ -20,6 +20,7 @@ on:
       - zeekremote-0.1.51-fresh-rssi
       - zeekremote-0.1.52-ble-departure
       - zeekremote-0.1.53-lock-alarm
+      - zeekremote-0.1.54-departure-alarm
 
 permissions:
   contents: read
@@ -108,6 +109,8 @@ jobs:
           grep -Fq 'const val CALIBRATED_LOCK_RSSI = -82' core/src/main/java/com/openzeekr/app/ble/BleDepartureRoute.kt
           grep -Fq 'USAGE_ALARM' core/src/main/java/com/openzeekr/app/ble/UnverifiedLockNotifier.kt
           grep -Fq 'Event.DEPARTURE_UNVERIFIED -> true' core/src/main/java/com/openzeekr/app/ble/LockAlertPolicy.kt
+          grep -Fq 'LockAlertPolicy.linkLossEvent(movedDuringLoss, departureSuspected())' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'armDepartureAlarm()' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'door(lockView.tapLocks)' app/src/main/java/com/openzeekr/app/ui/VehicleScreen.kt
           grep -Fq '!bleLockAuthorized() && !confirmPhysicalDeparture()' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'const val MIN_WEAK_MS = 8_000L' core/src/main/java/com/openzeekr/app/ble/BleDepartureEvidence.kt
@@ -132,7 +135,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='91' versionName='0.1.53-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='92' versionName='0.1.54-work'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
           sha256sum "$APK"

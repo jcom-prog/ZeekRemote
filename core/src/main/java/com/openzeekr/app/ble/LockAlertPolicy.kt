@@ -48,6 +48,28 @@ internal object LockAlertPolicy {
         Event.LOCATION_REFERENCE_UNAVAILABLE -> false
     }
 
+    /**
+     * The user walked away: a moving walk-away candidate happened in this unlock and no strong
+     * at-the-car reading was seen since (field test 0.1.53 part B: walked 30-40 m, stopped,
+     * link dropped while standing still -> must not be treated as a stationary loss).
+     */
+    fun departureSuspected(lastWalkAwayCandidateAtMs: Long, lastStrongNearAtMs: Long): Boolean =
+        lastWalkAwayCandidateAtMs != 0L && lastWalkAwayCandidateAtMs > lastStrongNearAtMs
+
+    /** A link loss is audible when the user was walking during it or had already walked away. */
+    fun linkLossEvent(movedDuringLoss: Boolean, departureSuspected: Boolean): Event =
+        if (movedDuringLoss || departureSuspected) Event.LINK_LOST_WHILE_UNLOCKED else Event.LINK_LOST_STATIONARY
+
+    /**
+     * After a suspected departure, the car must be locked within [DEPARTURE_ALARM_DELAY_MS] or the
+     * alarm sounds — unless the phone is near the car again ([latestRssi] above the lock threshold).
+     * A missing reading (link down) counts as away.
+     */
+    fun departureAlarmDue(departureSuspected: Boolean, stillUnlocked: Boolean, latestRssi: Int?, lockThreshold: Int): Boolean =
+        departureSuspected && stillUnlocked && (latestRssi == null || latestRssi <= lockThreshold)
+
+    const val DEPARTURE_ALARM_DELAY_MS = 30_000L
+
     /** False when the event says nothing the user needs to know right now. */
     fun shouldPost(event: Event, bleDepartureRouteActive: Boolean): Boolean =
         !(event == Event.LOCATION_REFERENCE_UNAVAILABLE && bleDepartureRouteActive)

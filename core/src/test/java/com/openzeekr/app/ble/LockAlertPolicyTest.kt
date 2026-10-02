@@ -25,6 +25,30 @@ class LockAlertPolicyTest {
         assertFalse(LockAlertPolicy.audible(Event.AUTO_LOCK_CLOUD_CONFIRMED))
     }
 
+    @Test fun fieldShapeWalkedAwayThenStoodStillWhileTheLinkDroppedIsAudible() {
+        // 0.1.53 part B: candidate 18:47:42, no strong reading after, link lost 18:49:24 while STILL.
+        val candidate = 1_000_000L; val lastStrong = candidate - 25_000L
+        val suspected = LockAlertPolicy.departureSuspected(candidate, lastStrong)
+        assertTrue(suspected)
+        assertTrue(LockAlertPolicy.audible(LockAlertPolicy.linkLossEvent(movedDuringLoss = false, departureSuspected = suspected)))
+        assertTrue(LockAlertPolicy.departureAlarmDue(suspected, stillUnlocked = true, latestRssi = -98, lockThreshold = -74))
+    }
+
+    @Test fun returningToTheCarClearsTheSuspectedDeparture() {
+        val candidate = 1_000_000L
+        assertFalse(LockAlertPolicy.departureSuspected(candidate, lastStrongNearAtMs = candidate + 3_000L))
+        assertFalse(LockAlertPolicy.departureSuspected(0L, 0L))
+        // A stationary loss without any walk-away candidate stays silent.
+        assertFalse(LockAlertPolicy.audible(LockAlertPolicy.linkLossEvent(false, false)))
+    }
+
+    @Test fun departureAlarmIsNotDueNearTheCarOrAfterALock() {
+        assertFalse(LockAlertPolicy.departureAlarmDue(true, stillUnlocked = true, latestRssi = -70, lockThreshold = -82))
+        assertFalse(LockAlertPolicy.departureAlarmDue(true, stillUnlocked = false, latestRssi = null, lockThreshold = -82))
+        assertFalse(LockAlertPolicy.departureAlarmDue(false, stillUnlocked = true, latestRssi = null, lockThreshold = -82))
+        assertTrue("link down counts as away", LockAlertPolicy.departureAlarmDue(true, true, null, -82))
+    }
+
     @Test fun missingGnssReferenceIsNotNewsWhileTheBleRouteCanLock() {
         assertFalse(LockAlertPolicy.shouldPost(Event.LOCATION_REFERENCE_UNAVAILABLE, bleDepartureRouteActive = true))
         assertTrue(LockAlertPolicy.shouldPost(Event.LOCATION_REFERENCE_UNAVAILABLE, bleDepartureRouteActive = false))

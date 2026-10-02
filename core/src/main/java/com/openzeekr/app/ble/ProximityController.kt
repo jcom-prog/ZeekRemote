@@ -132,6 +132,10 @@ class ProximityController(
     private var lastStrongNearAtMs = 0L
     private var lastShadowDepartureAtMs = 0L
     private var shadowDepartureWarned = false
+    // Latest moving walk-away candidate in this unlock (wall clock); with no strong reading after
+    // it, the user has walked away (LockAlertPolicy.departureSuspected).
+    private var lastWalkAwayCandidateAtMs = 0L
+    private var departureAlarmJob: Job? = null
     private var shadowRecoveryLogged = false
     private var relockRecoveryPending = false
     private var relockProbeJob: Job? = null
@@ -421,6 +425,8 @@ class ProximityController(
         lastStrongNearAtMs = 0L
         lastShadowDepartureAtMs = 0L
         shadowDepartureWarned = false
+        lastWalkAwayCandidateAtMs = 0L
+        departureAlarmJob?.cancel(); departureAlarmJob = null
         shadowRecoveryLogged = false
         lastTriggerMs = now
         _wakeLockNeeded.value = true
@@ -495,7 +501,7 @@ class ProximityController(
         // Walking when the link went (or while waiting) = leaving radio range with the car open:
         // audible. A stationary loss (security sleep, Watch hand-over, phone set down near the car)
         // is not an expected Lock and stays silent.
-        var movedDuringLoss = walkingOutsideHandOver()
+        var movedDuringLoss = walkingOutsideHandOver() || departureSuspected()
         pendingUnverifiedLockAlert = scope.launch {
             val wl = acquireSafetyWakelock(UNVERIFIED_LOCK_ALERT_WAKE_MS)
             try {
@@ -511,8 +517,7 @@ class ProximityController(
             while (lockJob?.isActive == true || linkDepartureJob?.isActive == true) delay(1_000L)
             if (linkLostAtMs == 0L || !armedUnlocked || !_state.value.running) return@launch
             val posted = UnverifiedLockNotifier.show(appContext,
-                if (movedDuringLoss) LockAlertPolicy.Event.LINK_LOST_WHILE_UNLOCKED
-                else LockAlertPolicy.Event.LINK_LOST_STATIONARY)
+                LockAlertPolicy.linkLossEvent(movedDuringLoss, departureSuspected()))
             unverifiedLockAlertRaised = true
             _state.value = _state.value.copy(lastAction =
                 if (posted) "BLE lost · vehicle lock unverified; check notification"
@@ -545,6 +550,33 @@ class ProximityController(
         val fresh = ble.pollRemoteRssi() ?: return LockAlertPolicy.Event.DEPARTURE_UNVERIFIED
         return if (fresh <= store.current().sensitivityLockRssi) LockAlertPolicy.Event.DEPARTURE_UNVERIFIED
             else LockAlertPolicy.Event.DEPARTURE_CANDIDATE_UNVERIFIED
+    }
+
+    private fun departureSuspected(): Boolean =
+        LockAlertPolicy.departureSuspected(lastWalkAwayCandidateAtMs, lastStrongNearAtMs)
+
+    /**
+     * After a moving walk-away candidate the car must be locked soon, by the BLE route, GNSS or a
+     * link-departure check. If it is still unlocked after [LockAlertPolicy.DEPARTURE_ALARM_DELAY_MS],
+     * the phone has not been back at the car and a fresh reading is weak (or the link is gone),
+     * sound the alarm. Any route that locks, a return to the car, or a new epoch cancels this.
+     */
+    private fun armDepartureAlarm() {
+        if (departureAlarmJob?.isActive == true) return
+        departureAlarmJob = scope.launch {
+            delay(LockAlertPolicy.DEPARTURE_ALARM_DELAY_MS)
+            // A Lock in progress owns the outcome and raises its own alert if it fails.
+            while (lockJob?.isActive == true) delay(1_000L)
+            val fresh = if (ble.state.value == DkBleManager.State.SESSION_READY) ble.pollRemoteRssi() else null
+            if (fresh != null && fresh >= STRONG_NEAR_DIAGNOSTIC_RSSI) lastStrongNearAtMs = System.currentTimeMillis()
+            if (!_state.value.running || !LockAlertPolicy.departureAlarmDue(departureSuspected(), armedUnlocked,
+                    fresh, store.current().sensitivityLockRssi)) return@launch
+            val posted = UnverifiedLockNotifier.show(appContext, LockAlertPolicy.Event.DEPARTURE_UNVERIFIED)
+            unverifiedLockAlertRaised = true
+            _state.value = _state.value.copy(lastAction = "Walked away · car not locked; Lock manually")
+            Logx.w("prox", "departure suspected and car still unlocked after " +
+                "${LockAlertPolicy.DEPARTURE_ALARM_DELAY_MS / 1000}s; NO LOCK SENT; notification posted=$posted")
+        }
     }
 
     private fun walkingOutsideHandOver(): Boolean =
@@ -671,6 +703,7 @@ class ProximityController(
         bleRoute?.authorizesBleLock(android.os.SystemClock.elapsedRealtime()) == true
 
     private fun clearBleDeparture() {
+        departureAlarmJob?.cancel(); departureAlarmJob = null
         bleRoute = null
         bleDepartureLoggedReason = ""
         bleDepartureReasonLoggedAtMs = 0L
@@ -1020,6 +1053,8 @@ class ProximityController(
         // rule is used by armedWatch, so its periodic safety sample cannot bypass this guard.
         if (armedUnlocked && armedDecision == ProximityDecisionPolicy.ArmedDecision.LOCK) {
             Logx.d("prox", "walk-away candidate (rssi=$smoothed ~${"%.1f".format(dist)}m) -> verifying")
+            lastWalkAwayCandidateAtMs = now
+            armDepartureAlarm()
             requestVerifiedWalkAwayLock("walk-away-lock")
             return
         }
