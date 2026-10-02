@@ -39,4 +39,23 @@ class UpstreamPortsTest {
         assertTrue(withRear.rearSeatCool)
         assertFalse("unknown list fails closed", VehicleCapabilities.UNKNOWN.rearSeatCool)
     }
+
+    @Test fun otaStatusParsesVersionsAndTolerantlyHandlesMissingFields() {
+        val st = Ota.parse(Json.parseToJsonElement("""{"currentVehicleVersion":{"displayVersion":"1.2.0"},
+            "targetVehicleVersion":{"displayVersion":"1.3.0","bssPackageReleaseNotes":[{"description":" Faster charging "}]},
+            "hasNewAssignment":true}"""))
+        assertEquals("1.2.0", st.currentVersion)
+        assertEquals("1.3.0", st.targetVersion)
+        assertTrue(st.updateAvailable)
+        assertEquals(listOf("Faster charging"), st.releaseNotes)
+        val none = Ota.parse(Json.parseToJsonElement("""{"currentVehicleVersion":{"displayVersion":"1.2.0"}}"""))
+        assertFalse(none.updateAvailable)
+        assertNull(Ota.parse(null).currentVersion)
+    }
+
+    @Test fun vehicleListCarriesPlatformCodesForTheStatusQuery() {
+        val v = VehicleGarage.parse(Json.parseToJsonElement("""[{"vin":"X","appModelCode":"CC1E","appYearCode":"2025"}]"""))!!
+        assertEquals("CC1E", v.appModelCode)
+        assertEquals("2025", v.appYearCode)
+    }
 }

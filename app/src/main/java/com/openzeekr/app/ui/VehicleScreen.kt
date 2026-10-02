@@ -145,6 +145,16 @@ fun VehicleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = M
     val maint = status?.additionalVehicleStatus?.maintenanceStatus
     val climate = status?.additionalVehicleStatus?.climateStatus
 
+    // Driving vs idle (ported from upstream OpenZeekr 0.1.9): engineStatus "engine-off" = parked; anything
+    // else = the car is on. A road speed > 0 means it's moving; then the hero shows the current speed
+    // (car-native km/h, converted to the user's unit). Display only - nothing here drives the key logic.
+    val basic = status?.basicVehicleStatus
+    val engineOn = basic?.engineStatus?.let { it.isNotBlank() && !it.equals("engine-off", ignoreCase = true) } ?: false
+    val speedKmh = basic?.speed?.takeIf { it > 0 }
+    val driving = engineOn || speedKmh != null
+    val heroSpeed = speedKmh?.let { Units.speedValue(it, cfg.distanceUnit) }
+    val heroSpeedUnit = Units.speedUnitLabel(cfg.distanceUnit)
+
     // Home-screen climate glyph: while A/C runs, show whether it's cooling or heating the cabin —
     // compare interior temp to the target setpoint. Cooling → blue snowflake; heating → orange sun.
     // The car doesn't report the setpoint, so use our remembered [targetTemp] (prefer the car's
@@ -222,7 +232,7 @@ fun VehicleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = M
     }
 
     Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
-        Hero(model, paint, charging, soc, powerKw)
+        Hero(model, paint, charging, soc, powerKw, driving = driving, speedNum = heroSpeed, speedUnit = heroSpeedUnit)
 
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             StatItem("Central lock", if (lockView == com.openzeekr.app.remote.LockView.UNKNOWN) "Unknown" else lockLabel,
@@ -343,7 +353,10 @@ fun VehicleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = M
 }
 
 @Composable
-private fun Hero(model: CarModel, paint: PaintColor, charging: Boolean, soc: Float?, powerKw: Double?) {
+private fun Hero(
+    model: CarModel, paint: PaintColor, charging: Boolean, soc: Float?, powerKw: Double?,
+    driving: Boolean = false, speedNum: Int? = null, speedUnit: String = "km/h",
+) {
     val trans = rememberInfiniteTransition(label = "charge")
     val breathe by trans.animateFloat(0.04f, 0.24f, infiniteRepeatable(tween(2400), RepeatMode.Reverse), label = "breathe")
     Box(
@@ -359,6 +372,22 @@ private fun Hero(model: CarModel, paint: PaintColor, charging: Boolean, soc: Flo
             horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             Box(Modifier.size(13.dp).clip(CircleShape).background(paint.color))
             Text(paint.name, color = Color.White.copy(alpha = .92f), fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
+        }
+        // Being driven: a live-speed badge top-right (a "Driving" chip when the car is on without speed).
+        if (driving) {
+            Row(
+                Modifier.align(Alignment.TopEnd).padding(12.dp).clip(RoundedCornerShape(14.dp))
+                    .background(Color.Black.copy(alpha = .38f)).padding(horizontal = 12.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                if (speedNum != null) {
+                    Text("$speedNum", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                    Text(speedUnit, color = Color.White.copy(alpha = .85f), fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 3.dp))
+                } else {
+                    Text("Driving", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
         }
         if (charging && soc != null) {
             val phase by trans.animateFloat(0f, 1f, infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Restart), label = "soc")

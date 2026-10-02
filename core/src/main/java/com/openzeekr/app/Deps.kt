@@ -14,6 +14,7 @@ import com.openzeekr.app.net.ApiClient
 import com.openzeekr.app.remote.AuthRepository
 import com.openzeekr.app.remote.CapabilityHolder
 import com.openzeekr.app.remote.InboxRepository
+import com.openzeekr.app.remote.OtaRepository
 import com.openzeekr.app.remote.JourneyRepository
 import com.openzeekr.app.remote.NavRepository
 import com.openzeekr.app.remote.RemoteControlRepository
@@ -69,6 +70,7 @@ class Deps(context: Context) {
     val journey = JourneyRepository(config, apiClient)
     /** Member message center (charging done, abnormal parking, alarms, OTA, …). */
     val inbox = InboxRepository(config, apiClient)
+    val ota = OtaRepository(config, apiClient)
     val share = ShareRepository(config, apiClient)
     val pendingInvites = MutableStateFlow<List<com.openzeekr.app.net.model.ShareInvite>>(emptyList())
     suspend fun refreshInvites() {

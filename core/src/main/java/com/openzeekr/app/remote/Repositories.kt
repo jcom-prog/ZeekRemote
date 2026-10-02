@@ -268,6 +268,39 @@ class ShareRepository(private val store: ConfigStore, private val client: ApiCli
 }
 
 /**
+ * OTA software-update STATUS only (ported from upstream OpenZeekr 0.1.9). Cloud-orchestration only -
+ * the car does the actual download/flash itself; we only ask "which version is installed and is a new
+ * one assigned?". Lives on the azure overseas-app gateway, so it needs the overseas AK/SK; without
+ * them it fails soft (CallResult.Err). Install/schedule are intentionally not implemented.
+ */
+class OtaRepository(private val store: ConfigStore, private val client: ApiClient) {
+    suspend fun checkUpdate(): CallResult<com.openzeekr.app.net.model.OtaStatus> = withContext(Dispatchers.IO) {
+        guarded {
+            val cfg = store.current()
+            require(cfg.overseasReady) { "Software status needs your overseas-app keys - add them in Settings › App secrets." }
+            val vin = cfg.vin
+            require(vin.isNotBlank()) { "No car selected" }
+            // The versionV2 body wants the raw platform codes (modelCode=year, seriesCode/vehicleModelNo=
+            // appModelCode); pull them from the vehicle-list for the active VIN.
+            val all = VehicleGarage.parseAll(client.api.vehicleList(needSharedCar = true).data)
+            val info = all.firstOrNull { it.vin == vin } ?: all.firstOrNull()
+            val seriesCode = info?.appModelCode.orEmpty()
+            val url = "${cfg.azureHost.trimEnd('/')}/overseas-app/ota/os/versionV2"
+            val resp = client.api.otaVersion(
+                url,
+                com.openzeekr.app.net.model.OtaVersionRequest(
+                    modelCode = info?.appYearCode.orEmpty(),
+                    seriesCode = seriesCode,
+                    vehicleModelNo = seriesCode,
+                    vehicleVin = vin,
+                ),
+            )
+            com.openzeekr.app.net.model.Ota.parse(resp.data)
+        }
+    }
+}
+
+/**
  * Member message-center ("Inbox"): charging done/abnormal, alarm / abnormal parking,
  * remote-control results, low battery, OTA, marketing. On-demand paged REST on the same
  * gateway — there is no push of message bodies (FCM only deep-links). Endpoints and

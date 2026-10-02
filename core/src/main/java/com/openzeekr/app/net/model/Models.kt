@@ -316,6 +316,9 @@ data class VehicleInfo(
     /** Whether the logged-in account owns this car (drives the provisioning path). */
     val isOwner: Boolean = false,
     val vin: String? = null,
+    /** Raw platform codes for the OTA status query (appModelCode e.g. "CC1E" = 7GT; year code). */
+    val appModelCode: String? = null,
+    val appYearCode: String? = null,
 )
 
 /** Tolerant parse of the (shape-varying) vehicle-list `data`. */
@@ -336,6 +339,8 @@ object VehicleGarage {
             vehicleId = s("id") ?: s("vehicleId") ?: s("relationId"),
             isOwner = ownerFlag,
             vin = s("vin"),
+            appModelCode = s("appModelCode") ?: s("appInnerCode") ?: s("seriesCode"),
+            appYearCode = s("appYearCode") ?: s("modelCode"),
         )
     }
 
@@ -413,6 +418,53 @@ object ShareInviteParse {
                 acceptTime = l("acceptTime"),
             )
         }
+    }
+}
+
+// -------------------------------------------------------------- OTA software-update check
+// Cloud-orchestration ONLY (the car does the GEEA FOTA download/flash itself). Ported from upstream OpenZeekr 0.1.9 as a READ-ONLY status check. We wire just the CHECK
+// (POST {azureHost}/overseas-app/ota/os/versionV2) for now: current car SW version + whether an update
+// is assigned. Auth = the overseas-app interceptor (needs the overseas AK/SK, Frida-dumped).
+
+@Serializable
+data class OtaVersionRequest(
+    val modelCode: String,
+    val seriesCode: String,
+    val vehicleModelNo: String,
+    val vehicleVin: String,
+)
+
+/** Parsed OTA check result for the UI. */
+data class OtaStatus(
+    val currentVersion: String?,
+    val targetVersion: String?,
+    val updateAvailable: Boolean,
+    val releaseNotes: List<String>,
+)
+
+object Ota {
+    /** Parse the versionV2 `data` object. Tolerant: any missing field -> null / false. */
+    fun parse(data: JsonElement?): OtaStatus {
+        val o = data as? JsonObject
+        fun verOf(key: String): Pair<String?, List<String>> {
+            val v = o?.get(key) as? JsonObject ?: return null to emptyList()
+            val disp = (v["displayVersion"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+            val notes = (v["bssPackageReleaseNotes"] as? JsonArray).orEmpty().mapNotNull { n ->
+                ((n as? JsonObject)?.get("description") as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotBlank() }
+            }
+            return disp to notes
+        }
+        val (current, currentNotes) = verOf("currentVehicleVersion")
+        val (target, targetNotes) = verOf("targetVehicleVersion")
+        val hasNew = (o?.get("hasNewAssignment") as? JsonPrimitive)?.let {
+            it.contentOrNull == "true" || it.contentOrNull == "1"
+        } ?: false
+        return OtaStatus(
+            currentVersion = current,
+            targetVersion = target,
+            updateAvailable = hasNew || target != null,
+            releaseNotes = if (targetNotes.isNotEmpty()) targetNotes else currentNotes,
+        )
     }
 }
 

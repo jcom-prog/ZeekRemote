@@ -171,6 +171,14 @@ interface TspApi {
     @PUT
     suspend fun inboxMarkRead(@Url url: String): BaseResponse<kotlinx.serialization.json.JsonElement>
 
+    // ---- OTA software-update STATUS (azure overseas-app gateway; read-only query) ----
+    // POST {azureHost}/overseas-app/ota/os/versionV2 {modelCode, seriesCode, vehicleModelNo, vehicleVin}
+    // -> data.currentVehicleVersion.displayVersion + targetVehicleVersion + hasNewAssignment. Absolute
+    // @Url; the interceptor auths it as an /overseas-app request (needs the overseas AK/SK).
+    // Install/schedule endpoints are deliberately NOT wired (user decision 02/10: status only).
+    @POST
+    suspend fun otaVersion(@Url url: String, @Body body: com.openzeekr.app.net.model.OtaVersionRequest): BaseResponse<kotlinx.serialization.json.JsonElement>
+
     @POST
     suspend fun inboxReadAll(@Url url: String, @Body body: com.openzeekr.app.net.model.MarkAllReadRequest): BaseResponse<kotlinx.serialization.json.JsonElement>
 

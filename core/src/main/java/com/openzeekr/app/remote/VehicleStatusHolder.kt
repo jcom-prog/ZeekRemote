@@ -35,15 +35,27 @@ class VehicleStatusHolder(
     private var prevLock: String? = null
     private var prevTrunk: String? = null
 
-    /** Begin foreground polling (idempotent). control.status() heartbeats first. */
+    /** Begin foreground polling (idempotent). control.status() heartbeats first. The cadence is
+     *  adaptive: while the car is being DRIVEN we poll fast (~5 s, the QRVS tier) so the hero speed
+     *  updates near-live; parked/idle we fall back to the slow 20 s tier. */
     fun start() {
         if (job?.isActive == true) return
         job = scope.launch {
             while (isActive) {
                 refresh()
-                delay(POLL_MS)
+                delay(nextPollMs())
             }
         }
+    }
+
+    /** Poll interval for the NEXT cycle, decided from the status we just read: fast while driving, slow
+     *  when idle. (A `null`/blank status keeps the slow default.) engineStatus "engine-off" = parked;
+     *  a road speed > 0 means it's moving. */
+    private fun nextPollMs(): Long {
+        val basic = _state.value?.basicVehicleStatus ?: return POLL_MS
+        val engineOn = basic.engineStatus?.let { it.isNotBlank() && !it.equals("engine-off", ignoreCase = true) } ?: false
+        val moving = (basic.speed ?: 0) > 0
+        return if (engineOn || moving) POLL_DRIVING_MS else POLL_MS
     }
 
     fun stop() { job?.cancel(); job = null; burstJob?.cancel(); burstJob = null }
@@ -96,8 +108,10 @@ class VehicleStatusHolder(
     }
 
     private companion object {
-        /** RVS cadence — the stock app's slower status tier. */
+        /** RVS cadence — the stock app's slower status tier (parked / idle). */
         const val POLL_MS = 20_000L
+        /** QRVS cadence — the fast tier, used while the car is being driven so the hero speed tracks. */
+        const val POLL_DRIVING_MS = 5_000L
         /** Inter-refresh gaps for the post-command burst (ms). Cumulative → refreshes land at
          *  ~1.5 s, ~4 s and ~8 s after the command, spanning the window the car typically needs to
          *  apply a cloud command and advance its status Ts. */

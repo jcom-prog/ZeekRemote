@@ -3,8 +3,6 @@ package com.openzeekr.app.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -63,6 +61,8 @@ import androidx.compose.ui.unit.sp
 import android.content.Intent
 import android.net.Uri
 import com.openzeekr.app.Deps
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.material.icons.filled.SystemUpdate
 import com.openzeekr.app.ble.DkBleManager
 import com.openzeekr.app.ble.DkProvisioning
 import com.openzeekr.app.ui.theme.Brand
@@ -74,6 +74,7 @@ private enum class Tab(val label: String, val icon: ImageVector) {
     SECURITY("Security", Icons.Filled.Shield),
     SCHEDULE("Schedule", Icons.Filled.CalendarMonth),
     KEY("Key", Icons.Filled.VpnKey),
+    UPDATES("Updates", Icons.Filled.SystemUpdate),
     SETTINGS("Settings", Icons.Filled.Settings),
     // Sentry footage/live-view stays hidden (sentinel-monitoring-service is CN-only /
     // unrouted on EU). SentryScreen is kept in the tree for when a workaround is found.
@@ -218,32 +219,36 @@ fun AppRoot(deps: Deps) {
             }
         },
         bottomBar = {
-            // Custom, horizontally-scrollable bar: with 6+ tabs the stock NavigationBar squeezes labels
-            // until they wrap ("Schedul\ne"). Fixed-width, single-line items that scroll sideways keep
-            // every label intact on any screen width.
+            // Every tab shares the width equally so ALL of them are always on screen - no horizontal
+            // scroll (ported from upstream OpenZeekr 0.1.9). Adaptive labels: with enough width per tab
+            // the label shows under each icon; when tight (small / large-display-size screens) the bar
+            // drops to icons only instead of ellipsizing labels.
             Column {
                 Box(Modifier.fillMaxWidth().height(1.dp).background(Brand.line))
-                Row(
-                    Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)
-                        .horizontalScroll(rememberScrollState())
-                        .navigationBarsPadding()
-                        .padding(horizontal = 6.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    tabs.forEachIndexed { i, t ->
-                        val selected = tab == i
-                        val tint = if (selected) Brand.accent else Brand.muted
-                        Column(
-                            Modifier.width(76.dp).clip(RoundedCornerShape(14.dp))
-                                .clickable { tab = i }.padding(vertical = 6.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(3.dp),
-                        ) {
-                            Icon(t.icon, t.label, tint = tint, modifier = Modifier.size(24.dp))
-                            Text(
-                                t.label, color = tint, fontSize = 11.sp, maxLines = 1,
-                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                            )
+                BoxWithConstraints(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
+                    val showLabels = (maxWidth / tabs.size.coerceAtLeast(1)) >= 50.dp
+                    Row(
+                        Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 4.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        tabs.forEachIndexed { i, t ->
+                            val selected = tab == i
+                            val tint = if (selected) Brand.accent else Brand.muted
+                            Column(
+                                Modifier.weight(1f).clip(RoundedCornerShape(14.dp))
+                                    .clickable { tab = i }.padding(vertical = 6.dp, horizontal = 2.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(3.dp),
+                            ) {
+                                Icon(t.icon, t.label, tint = tint, modifier = Modifier.size(if (showLabels) 24.dp else 26.dp))
+                                if (showLabels) {
+                                    Text(
+                                        t.label, color = tint, fontSize = 10.sp,
+                                        maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
+                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -275,6 +280,7 @@ fun AppRoot(deps: Deps) {
                     snackbar = snackbar,
                 )
             }
+            Tab.UPDATES -> OtaScreen(deps, m)
             Tab.SETTINGS -> SettingsScreen(deps, m)
         }
     }
