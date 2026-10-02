@@ -264,6 +264,7 @@ class ProximityService : Service() {
                 if (System.currentTimeMillis() >= sleepDisconnectGraceUntilMs &&
                     deps.ble.state.value !in setOf(DkBleManager.State.IDLE, DkBleManager.State.ERROR)) {
                     Logx.d("svc", "stationary key: dropping residual BLE session")
+                    deps.proximity.noteDeliberateDisconnect()
                     runCatching { deps.ble.disconnect() }
                 }
                 delay(KEY_SLEEP_POLL_MS)
@@ -279,7 +280,11 @@ class ProximityService : Service() {
                 } else {
                     when (deps.ble.state.value) {
                         DkBleManager.State.IDLE, DkBleManager.State.ERROR -> {}
-                        else -> { Logx.d("svc", "keep-alive: releasing link for watch"); runCatching { deps.ble.disconnect() } }
+                        else -> {
+                            Logx.d("svc", "keep-alive: releasing link for watch")
+                            deps.proximity.noteDeliberateDisconnect()
+                            runCatching { deps.ble.disconnect() }
+                        }
                     }
                     delay(WATCH_YIELD_POLL_MS)
                     continue
@@ -488,6 +493,7 @@ class ProximityService : Service() {
                 // car had just been auto-unlocked. No new presence event can start an unlock now.
                 sleepDisconnectGraceUntilMs = System.currentTimeMillis() + KEY_SLEEP_LOCK_GRACE_MS
                 deps.ble.disarmPresenceScan()
+                deps.proximity.noteDeliberateDisconnect()
                 runCatching { deps.ble.disconnect() }
                 deps.proximity.updateDiagnostics("security sleep · stationary 2 min · BLE off")
                 Logx.d("svc", "security sleep: stationary for 2 min — BLE session/presence disabled")

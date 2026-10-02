@@ -30,6 +30,11 @@ internal class DepartureProofLedger(
 
     /** A new confirmation (after any revocation) starts a new proof; it never extends an old one. */
     fun onConfirmed(nowMs: Long) {
+        // An expired proof is spent; drop it so a newer confirmation can own a new proof.
+        if (proofAtMs != UNSET && (nowMs < proofAtMs || nowMs - proofAtMs > maxProofAgeMs)) {
+            proofAtMs = UNSET
+            linkLostAfterProofAtMs = UNSET
+        }
         if (proofAtMs == UNSET && (lastSampleAtMs == UNSET || nowMs >= lastSampleAtMs)) {
             proofAtMs = nowMs
             linkLostAfterProofAtMs = UNSET

@@ -71,6 +71,24 @@ class DepartureProofLedgerTest {
         assertFalse("old link loss must not carry over", l.authorizesCloudLock(20_000))
     }
 
+    @Test fun expiredProofDoesNotBlockALaterConfirmation() {
+        val l = proven(at = 10_000L)
+        val late = 10_000L + DepartureProofLedger.MAX_PROOF_AGE_MS + 5_000L
+        assertFalse(l.authorizesBleLock(late))
+        l.onSample(late, -90, -90)
+        l.onConfirmed(late)
+        assertTrue("a fresh confirmation must own a new proof", l.authorizesBleLock(late))
+    }
+
+    @Test fun strongerRevocationBoundaryIsRespected() {
+        // The controller passes -78 (diagnostic strong-near) so a -77 reading revokes too.
+        val l = DepartureProofLedger(lock, strongNearRssi = -78)
+        l.onSample(10_000, -90, -90); l.onConfirmed(10_000)
+        l.onSample(10_200, -77, -84)
+        assertFalse(l.authorizesBleLock(10_200))
+        assertEquals("strong_near", l.revokedReason)
+    }
+
     @Test fun noProofAuthorizesNothing() {
         val l = DepartureProofLedger(lock)
         l.onLinkLost(1_000)

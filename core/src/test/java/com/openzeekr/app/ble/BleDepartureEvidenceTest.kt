@@ -32,6 +32,9 @@ class BleDepartureEvidenceTest {
                     firstConfirmAt = t
             }
         }
+        /** A signal that decays from [from] by [dbPerSecond], starting at [fromT]. */
+        fun decay(from: Int, fromT: Long, dbPerSecond: Double = 2.5): (Long) -> Int =
+            { at -> (from - (at - fromT) * dbPerSecond / 1000.0).toInt().coerceAtLeast(-96) }
     }
 
     private fun arrivedFeed(): Feed {
@@ -42,15 +45,14 @@ class BleDepartureEvidenceTest {
 
     // ---- perspective 1: decision rules / measurement quality ----
 
-    @Test fun straightDepartureConfirmsFiveSecondsAfterLastStrongSample() {
+    @Test fun straightDepartureConfirmsSixSecondsAfterLastStrongSample() {
         val f = arrivedFeed()
         val leaveAt = f.t
         // Walk away: strong for 1 s, then steadily weaker, never recovering.
-        f.run(10_000, { at -> val s = (at - leaveAt) / 1000.0
-            if (s < 1.0) -66 else (-74 - (s - 1.0) * 3).toInt().coerceAtLeast(-96) })
+        f.run(12_000, { at -> if (at - leaveAt < 1_000) -66 else f.decay(-74, leaveAt + 1_000, 3.0)(at) })
         val confirm = f.firstConfirmAt!!
         val sinceLastStrong = confirm - f.e.lastStrongAtMs!!
-        assertTrue("confirmed $sinceLastStrong ms after last strong", sinceLastStrong in 5_000L..5_400L)
+        assertTrue("confirmed $sinceLastStrong ms after last strong", sinceLastStrong in 6_000L..6_600L)
     }
 
     @Test fun standingStillBesideCarWhileShieldedNeverConfirms() {
@@ -67,12 +69,61 @@ class BleDepartureEvidenceTest {
         assertNull(f.firstConfirmAt)
     }
 
-    @Test fun longShieldedWalkBesideCarIsAKnownResidualRisk() {
-        // Documents the limit stated in the class: >= 5 s of continuous shielding while walking,
-        // with no strong sample, is indistinguishable from leaving. Calibration must bound it.
+    @Test fun steadyShieldedLevelWithoutRecessionNeverConfirms() {
+        // Review finding B2: absence of strong samples must not be departure. A level that stays
+        // put (no >= 6 dB recession from the clear period's start) never confirms, however long.
+        val f = Feed(BleDepartureEvidence(lock))
+        f.run(1_000, { -62 }, moving = false)      // arrival observed at the door
+        f.run(400, { -90 }, moving = false)        // shielding sets in while still
+        f.run(5 * 60_000, { -90 })                 // then walking beside the car, level steady
+        assertNull(f.firstConfirmAt)
+        assertEquals("not_receding", f.e.reason)
+    }
+
+    @Test fun weakButNotDeepFarNeverConfirms() {
         val f = arrivedFeed()
-        f.run(6_000, { -88 })
+        // Weak (below -82) and receding from -62, but never below lock − 3 dB = -85.
+        f.run(60_000, { -83 })
+        assertNull(f.firstConfirmAt)
+        assertEquals("not_deep_far", f.e.reason)
+    }
+
+    @Test fun shieldedDecayRightAfterStrongContactIsAKnownResidualRisk() {
+        // Documents the stated limit: a walker shielding the phone directly after strong contact,
+        // with a signal that decays like a departure, still satisfies this evidence. Replay
+        // calibration must bound how often that shape occurs beside the car.
+        val f = arrivedFeed()
+        val leaveAt = f.t
+        f.run(9_000, f.decay(-84, leaveAt, 1.5))
         assertTrue(f.firstConfirmAt != null)
+    }
+
+    @Test fun shieldingDropAfterARestartIsAKnownResidualRisk() {
+        // Second residual shape (review N3): a restart beside the car captures the baseline at a
+        // moderate level (-75, not strong, not weak); a lasting >= 6 dB body-shielding drop to
+        // deep-far while walking for >= 6 s then satisfies recession without strong contact.
+        // Pinned here so calibration and field replay must look for exactly this shape.
+        val f = arrivedFeed()
+        f.run(1_000, { -75 }, moving = false)      // restart: standing beside the car
+        f.run(2_000, { -75 })                      // starts walking around it: baseline -75
+        f.run(9_000, { -87 })                      // phone into a shielded pocket, keeps walking
+        assertTrue(f.firstConfirmAt != null)
+    }
+
+    @Test fun strongNearBandNeverSitsInsideTheLockThreshold() {
+        // "close" preset: lock -74. The strong band must sit at least 8 dB above it (-66), so a
+        // sample at -64 restarts the clear period even though it is below the -62 arrival level,
+        // and a -70 reading between the bands still resets the weak window (no confirmation).
+        val f = Feed(BleDepartureEvidence(-74))
+        f.run(1_000, { -62 }, moving = false)
+        val leaveAt = f.t
+        f.run(4_000, f.decay(-78, leaveAt))
+        f.run(200, { -64 })                        // inside lock+8: still at the car
+        assertEquals("strong_near", f.e.reason)
+        f.run(200, { -70 })
+        assertEquals("not_weak", f.e.reason)
+        f.run(14_000, f.decay(-78, f.t))
+        assertTrue(f.firstConfirmAt!! - f.e.lastStrongAtMs!! >= 6_000L)
     }
 
     @Test fun smoothedSignalAboveLockThresholdKeepsUnlocked() {
@@ -84,7 +135,8 @@ class BleDepartureEvidenceTest {
 
     @Test fun tooFewStepsCannotConfirmEvenWhenWeakForLong() {
         val f = arrivedFeed()
-        f.run(30_000, { -90 }, stepsPerSecond = 0.2) // shuffling, ~6 steps in 30 s
+        val leaveAt = f.t
+        f.run(8_000, f.decay(-80, leaveAt), stepsPerSecond = 0.2) // shuffling, ~2 steps in 8 s
         assertNull(f.firstConfirmAt)
         assertEquals("steps_too_few", f.e.reason)
     }
@@ -105,16 +157,17 @@ class BleDepartureEvidenceTest {
 
     @Test fun recoveredStrongSampleRestartsTheFullClearPeriod() {
         val f = arrivedFeed()
-        f.run(4_600, { -90 })
+        val leaveAt = f.t
+        f.run(5_000, f.decay(-78, leaveAt))
         f.run(200, { -68 })
         val strongAt = f.t
-        f.run(10_000, { -90 })
-        assertTrue(f.firstConfirmAt!! - strongAt >= 5_000L)
+        f.run(12_000, f.decay(-78, strongAt))
+        assertTrue(f.firstConfirmAt!! - strongAt >= 6_000L)
     }
 
     // ---- perspective 2: asynchrony / lifecycle / stale data ----
 
-    @Test fun sparseIdleSamplesNeverConfirm() {
+    @Test fun sparseIdleChecksNeverConfirm() {
         val f = arrivedFeed()
         // The 0.1.38 idle-far-lock shape: one weak sample every 10 s for minutes.
         f.run(5 * 60_000, { -92 }, stepMs = 10_000L)
@@ -124,20 +177,21 @@ class BleDepartureEvidenceTest {
 
     @Test fun oneGapRestartsTheWindowOnlyFromTheFirstSampleAfterIt() {
         val f = arrivedFeed()
-        f.run(4_000, { -90 })
-        f.run(1_500, { -90 }, stepMs = 1_500L) // single gap
+        val leaveAt = f.t
+        f.run(4_000, f.decay(-78, leaveAt))
+        f.run(1_500, { -86 }, stepMs = 1_500L) // single 1.5 s observation gap
         val gapAt = f.t
-        f.run(10_000, { -90 })
-        assertTrue(f.firstConfirmAt!! - gapAt >= 5_000L)
+        f.run(12_000, f.decay(-84, gapAt, 1.5))
+        assertTrue(f.firstConfirmAt!! - gapAt >= 6_000L)
     }
 
     @Test fun duplicateOrBackwardTimestampRestartsObservation() {
         for (bad in listOf(0L, -300L)) {
             val f = arrivedFeed()
-            f.run(4_800, { -90 })
-            val at = f.t + bad
+            val leaveAt = f.t
+            f.run(5_800, f.decay(-80, leaveAt))
             assertEquals(BleDepartureEvidence.Decision.NONE,
-                f.e.observe(at, -90, -90, true, f.steps + 1))
+                f.e.observe(f.t + bad, -90, -90, true, f.steps + 1))
             assertEquals("time_not_advancing", f.e.reason)
             f.run(1_000, { -90 })
             assertNull("old window must not be reused", f.firstConfirmAt)
@@ -154,20 +208,22 @@ class BleDepartureEvidenceTest {
 
     @Test fun stoppingBeforeConfirmationCancelsAndNeedsANewWalk() {
         val f = arrivedFeed()
-        f.run(3_000, { -90 })
-        f.run(1_000, { -90 }, moving = false)
+        val leaveAt = f.t
+        f.run(3_000, f.decay(-80, leaveAt))
+        f.run(1_000, { -88 }, moving = false)
         val resumedAt = f.t
-        f.run(10_000, { -90 })
-        assertTrue(f.firstConfirmAt!! - resumedAt >= 5_000L)
+        f.run(12_000, f.decay(-84, resumedAt, 1.5))
+        assertTrue(f.firstConfirmAt!! - resumedAt >= 6_000L)
     }
 
     @Test fun eachEpochIsIndependent() {
         val first = arrivedFeed()
-        first.run(8_000, { -90 })
+        val leaveAt = first.t
+        first.run(10_000, first.decay(-78, leaveAt))
         assertTrue(first.firstConfirmAt != null)
         val second = Feed(BleDepartureEvidence(lock)) // new unlock epoch => new object
         second.t = first.t; second.steps = first.steps
-        second.run(8_000, { -90 })
+        second.run(10_000, { -90 })
         assertNull(second.firstConfirmAt)
     }
 }

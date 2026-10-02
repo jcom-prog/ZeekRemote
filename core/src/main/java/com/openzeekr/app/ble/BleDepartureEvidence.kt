@@ -11,30 +11,39 @@ package com.openzeekr.app.ble
  *  - a sampling gap, a non-advancing clock, STILL, or missing step data restarts everything,
  *    because unobserved time is not evidence of separation (0.1.38 idle-far-lock);
  *  - confirmation needs, all at once: [minClearMs] without any strong-near sample, the latest
- *    [minWeakMs] continuously at or below the lock threshold (smoothed), MOVING throughout, and at
- *    least [minSteps] new steps since the clear period started.
+ *    [minWeakMs] continuously at or below the lock threshold (smoothed), MOVING throughout, at
+ *    least [minSteps] new steps since the clear period started, a signal that has RECEDED by at
+ *    least [minRecessionDb] from the clear period's starting level, and a current level at least
+ *    [deepFarMarginDb] below the lock threshold. Mere absence of strong samples is not departure.
  *
- * Known limit (not hidden): a person who walks for [minClearMs] beside the car while their body
- * continuously shields the phone, without a single strong sample, is indistinguishable from a
- * departure for this evidence. The parameters must therefore be calibrated against recorded
- * near-car intervals before any release, and they are constructor arguments for that reason.
+ * The strong-near boundary is never weaker than [minStrongGapDb] above the lock threshold, so a
+ * preset whose lock threshold sits close to -72 dBm still has a meaningful near band.
+ *
+ * Known limit (not hidden): a walker whose body continuously shields the phone beside the car AND
+ * whose signal decays like a departure can still satisfy this. The recession requirement makes
+ * that much harder than mere shielding, but the parameters must still be calibrated against
+ * recorded near-car intervals before any release; they are constructor arguments for that reason.
  *
  * Pure Kotlin; no Android, no coordinates, no RSSI-to-metre conversion.
  */
 internal class BleDepartureEvidence(
     private val lockThreshold: Int,
-    private val strongNearRssi: Int = STRONG_NEAR_RSSI,
+    strongNearRssi: Int = STRONG_NEAR_RSSI,
     private val minClearMs: Long = MIN_CLEAR_MS,
     private val minWeakMs: Long = MIN_WEAK_MS,
     private val minSteps: Long = MIN_STEPS,
     private val maxGapMs: Long = MAX_GAP_MS,
+    private val minRecessionDb: Int = MIN_RECESSION_DB,
+    private val deepFarMarginDb: Int = DEEP_FAR_MARGIN_DB,
 ) {
+    private val strongNearRssi: Int = maxOf(strongNearRssi, lockThreshold + MIN_STRONG_GAP_DB)
     enum class Decision { NONE, CONFIRMED }
 
     private var lastSampleAtMs = UNSET
     private var sawStrongInEpoch = false
     private var clearSinceMs = UNSET
     private var clearStartSteps: Long? = null
+    private var clearStartSmoothed = 0
     private var weakSinceMs = UNSET
     private var confirmedAtMs = UNSET
 
@@ -71,6 +80,7 @@ internal class BleDepartureEvidence(
             lastStrongAtMs = nowMs
             clearSinceMs = nowMs
             clearStartSteps = stepsSinceUnlock
+            clearStartSmoothed = smoothedRssi
             weakSinceMs = UNSET
             return decide("strong_near")
         }
@@ -90,12 +100,14 @@ internal class BleDepartureEvidence(
         if (clearSinceMs == UNSET) {
             clearSinceMs = nowMs
             clearStartSteps = stepsSinceUnlock
+            clearStartSmoothed = smoothedRssi
         }
         val baseSteps = clearStartSteps
         if (baseSteps == null || stepsSinceUnlock < baseSteps) {
             // A step source that appeared or reset mid-window gives no walked-distance proof.
             clearSinceMs = nowMs
             clearStartSteps = stepsSinceUnlock
+            clearStartSmoothed = smoothedRssi
             weakSinceMs = UNSET
             return decide("steps_restarted")
         }
@@ -109,6 +121,10 @@ internal class BleDepartureEvidence(
             nowMs - clearSinceMs < minClearMs -> decide("clear_too_short")
             nowMs - weakSinceMs < minWeakMs -> decide("weak_too_short")
             stepsSinceUnlock - baseSteps < minSteps -> decide("steps_too_few")
+            // Absence of strong samples is not departure: the signal must actually have receded
+            // from the clear period's starting level and sit well below the lock threshold now.
+            smoothedRssi > clearStartSmoothed - minRecessionDb -> decide("not_receding")
+            smoothedRssi > lockThreshold - deepFarMarginDb -> decide("not_deep_far")
             else -> {
                 if (confirmedAtMs == UNSET) confirmedAtMs = nowMs
                 decide("confirmed")
@@ -134,11 +150,14 @@ internal class BleDepartureEvidence(
     companion object {
         private const val UNSET = -1L
         const val STRONG_NEAR_RSSI = -72
+        const val MIN_STRONG_GAP_DB = 8
         // Provisional values. They must be calibrated by private replay of recorded near-car
         // intervals (no confirmation allowed) and departures (lock distance) before release.
-        const val MIN_CLEAR_MS = 5_000L
+        const val MIN_CLEAR_MS = 6_000L
         const val MIN_WEAK_MS = 2_000L
         const val MIN_STEPS = 8L
         const val MAX_GAP_MS = 1_000L
+        const val MIN_RECESSION_DB = 6
+        const val DEEP_FAR_MARGIN_DB = 3
     }
 }
