@@ -23,6 +23,11 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
         private val location = Regex("departure location outcome=([a-z_]+)")
         private val anchor = Regex("departure anchor attempt=([1-3]) outcome=([a-z_]+)")
         private val nearAnchor = Regex("departure near anchor outcome=([a-z_]+)")
+        // Whitelisted categorical values only; anything else is not journaled.
+        private val autoLockConfirmed = Regex(
+            "auto lock confirmed \\((ble-departure|verified-link-departure|walk-away-lock|idle-far-lock)\\) by BLE receipt")
+        private val bleDepartureRevoked = Regex(
+            "ble departure revoked \\((strong_near|signal_recovered|time_not_advancing)\\)")
         private val vehicleStatus = Regex("vehicle status observed session=([1-9][0-9]{0,18}) approach=([01]) walkAway=([01]) pe=([01]) ps=([01]) central=([0-3])")
         private val outcomes = setOf("fine_permission_missing", "provider_cancelled", "provider_failure",
             "provider_no_fix", "accuracy_missing", "mock_rejected", "fix_received", "security_exception",
@@ -71,7 +76,12 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                     message.startsWith("usable departure location anchor available") -> "ANCHOR_AVAILABLE"
                     message.startsWith("approach-unlock ARM (") -> "UNLOCK_STARTED"
                     message.startsWith("independent departure unverified:") -> "DEPARTURE_UNVERIFIED"
-                    else -> null
+                    message == "ble departure confirmed" -> "BLE_DEPARTURE_CONFIRMED"
+                    message.startsWith("ble departure lock authorized (") -> "AUTO_LOCK_STARTED ble"
+                    message.startsWith("auto lock confirmed (") -> autoLockConfirmed.matchEntire(message)
+                        ?.let { "AUTO_LOCK_CONFIRMED ${it.groupValues[1]}" }
+                    else -> bleDepartureRevoked.matchEntire(message)
+                        ?.let { "BLE_DEPARTURE_REVOKED ${it.groupValues[1]}" }
                 }
             }
             if (area == "motion") return when (message) {

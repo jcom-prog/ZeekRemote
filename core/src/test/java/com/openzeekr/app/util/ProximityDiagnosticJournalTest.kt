@@ -32,6 +32,25 @@ class ProximityDiagnosticJournalTest {
         assertNull(ProximityDiagnosticJournal.event("prox",
             "departure location outcome=departure_confirmed latitude=51 longitude=5"))
     }
+    @Test fun bleDepartureAndAutomaticLockEventsAreCategorical() {
+        assertEquals("BLE_DEPARTURE_CONFIRMED",
+            ProximityDiagnosticJournal.event("prox", "ble departure confirmed"))
+        assertEquals("AUTO_LOCK_STARTED ble",
+            ProximityDiagnosticJournal.event("prox", "ble departure lock authorized (rssi=-90); sending Lock"))
+        assertEquals("AUTO_LOCK_CONFIRMED ble-departure", ProximityDiagnosticJournal.event("prox",
+            "auto lock confirmed (ble-departure) by BLE receipt"))
+        assertEquals("AUTO_LOCK_CONFIRMED verified-link-departure", ProximityDiagnosticJournal.event("prox",
+            "auto lock confirmed (verified-link-departure) by BLE receipt"))
+        assertEquals("BLE_DEPARTURE_REVOKED strong_near",
+            ProximityDiagnosticJournal.event("prox", "ble departure revoked (strong_near)"))
+        assertNull(ProximityDiagnosticJournal.event("prox", "auto lock confirmed (other) by BLE receipt"))
+        assertNull(ProximityDiagnosticJournal.event("prox", "ble departure revoked (latitude=51)"))
+        assertNull("per-sample reasons are not journaled",
+            ProximityDiagnosticJournal.event("prox", "ble departure evidence clear_too_short"))
+        // Existing manual-lock events keep their meaning.
+        assertEquals("LOCK_CONFIRMED", ProximityDiagnosticJournal.event("prox", "lock confirmed (manual) -> departure latched"))
+    }
+
     private fun withFile(test: (File) -> Unit) {
         val dir = Files.createTempDirectory("proximity-journal-test").toFile()
         try { test(File(dir, "events.log")) } finally { dir.deleteRecursively() }

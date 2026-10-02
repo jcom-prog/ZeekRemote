@@ -119,6 +119,11 @@ class ProximityController(
     private var nearDepartureAnchor: NearDepartureAnchor? = null
     private var linkDepartureJob: Job? = null
     private var departureProofAtMs = 0L
+    // BLE + walking departure route: one evidence object and one proof ledger per unlock epoch.
+    // GNSS remains an additional positive route; it is no longer the only way to authorize Lock.
+    private var bleDeparture: BleDepartureEvidence? = null
+    private var bleDepartureProof: DepartureProofLedger? = null
+    private var bleDepartureLoggedReason = ""
     private var unlockObservedAtMs = 0L
     private var stepsAtUnlock: Long? = null
     private var strongestRssiSinceUnlock = Int.MIN_VALUE
@@ -174,6 +179,7 @@ class ProximityController(
         departureAnchorJob?.cancel(); departureAnchorJob = null; departureAnchor = null
         linkDepartureJob?.cancel(); linkDepartureJob = null
         departureProofAtMs = 0L
+        clearBleDeparture()
         pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
         unverifiedLockAlertRaised = false
         // Keep armedUnlocked as-is across start/stop toggles within a session isn't meaningful;
@@ -265,6 +271,7 @@ class ProximityController(
         departureAnchorJob?.cancel(); departureAnchorJob = null; departureAnchor = null
         linkDepartureJob?.cancel(); linkDepartureJob = null
         departureProofAtMs = 0L
+        clearBleDeparture()
         relockRecoveryPending = false; relockProbeJob?.cancel(); relockProbeJob = null
         needToUnlock = false; unlockJob?.cancel(); unlockJob = null
         lockJob?.cancel(); lockJob = null
@@ -329,6 +336,7 @@ class ProximityController(
             departureAnchorJob?.cancel(); departureAnchorJob = null; departureAnchor = null
             linkDepartureJob?.cancel(); linkDepartureJob = null
             departureProofAtMs = 0L
+            clearBleDeparture()
             relockRecoveryPending = false; relockProbeJob?.cancel(); relockProbeJob = null
             pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
             if (bleConfirmed) {
@@ -366,6 +374,10 @@ class ProximityController(
         departureAnchorJob?.cancel(); departureAnchor = null
         linkDepartureJob?.cancel(); linkDepartureJob = null
         departureProofAtMs = 0L
+        val epochLockThreshold = store.current().sensitivityLockRssi
+        bleDeparture = BleDepartureEvidence(epochLockThreshold)
+        bleDepartureProof = DepartureProofLedger(epochLockThreshold)
+        bleDepartureLoggedReason = ""
         relockRecoveryPending = false; relockProbeJob?.cancel(); relockProbeJob = null
         pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
         unverifiedLockAlertRaised = false
@@ -424,6 +436,7 @@ class ProximityController(
         if (linkLostAtMs == 0L) {
             decisionPolicy.onLinkEnded()
             linkLostAtMs = System.currentTimeMillis()
+            bleDepartureProof?.onLinkLost(android.os.SystemClock.elapsedRealtime())
             // RSSI/body shielding and a real departure can both tear down the link. Neither a timer
             // nor the last (possibly stale) RSSI can tell them apart; position must corroborate.
             val observedStepsSinceUnlock = stepsAtUnlock?.let { baseline ->
@@ -541,6 +554,44 @@ class ProximityController(
         else if (++rssiNullStreak >= RSSI_NULL_RECONNECT) { rssiNullStreak = 0; forceReconnect() }
         delay((MONITOR_FAST_MS - (android.os.SystemClock.elapsedRealtime() - pollStartedAtMs))
             .coerceAtLeast(0L))
+    }
+
+    private fun stepsSinceUnlock(): Long? = stepsAtUnlock?.let { baseline ->
+        motion.observedSteps?.let { (it - baseline).coerceAtLeast(0L) }
+    }
+
+    /** Feeds one fresh GATT reading to this epoch's BLE departure evidence; true when confirmed. */
+    private fun observeBleDeparture(rawRssi: Int, smoothedRssi: Int): Boolean {
+        val evidence = bleDeparture ?: return false
+        val ledger = bleDepartureProof ?: return false
+        val elapsed = android.os.SystemClock.elapsedRealtime()
+        val hadProof = ledger.hasProof
+        ledger.onSample(elapsed, rawRssi, smoothedRssi)
+        if (hadProof && !ledger.hasProof)
+            Logx.d("prox", "ble departure revoked (${ledger.revokedReason})")
+        val decision = evidence.observe(elapsed, rawRssi, smoothedRssi,
+            motion.state.value == MotionMonitor.Motion.MOVING, stepsSinceUnlock())
+        if (evidence.reason != bleDepartureLoggedReason) {
+            bleDepartureLoggedReason = evidence.reason
+            Logx.d("prox", "ble departure evidence ${evidence.reason}")
+        }
+        if (decision != BleDepartureEvidence.Decision.CONFIRMED) return false
+        val newProof = !ledger.hasProof
+        ledger.onConfirmed(elapsed)
+        if (newProof && ledger.hasProof) Logx.d("prox", "ble departure confirmed")
+        return ledger.authorizesBleLock(elapsed)
+    }
+
+    private fun bleLockAuthorized(): Boolean =
+        bleDepartureProof?.authorizesBleLock(android.os.SystemClock.elapsedRealtime()) == true
+
+    private fun bleCloudLockAuthorized(): Boolean =
+        bleDepartureProof?.authorizesCloudLock(android.os.SystemClock.elapsedRealtime()) == true
+
+    private fun clearBleDeparture() {
+        bleDeparture = null
+        bleDepartureProof = null
+        bleDepartureLoggedReason = ""
     }
 
     /** Require independent, newly completed GATT reads throughout departure confirmation. */
@@ -719,9 +770,12 @@ class ProximityController(
         lostRssi = smoothed    // diagnostic only; never sufficient to lock after link loss
 
         val now = System.currentTimeMillis()
+        var bleDepartureConfirmed = false
         if (armedUnlocked) {
             if (ble.state.value == DkBleManager.State.SESSION_READY)
                 nearDepartureAnchor?.observe(smoothed, android.os.SystemClock.elapsedRealtime())
+            if (ble.state.value == DkBleManager.State.SESSION_READY)
+                bleDepartureConfirmed = observeBleDeparture(rssi, smoothed)
             strongestRssiSinceUnlock = maxOf(strongestRssiSinceUnlock, rssi)
             if (rssi >= STRONG_NEAR_DIAGNOSTIC_RSSI) {
                 lastStrongNearAtMs = now
@@ -868,6 +922,16 @@ class ProximityController(
             needToUnlock = false
             unlockJob?.cancel(); unlockJob = null
         }
+        // BLE + walking route: continuous fresh evidence of leaving, independent of GNSS geometry.
+        // It supersedes a GNSS confirmation that may still be waiting for a usable fix pair.
+        if (armedUnlocked && bleDepartureConfirmed && lockJob?.isActive != true) {
+            lockConfirmationJob?.cancel(); lockConfirmationJob = null
+            linkDepartureJob?.cancel(); linkDepartureJob = null
+            departureProofAtMs = System.currentTimeMillis()
+            Logx.d("prox", "ble departure lock authorized (rssi=$smoothed); sending Lock")
+            startLockLoop("ble-departure")
+            return
+        }
         // A lock now requires time-based, moving-and-receding evidence from the shared policy. The same
         // rule is used by armedWatch, so its periodic safety sample cannot bypass this guard.
         if (armedUnlocked && armedDecision == ProximityDecisionPolicy.ArmedDecision.LOCK) {
@@ -952,7 +1016,7 @@ class ProximityController(
                 MAX_LOCK_ATTEMPTS else 1 // a lost radio should reach the cloud fallback promptly
             while (isActive && attempt < maxAttempts) {
                 if (System.currentTimeMillis() - departureProofAtMs > 5_000L &&
-                    !confirmPhysicalDeparture()) {
+                    !bleLockAuthorized() && !confirmPhysicalDeparture()) {
                     val posted = UnverifiedLockNotifier.showPossibleDeparture(appContext)
                     Logx.w("prox", "$reason: departure proof expired before BLE Lock; " +
                         "NO LOCK SENT; reminderPosted=$posted")
@@ -968,7 +1032,7 @@ class ProximityController(
                 }
                 if ((lastStrongNearAtMs > departureProofAtMs ||
                     System.currentTimeMillis() - departureProofAtMs > 5_000L) &&
-                    !confirmPhysicalDeparture()) {
+                    !bleLockAuthorized() && !confirmPhysicalDeparture()) {
                     val posted = UnverifiedLockNotifier.showPossibleDeparture(appContext)
                     Logx.w("prox", "$reason: proximity recovered before BLE Lock; " +
                         "NO LOCK SENT; reminderPosted=$posted")
@@ -978,7 +1042,11 @@ class ProximityController(
                 val r = runCatching { ble.session.control(DkProtocol.CTRL_LOCK, LOCK_ACK_TIMEOUT_MS) }
                     .getOrDefault(ControlResult.WRITE_FAILED)
                 Logx.d("prox", "$reason: BLE lock attempt #$attempt -> $r")
-                if (r == ControlResult.CONFIRMED) { confirmed = true; break }
+                if (r == ControlResult.CONFIRMED) {
+                    confirmed = true
+                    Logx.d("prox", "auto lock confirmed ($reason) by BLE receipt")
+                    break
+                }
                 resetLink()   // write-fail / no-response / reject → clear the wedge and retry
                 delay(UNLOCK_RETRY_DELAY_MS)
             }
@@ -1040,7 +1108,7 @@ class ProximityController(
                 val accepted = DepartureCheckedLockAttempt.send(
                     enabled = { armedUnlocked && _state.value.running &&
                         store.current().proximityEnabled },
-                    departure = { confirmPhysicalDeparture() },
+                    departure = { bleCloudLockAuthorized() || confirmPhysicalDeparture() },
                     command = {
                         try { cloudLock() }
                         catch (cancelled: CancellationException) { throw cancelled }
