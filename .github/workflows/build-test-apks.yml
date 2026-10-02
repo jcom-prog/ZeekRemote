@@ -112,6 +112,7 @@ jobs:
           grep -Fq 'Event.DEPARTURE_UNVERIFIED -> true' core/src/main/java/com/openzeekr/app/ble/LockAlertPolicy.kt
           grep -Fq 'LockAlertPolicy.linkLossEvent(movedDuringLoss, departureSuspected())' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'armDepartureAlarm()' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'LinkedApproachWatch.holdAwake(ble.state.value == DkBleManager.State.SESSION_READY,' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'door(lockView.tapLocks)' app/src/main/java/com/openzeekr/app/ui/VehicleScreen.kt
           grep -Fq '!bleLockAuthorized() && !confirmPhysicalDeparture()' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'const val MIN_WEAK_MS = 8_000L' core/src/main/java/com/openzeekr/app/ble/BleDepartureEvidence.kt

@@ -267,7 +267,10 @@ class ProximityController(
     private suspend fun sleepUntilMotion() {
         val wake = CompletableDeferred<Unit>()
         motionWake = wake
-        val woke = try { withTimeoutOrNull(FAR_SLEEP_SAFETY_MS) { wake.await() } != null } finally { motionWake = null }
+        // Linked + locked on an Activity-Recognition-only phone: re-check far sooner (LinkedApproachWatch).
+        val cap = if (LinkedApproachWatch.applies(ble.state.value == DkBleManager.State.SESSION_READY,
+                armedUnlocked, motionWakesOnSteps())) LinkedApproachWatch.LINKED_SLEEP_MS else FAR_SLEEP_SAFETY_MS
+        val woke = try { withTimeoutOrNull(cap) { wake.await() } != null } finally { motionWake = null }
         _wakeLockNeeded.value = true
         farAsleep = false
         if (woke) Logx.d("prox", "far-idle -> woke on motion (re-poll)")
@@ -980,6 +983,14 @@ class ProximityController(
                     _wakeLockNeeded.value = true; farAsleep = false
                     nextIntervalMs = if (steady) MONITOR_STILL_NOSENSOR_MS else blindInterval(dist)
                 }
+                LinkedApproachWatch.holdAwake(ble.state.value == DkBleManager.State.SESSION_READY,
+                    armedUnlocked, motionWakesOnSteps(), smoothed) &&
+                    motion.state.value != MotionMonitor.Motion.MOVING -> {
+                    // Linked, locked, signal not far, but the motion source cannot wake us on steps:
+                    // keep the CPU so the step assist can report MOVING, and keep sampling.
+                    _wakeLockNeeded.value = true; farAsleep = false
+                    nextIntervalMs = LinkedApproachWatch.WATCH_POLL_MS
+                }
                 motion.state.value == MotionMonitor.Motion.MOVING && withinApproachBackstop(now, dist) -> {
                     // Sensor says you're walking (still within the walk-time backstop): approach. Sample
                     // at full speed while movement is real. A 2–3 s cadence let a brisk walker cover the
@@ -1002,6 +1013,8 @@ class ProximityController(
         val cadence = when {
             near     -> "near-${nextIntervalMs}ms"
             farAsleep -> "far-sleep"
+            nextIntervalMs == LinkedApproachWatch.WATCH_POLL_MS &&
+                motion.state.value != MotionMonitor.Motion.MOVING -> "linked-watch-${nextIntervalMs}ms"
             else     -> "far-approach-${nextIntervalMs}ms"
         }
         if (cadence != lastCadence) {
@@ -1395,6 +1408,10 @@ class ProximityController(
      *  from the closest distance seen. Making inward progress (dist drops past the still band) re-arms the
      *  deadline from the new distance, so a genuine long walk isn't cut off; a stall beyond the window
      *  returns false → the caller treats it as still and sleeps. */
+    /** True when the motion source itself wakes the CPU per step / on motion (no linked watch needed). */
+    private fun motionWakesOnSteps(): Boolean =
+        motion.source == MotionMonitor.Source.STEP || motion.source == MotionMonitor.Source.SENSORS
+
     private fun withinApproachBackstop(now: Long, dist: Double): Boolean {
         if (farApproachDeadline == 0L || dist < farApproachRefDist - NEAR_STILL_BAND_M) {
             farApproachRefDist = dist
