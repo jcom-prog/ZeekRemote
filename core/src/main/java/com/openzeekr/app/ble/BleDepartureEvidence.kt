@@ -163,7 +163,7 @@ internal class BleDepartureEvidence(
         // Provisional values. They must be calibrated by private replay of recorded near-car
         // intervals (no confirmation allowed) and departures (lock distance) before release.
         const val MIN_CLEAR_MS = 6_000L
-        const val MIN_WEAK_MS = 6_000L
+        const val MIN_WEAK_MS = 8_000L
         const val MIN_STEPS = 8L
         const val MAX_GAP_MS = 1_000L
         const val MIN_RECESSION_DB = 6

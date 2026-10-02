@@ -148,7 +148,7 @@ class BleDepartureEvidenceTest {
     @Test fun tooFewStepsCannotConfirmEvenWhenWeakForLong() {
         val f = arrivedFeed()
         val leaveAt = f.t
-        f.run(8_000, f.decay(-80, leaveAt), stepsPerSecond = 0.2) // shuffling, ~2 steps in 8 s
+        f.run(16_000, f.decay(-80, leaveAt), stepsPerSecond = 0.2) // shuffling, ~3 steps in 16 s
         assertNull(f.firstConfirmAt)
         assertEquals("steps_too_few", f.e.reason)
     }
@@ -231,7 +231,7 @@ class BleDepartureEvidenceTest {
     @Test fun eachEpochIsIndependent() {
         val first = arrivedFeed()
         val leaveAt = first.t
-        first.run(10_000, first.decay(-78, leaveAt))
+        first.run(18_000, first.decay(-78, leaveAt))
         assertTrue(first.firstConfirmAt != null)
         val second = Feed(BleDepartureEvidence(lock)) // new unlock epoch => new object
         second.t = first.t; second.steps = first.steps
