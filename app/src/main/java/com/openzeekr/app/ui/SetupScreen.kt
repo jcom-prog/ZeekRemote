@@ -212,7 +212,7 @@ fun SetupScreen(
                 }
                 Column(Modifier.weight(1f)) {
                     Text("Approach unlock · verified walk-away Lock", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                    Text("Auto Lock checks phone location when unlocking and leaving. If location is inaccurate, Lock manually and check the car.",
+                    Text("Auto Lock needs verified departure: Bluetooth signal plus walking (sensitivity Far) or phone location. If an expected Lock is not confirmed, an alarm sounds: Lock manually and check the car.",
                         color = Brand.crit, fontSize = 12.sp)
                 }
                 Switch(checked = cfg.proximityEnabled, onCheckedChange = { on -> config.update { it.copy(proximityEnabled = on) } }, colors = brandSwitchColors(Brand.good))

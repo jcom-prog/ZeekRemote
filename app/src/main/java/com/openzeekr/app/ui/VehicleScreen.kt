@@ -113,6 +113,7 @@ fun VehicleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = M
     val bleReady = bleState == DkBleManager.State.SESSION_READY
 
     val status by deps.vehicleState.state.collectAsState()
+    val keyLockEvent by com.openzeekr.app.remote.LocalLockEvidence.latest.collectAsState()
     val cfg by deps.config.config.collectAsState()
     val caps by deps.capabilities.state.collectAsState()
     var info by remember { mutableStateOf<VehicleInfo?>(null) }
@@ -165,7 +166,16 @@ fun VehicleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = M
     val windowLabel = when { windowsVenting -> "Vent"; windowsOpen -> "Open"; else -> "Windows" }
     val windowTint = if (windowsVenting) Brand.accent else Brand.energy
 
-    val locked = safety?.centralLockingStatus?.let { it == "1" } ?: true
+    // Newest of cloud status and the latest key-confirmed Lock/Unlock: the cloud lags behind key
+    // commands, and a stale "locked" must never turn a tap meant to Lock into an Unlock.
+    val lockView = com.openzeekr.app.remote.LockView.resolve(
+        com.openzeekr.app.remote.LockView.cloudLocked(safety?.centralLockingStatus), status?.updateTime, keyLockEvent)
+    val locked = lockView == com.openzeekr.app.remote.LockView.LOCKED
+    val lockLabel = when (lockView) {
+        com.openzeekr.app.remote.LockView.LOCKED -> "Locked"
+        com.openzeekr.app.remote.LockView.UNLOCKED -> "Unlocked"
+        com.openzeekr.app.remote.LockView.UNKNOWN -> "Lock"
+    }
     val charging = elec?.chargingActive == true
     val plugged = elec?.pluggedIn == true
     val socStr = elec?.stateOfCharge?.takeIf { it.isNotBlank() } ?: elec?.chargeLevel
@@ -215,7 +225,8 @@ fun VehicleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = M
         Hero(model, paint, charging, soc, powerKw)
 
         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            StatItem("Central lock", if (locked) "Locked" else "Unlocked", if (locked) Brand.good else Brand.energy, Modifier.weight(1f))
+            StatItem("Central lock", if (lockView == com.openzeekr.app.remote.LockView.UNKNOWN) "Unknown" else lockLabel,
+                if (locked) Brand.good else Brand.energy, Modifier.weight(1f))
             StatItem("Battery", soc?.let { "${fmt(it)}%" } ?: "—", MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
             StatItem("Range", rangeStr?.let { s -> s.toDoubleOrNull()?.let { Units.distance(it, cfg.distanceUnit) } ?: "$s km" } ?: "—", MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
             // Live average energy consumption (ElectricStatusVo.averPowerConsumption); unit is the
@@ -230,8 +241,8 @@ fun VehicleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = M
             // fallback). Trunk is ALWAYS shown; the sheet offers Open/Close on a powered tailgate, else
             // latch unlock/lock. The tile reflects the live open/closed state (trunkOpen).
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Ctl(if (locked) Icons.Filled.Lock else Icons.Filled.LockOpen, if (locked) "Locked" else "Unlocked",
-                    tint = if (locked) Brand.good else Brand.energy, active = true, modifier = Modifier.weight(1f)) { door(!locked) }
+                Ctl(if (locked) Icons.Filled.Lock else Icons.Filled.LockOpen, lockLabel,
+                    tint = if (locked) Brand.good else Brand.energy, active = true, modifier = Modifier.weight(1f)) { door(lockView.tapLocks) }
                 Ctl(climateIcon, "Climate", tint = climateTint, active = acOn, modifier = Modifier.weight(1f)) { showClimate = true }
                 // Always open the sheet — charge limit, battery pre-conditioning (a PRE-charge
                 // action) and the charge-port control all live there, so it must be reachable when

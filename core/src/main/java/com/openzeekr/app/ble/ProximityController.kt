@@ -318,10 +318,10 @@ class ProximityController(
                 // Keep drive authorization alive, but respect the user's disabled proximity toggle.
                 clearBleDeparture()
                 ble.noteUnlockConfirmed()
-                val posted = UnverifiedLockNotifier.showManualLockRequired(appContext)
+                // No reminder notification: the screen is normally off, so it would not be seen.
                 _state.value = _state.value.copy(lastAction =
-                    "Automatic Lock needs position proof · check car before leaving")
-                Logx.w("prox", "manual Lock required after unlock; notification posted=$posted")
+                    "Automatic Lock is off · Lock manually when leaving")
+                Logx.w("prox", "manual Lock required after unlock (proximity off); no reminder notification")
                 Logx.d("prox", "unlock confirmed ($source); proximity disabled/stopped -> walk-away not armed")
             }
         }
@@ -346,7 +346,7 @@ class ProximityController(
                 UnverifiedLockNotifier.clear(appContext)
             } else {
                 // Cloud Ok acknowledges receipt of a command, not physical actuation.
-                val posted = UnverifiedLockNotifier.show(appContext)
+                val posted = UnverifiedLockNotifier.show(appContext, LockAlertPolicy.Event.MANUAL_CLOUD_LOCK_UNVERIFIED)
                 unverifiedLockAlertRaised = true
                 _state.value = _state.value.copy(lastAction =
                     "Cloud Lock accepted · vehicle lock unverified; check car")
@@ -406,7 +406,8 @@ class ProximityController(
                     scheduleLinkDepartureCheck()
             } else if (armedUnlocked && unlockObservedAtMs == now && _state.value.running &&
                 store.current().proximityEnabled) {
-                val posted = UnverifiedLockNotifier.showLocationUnavailable(appContext)
+                val posted = UnverifiedLockNotifier.show(appContext,
+                    LockAlertPolicy.Event.LOCATION_REFERENCE_UNAVAILABLE, bleDepartureRouteActive = bleRoute != null)
                 _state.value = _state.value.copy(lastAction =
                     "Auto Lock unavailable · no accurate location reference; Lock manually")
                 Logx.w("prox", "usable departure location anchor unavailable after bounded near acquisition; " +
@@ -422,11 +423,12 @@ class ProximityController(
         lastTriggerMs = now
         _wakeLockNeeded.value = true
         activityWake?.complete(Unit)
-        val posted = UnverifiedLockNotifier.showManualLockRequired(appContext)
+        // No reminder notification at unlock: the screen is normally off, so it would not be seen.
+        // An expected Lock that is not confirmed raises an audible alarm instead (LockAlertPolicy).
         _state.value = _state.value.copy(lastAction =
-            "Automatic Lock requires departure proof · check car before leaving")
+            "Unlocked · automatic Lock after verified departure")
         Logx.d("prox", "unlock confirmed ($source) -> departure watch; " +
-            "independent position required; reminder posted=$posted; fast RSSI for ${POST_UNLOCK_FAST_MONITOR_MS}ms")
+            "independent departure proof required; fast RSSI for ${POST_UNLOCK_FAST_MONITOR_MS}ms")
         if (ble.state.value !in setOf(DkBleManager.State.SESSION_READY, DkBleManager.State.CONNECTED)) {
             if (linkLostAtMs == 0L) linkLostAtMs = now
             queueUnverifiedLockAlert()
@@ -488,12 +490,24 @@ class ProximityController(
     /** Warn after a sustained loss, without interpreting elapsed time as evidence to lock. */
     private fun queueUnverifiedLockAlert() {
         if (!armedUnlocked || pendingUnverifiedLockAlert?.isActive == true) return
+        // Walking when the link went (or while waiting) = leaving radio range with the car open:
+        // audible. A stationary loss (security sleep, Watch hand-over, phone set down near the car)
+        // is not an expected Lock and stays silent.
+        var movedDuringLoss = motion.state.value == MotionMonitor.Motion.MOVING &&
+            !com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value
         pendingUnverifiedLockAlert = scope.launch {
             val wl = acquireSafetyWakelock(UNVERIFIED_LOCK_ALERT_WAKE_MS)
             try {
-                delay(UNVERIFIED_LOCK_ALERT_DELAY_MS)
+                val deadline = System.currentTimeMillis() + UNVERIFIED_LOCK_ALERT_DELAY_MS
+                while (System.currentTimeMillis() < deadline) {
+                    delay(1_000L)
+                    if (motion.state.value == MotionMonitor.Motion.MOVING &&
+                        !com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value) movedDuringLoss = true
+                }
                 if (linkLostAtMs == 0L || !armedUnlocked || !_state.value.running) return@launch
-                val posted = UnverifiedLockNotifier.show(appContext)
+                val posted = UnverifiedLockNotifier.show(appContext,
+                    if (movedDuringLoss) LockAlertPolicy.Event.LINK_LOST_WHILE_UNLOCKED
+                    else LockAlertPolicy.Event.LINK_LOST_STATIONARY)
                 unverifiedLockAlertRaised = true
                 _state.value = _state.value.copy(lastAction =
                     if (posted) "BLE lost · vehicle lock unverified; check notification"
@@ -704,7 +718,7 @@ class ProximityController(
                         // Do not buzz the user every time the noisy RSSI repeats the same candidate.
                         val posted = if (!shadowDepartureWarned) {
                             shadowDepartureWarned = true
-                            UnverifiedLockNotifier.showPossibleDeparture(appContext)
+                            UnverifiedLockNotifier.show(appContext, LockAlertPolicy.Event.DEPARTURE_UNVERIFIED)
                         } else false
                         _state.value = _state.value.copy(lastAction =
                             "Possible departure · auto Lock OFF · lock manually")
@@ -726,7 +740,7 @@ class ProximityController(
                             lastShadowDepartureAtMs = System.currentTimeMillis()
                             val posted = if (!shadowDepartureWarned) {
                                 shadowDepartureWarned = true
-                                UnverifiedLockNotifier.showPossibleDeparture(appContext)
+                                UnverifiedLockNotifier.show(appContext, LockAlertPolicy.Event.DEPARTURE_UNVERIFIED)
                             } else false
                             Logx.w("prox", "departure position unverified; NO LOCK SENT; " +
                                 "manual Lock required, reminderPosted=$posted")
@@ -1055,7 +1069,7 @@ class ProximityController(
             while (isActive && attempt < maxAttempts) {
                 if (System.currentTimeMillis() - departureProofAtMs > 5_000L &&
                     !bleLockAuthorized() && !confirmPhysicalDeparture()) {
-                    val posted = UnverifiedLockNotifier.showPossibleDeparture(appContext)
+                    val posted = UnverifiedLockNotifier.show(appContext, LockAlertPolicy.Event.DEPARTURE_UNVERIFIED)
                     Logx.w("prox", "$reason: departure proof expired before BLE Lock; " +
                         "NO LOCK SENT; reminderPosted=$posted")
                     lockJob = null
@@ -1088,7 +1102,11 @@ class ProximityController(
                 if ((reason == "ble-departure" || lastStrongNearAtMs > departureProofAtMs ||
                     System.currentTimeMillis() - departureProofAtMs > 5_000L) &&
                     !bleProofFresh && !confirmPhysicalDeparture()) {
-                    val posted = UnverifiedLockNotifier.showPossibleDeparture(appContext)
+                    // Back at the car: inform silently. Otherwise the departure is unverified and
+                    // the car is still open while the user leaves: sound the alarm.
+                    val posted = UnverifiedLockNotifier.show(appContext,
+                        if (lastStrongNearAtMs > departureProofAtMs) LockAlertPolicy.Event.PROXIMITY_RECOVERED_BEFORE_LOCK
+                        else LockAlertPolicy.Event.DEPARTURE_UNVERIFIED)
                     Logx.w("prox", "$reason: proximity recovered before BLE Lock; " +
                         "NO LOCK SENT; reminderPosted=$posted")
                     lockJob = null
@@ -1123,7 +1141,7 @@ class ProximityController(
                     Logx.w("prox", "ble departure route suspended for this epoch after unconfirmed Lock")
                 }
                 // Repeated cloud status can be cached; it cannot replace the missing BLE receipt.
-                val posted = UnverifiedLockNotifier.show(appContext)
+                val posted = UnverifiedLockNotifier.show(appContext, LockAlertPolicy.Event.AUTO_LOCK_UNCONFIRMED)
                 unverifiedLockAlertRaised = true
                 Logx.w("prox", "$reason: BLE lock unconfirmed; cloud status locked=$cloudStatusLocked; notification posted=$posted")
                 _state.value = _state.value.copy(lastAction =
@@ -1136,7 +1154,7 @@ class ProximityController(
                     UnverifiedLockNotifier.clear(appContext)
                     _state.value = _state.value.copy(lastAction = "$reason · vehicle reports locked ✓")
                 } else {
-                    val posted = UnverifiedLockNotifier.show(appContext)
+                    val posted = UnverifiedLockNotifier.show(appContext, LockAlertPolicy.Event.AUTO_LOCK_STATE_UNVERIFIED)
                     unverifiedLockAlertRaised = true
                     _state.value = _state.value.copy(lastAction =
                         "$reason · BLE Lock acknowledged; vehicle state unverified; check car")

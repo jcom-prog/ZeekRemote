@@ -19,6 +19,7 @@ on:
       - zeekremote-0.1.50-protocol-diagnostics
       - zeekremote-0.1.51-fresh-rssi
       - zeekremote-0.1.52-ble-departure
+      - zeekremote-0.1.53-lock-alarm
 
 permissions:
   contents: read
@@ -92,8 +93,8 @@ jobs:
 
       - name: Verify conditional automatic Lock instructions on both proximity screens
         run: |
-          grep -Fq 'Auto Lock checks phone location when unlocking and leaving. If location is inaccurate, Lock manually and check the car.' app/src/main/java/com/openzeekr/app/ui/SetupScreen.kt
-          grep -Fq 'Auto Lock checks phone location when unlocking and leaving. If location is inaccurate, Lock manually and check the car.' app/src/main/java/com/openzeekr/app/ui/ControlsScreen.kt
+          grep -Fq 'Auto Lock needs verified departure: Bluetooth signal plus walking (sensitivity Far) or phone location. If an expected Lock is not confirmed, an alarm sounds: Lock manually and check the car.' app/src/main/java/com/openzeekr/app/ui/SetupScreen.kt
+          grep -Fq 'Auto Lock needs verified departure: Bluetooth signal plus walking (sensitivity Far) or phone location. If an expected Lock is not confirmed, an alarm sounds: Lock manually and check the car.' app/src/main/java/com/openzeekr/app/ui/ControlsScreen.kt
           grep -Fq 'AutomaticLockGate(AutomaticLockGate.Mode.ACTUATE)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'DepartureSafetyEvidence.confirmsDeparture(anchor, previous, current, steps, nowMs)' core/src/main/java/com/openzeekr/app/ble/DepartureObservationWindow.kt
           grep -Fq 'departureLocationSource.nearAnchor(nearAnchor)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
@@ -105,6 +106,9 @@ jobs:
           grep -Fq 'if ((reason == "ble-departure" || lastStrongNearAtMs > departureProofAtMs ||' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'departure = { confirmPhysicalDeparture() },' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'const val CALIBRATED_LOCK_RSSI = -82' core/src/main/java/com/openzeekr/app/ble/BleDepartureRoute.kt
+          grep -Fq 'USAGE_ALARM' core/src/main/java/com/openzeekr/app/ble/UnverifiedLockNotifier.kt
+          grep -Fq 'Event.DEPARTURE_UNVERIFIED -> true' core/src/main/java/com/openzeekr/app/ble/LockAlertPolicy.kt
+          grep -Fq 'door(lockView.tapLocks)' app/src/main/java/com/openzeekr/app/ui/VehicleScreen.kt
           grep -Fq '!bleLockAuthorized() && !confirmPhysicalDeparture()' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'const val MIN_WEAK_MS = 8_000L' core/src/main/java/com/openzeekr/app/ble/BleDepartureEvidence.kt
 
@@ -128,7 +132,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='90' versionName='0.1.52-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='91' versionName='0.1.53-work'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
           sha256sum "$APK"

@@ -331,7 +331,7 @@ private fun ProximityCard(deps: Deps) {
                 )
             }
 
-            Text("Auto Lock checks phone location when unlocking and leaving. If location is inaccurate, Lock manually and check the car.",
+            Text("Auto Lock needs verified departure: Bluetooth signal plus walking (sensitivity Far) or phone location. If an expected Lock is not confirmed, an alarm sounds: Lock manually and check the car.",
                 style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.error)
 

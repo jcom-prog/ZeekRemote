@@ -355,6 +355,10 @@ class RealDkSession(
             } else {
                 Logx.d("dk", "control 0x%02x: 0x0111 received (no 0x0112) -> CONFIRMED".format(ctrl))
                 ControlResult.CONFIRMED
+            }.also { r ->
+                // Display only (Lock tile direction); never an authorization for anything.
+                if (r == ControlResult.CONFIRMED && (ctrl == DkProtocol.CTRL_LOCK || ctrl == DkProtocol.CTRL_UNLOCK))
+                    com.openzeekr.app.remote.LocalLockEvidence.onKeyConfirmed(locked = ctrl == DkProtocol.CTRL_LOCK)
             }
         } catch (e: Exception) {
             Logx.w("dk", "control error: ${e.message}"); ControlResult.WRITE_FAILED
