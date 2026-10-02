@@ -1175,6 +1175,9 @@ class ProximityController(
                 // Repeated cloud status can be cached; it cannot replace the missing BLE receipt.
                 // Only a cloud report newer than this Lock attempt keeps the warning silent.
                 val freshCloudLocked = cloudStatusLocked && verifyFreshLockStatus(lockStartedAtMs)
+                // This outcome is the warning for this Lock; a waiting link-loss alert must not
+                // override it (it would sound after a cloud-confirmed Lock, or sound twice).
+                pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
                 val posted = UnverifiedLockNotifier.show(appContext,
                     if (freshCloudLocked) LockAlertPolicy.Event.AUTO_LOCK_CLOUD_CONFIRMED
                     else LockAlertPolicy.Event.AUTO_LOCK_UNCONFIRMED)
