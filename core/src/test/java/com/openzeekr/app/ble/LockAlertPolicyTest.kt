@@ -49,6 +49,14 @@ class LockAlertPolicyTest {
         assertTrue("link down counts as away", LockAlertPolicy.departureAlarmDue(true, true, null, -82))
     }
 
+    @Test fun oneAlarmPerEpisode() {
+        // 0.1.54 part B: shadow-path alarm 19:29:19.6, watchdog alarm 19:29:41.9 -> second suppressed.
+        val first = 1_000_000L
+        assertTrue(LockAlertPolicy.alarmShouldSound(0L, first))
+        assertFalse(LockAlertPolicy.alarmShouldSound(first, first + 22_000L))
+        assertTrue(LockAlertPolicy.alarmShouldSound(first, first + LockAlertPolicy.ALARM_EPISODE_MS))
+    }
+
     @Test fun missingGnssReferenceIsNotNewsWhileTheBleRouteCanLock() {
         assertFalse(LockAlertPolicy.shouldPost(Event.LOCATION_REFERENCE_UNAVAILABLE, bleDepartureRouteActive = true))
         assertTrue(LockAlertPolicy.shouldPost(Event.LOCATION_REFERENCE_UNAVAILABLE, bleDepartureRouteActive = false))

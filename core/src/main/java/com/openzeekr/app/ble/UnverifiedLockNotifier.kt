@@ -25,7 +25,9 @@ internal object UnverifiedLockNotifier {
     private const val NOTIFICATION_ID = 43
     private const val ALARM_NOTIFICATION_ID = 44
     /** The alarm repeats until the user opens it, the Lock is confirmed, or this time passes. */
-    private const val ALARM_TIMEOUT_MS = 120_000L
+    private const val ALARM_TIMEOUT_MS = LockAlertPolicy.ALARM_EPISODE_MS
+    /** Elapsed time of the alarm of the current unresolved episode; 0 = none. */
+    @Volatile private var alarmRaisedAtElapsedMs = 0L
 
     private const val NOT_CONFIRMED_TITLE = "Vehicle lock not confirmed"
     private const val NOT_CONFIRMED_TEXT = "ZeekRemote cannot confirm the car is locked. Lock manually and check the car."
@@ -49,7 +51,13 @@ internal object UnverifiedLockNotifier {
         }
         val posted = post(context, CHANNEL_ID, NOTIFICATION_ID, title, message, alarm = false)
         if (LockAlertPolicy.audible(event)) {
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (!LockAlertPolicy.alarmShouldSound(alarmRaisedAtElapsedMs, now)) {
+                com.openzeekr.app.util.Logx.w("prox", "lock alarm suppressed (${event.name})")
+                return posted
+            }
             val sounded = post(context, ALARM_CHANNEL_ID, ALARM_NOTIFICATION_ID, title, message, alarm = true)
+            if (sounded) alarmRaisedAtElapsedMs = now
             com.openzeekr.app.util.Logx.w("prox", "lock alarm ${if (sounded) "raised" else "unavailable"} (${event.name})")
         } else {
             // A newer, non-audible state (back at the car, own cloud Lock, ...) ends a sounding alarm.
@@ -120,11 +128,13 @@ internal object UnverifiedLockNotifier {
 
     /** Stops a sounding alarm but keeps the visible record (e.g. the user is back in range). */
     fun silenceAlarm(context: Context) {
+        alarmRaisedAtElapsedMs = 0L
         runCatching { NotificationManagerCompat.from(context).cancel(ALARM_NOTIFICATION_ID) }
     }
 
     /** Clear only when a new unlock starts, or an explicit BLE/manual lock was confirmed. */
     fun clear(context: Context) {
+        alarmRaisedAtElapsedMs = 0L
         runCatching {
             val manager = NotificationManagerCompat.from(context)
             manager.cancel(ALARM_NOTIFICATION_ID)

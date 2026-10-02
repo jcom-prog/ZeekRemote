@@ -26,7 +26,7 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
         // Whitelisted categorical values only; anything else is not journaled.
         private val autoLockConfirmed = Regex(
             "auto lock confirmed \\((ble-departure|verified-link-departure|walk-away-lock|idle-far-lock)\\) by BLE receipt")
-        private val lockAlarm = Regex("lock alarm (raised|unavailable) \\(([A-Z_]{1,40})\\)")
+        private val lockAlarm = Regex("lock alarm (raised|unavailable|suppressed) \\(([A-Z_]{1,40})\\)")
         private val bleDepartureRevoked = Regex(
             "ble departure revoked \\((strong_near|signal_recovered|time_not_advancing)\\)")
         private val vehicleStatus = Regex("vehicle status observed session=([1-9][0-9]{0,18}) approach=([01]) walkAway=([01]) pe=([01]) ps=([01]) central=([0-3])")

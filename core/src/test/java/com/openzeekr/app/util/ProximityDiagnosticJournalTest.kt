@@ -57,6 +57,8 @@ class ProximityDiagnosticJournalTest {
             "lock alarm raised (DEPARTURE_UNVERIFIED)"))
         assertEquals("LOCK_ALARM unavailable LINK_LOST_WHILE_UNLOCKED", ProximityDiagnosticJournal.event("prox",
             "lock alarm unavailable (LINK_LOST_WHILE_UNLOCKED)"))
+        assertEquals("LOCK_ALARM suppressed DEPARTURE_UNVERIFIED", ProximityDiagnosticJournal.event("prox",
+            "lock alarm suppressed (DEPARTURE_UNVERIFIED)"))
         assertNull(ProximityDiagnosticJournal.event("prox", "lock alarm raised (lat=51)"))
         // Existing manual-lock events keep their meaning.
         assertEquals("LOCK_CONFIRMED", ProximityDiagnosticJournal.event("prox", "lock confirmed (manual) -> departure latched"))
