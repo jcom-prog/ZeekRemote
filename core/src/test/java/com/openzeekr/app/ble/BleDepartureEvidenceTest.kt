@@ -45,14 +45,18 @@ class BleDepartureEvidenceTest {
 
     // ---- perspective 1: decision rules / measurement quality ----
 
-    @Test fun straightDepartureConfirmsSixSecondsAfterLastStrongSample() {
+    @Test fun straightDepartureConfirmsOneDeepWindowAfterReachingDeepFar() {
         val f = arrivedFeed()
         val leaveAt = f.t
-        // Walk away: strong for 1 s, then steadily weaker, never recovering.
-        f.run(12_000, { at -> if (at - leaveAt < 1_000) -66 else f.decay(-74, leaveAt + 1_000, 3.0)(at) })
+        // Walk away: strong for 1 s, then steadily weaker (3 dB/s), never recovering.
+        val raw = { at: Long -> if (at - leaveAt < 1_000) -66 else f.decay(-74, leaveAt + 1_000, 3.0)(at) }
+        f.run(16_000, raw)
+        // Deep-far (<= lock - 3 = -85) is first reached ~3.7 s into the decay.
+        var deepAt = leaveAt
+        while (raw(deepAt) > -85) deepAt += 200
         val confirm = f.firstConfirmAt!!
-        val sinceLastStrong = confirm - f.e.lastStrongAtMs!!
-        assertTrue("confirmed $sinceLastStrong ms after last strong", sinceLastStrong in 6_000L..6_600L)
+        assertTrue("confirmed ${confirm - deepAt} ms after deep-far",
+            confirm - deepAt in BleDepartureEvidence.MIN_WEAK_MS..BleDepartureEvidence.MIN_WEAK_MS + 400)
     }
 
     @Test fun standingStillBesideCarWhileShieldedNeverConfirms() {
@@ -69,15 +73,23 @@ class BleDepartureEvidenceTest {
         assertNull(f.firstConfirmAt)
     }
 
-    @Test fun steadyShieldedLevelWithoutRecessionNeverConfirms() {
-        // Review finding B2: absence of strong samples must not be departure. A level that stays
-        // put (no >= 6 dB recession from the clear period's start) never confirms, however long.
-        val f = Feed(BleDepartureEvidence(lock))
-        f.run(1_000, { -62 }, moving = false)      // arrival observed at the door
-        f.run(400, { -90 }, moving = false)        // shielding sets in while still
-        f.run(5 * 60_000, { -90 })                 // then walking beside the car, level steady
+    @Test fun shieldedWalkingShorterThanTheDeepWindowNeverConfirms() {
+        // Field shape (0.1.42 28/09, private replay): beside the car, deep-far stretches while
+        // walking lasted at most ~5 s before the signal came back above lock − 3 dB.
+        val f = arrivedFeed()
+        f.run(10 * 60_000, { at -> if ((at / 200) % 30 < 26) -90 else -80 }) // 5.2 s deep, 0.8 s back
         assertNull(f.firstConfirmAt)
-        assertEquals("not_receding", f.e.reason)
+    }
+
+    @Test fun sustainedShieldedWalkingBesideCarIsTheMainResidualRisk() {
+        // Stated limit: after strong contact, walking with the phone continuously shielded at
+        // deep-far for a full deep window is indistinguishable from leaving for BLE + steps.
+        // The ONLY guard is the duration; private replay found no near interval that long.
+        val f = arrivedFeed()
+        val walkAt = f.t
+        f.run(BleDepartureEvidence.MIN_WEAK_MS + 2_000, { -90 })
+        assertTrue(f.firstConfirmAt != null)
+        assertTrue(f.firstConfirmAt!! - walkAt >= BleDepartureEvidence.MIN_WEAK_MS)
     }
 
     @Test fun weakButNotDeepFarNeverConfirms() {

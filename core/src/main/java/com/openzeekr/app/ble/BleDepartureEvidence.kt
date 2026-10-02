@@ -11,10 +11,10 @@ package com.openzeekr.app.ble
  *  - a sampling gap, a non-advancing clock, STILL, or missing step data restarts everything,
  *    because unobserved time is not evidence of separation (0.1.38 idle-far-lock);
  *  - confirmation needs, all at once: [minClearMs] without any strong-near sample, the latest
- *    [minWeakMs] continuously at or below the lock threshold (smoothed), MOVING throughout, at
- *    least [minSteps] new steps since the clear period started, a signal that has RECEDED by at
- *    least [minRecessionDb] from the clear period's starting level, and a current level at least
- *    [deepFarMarginDb] below the lock threshold. Mere absence of strong samples is not departure.
+ *    [minWeakMs] continuously at least [deepFarMarginDb] below the lock threshold (smoothed)
+ *    while MOVING, at least [minSteps] new steps since the clear period started, and a signal
+ *    that has RECEDED by at least [minRecessionDb] from the level at the last strong-near
+ *    sample. Mere absence of strong samples is not departure.
  *
  * The strong-near boundary is never weaker than [minStrongGapDb] above the lock threshold, so a
  * preset whose lock threshold sits close to -72 dBm still has a meaningful near band.
@@ -44,6 +44,9 @@ internal class BleDepartureEvidence(
     private var clearSinceMs = UNSET
     private var clearStartSteps: Long? = null
     private var clearStartSmoothed = 0
+    // Smoothed level at the latest strong-near sample: the "at the car" reference for recession.
+    // Unlike the time windows, a not-moving restart or sampling gap does not erase it.
+    private var strongRefSmoothed: Int? = null
     private var weakSinceMs = UNSET
     private var confirmedAtMs = UNSET
 
@@ -81,6 +84,7 @@ internal class BleDepartureEvidence(
             clearSinceMs = nowMs
             clearStartSteps = stepsSinceUnlock
             clearStartSmoothed = smoothedRssi
+            strongRefSmoothed = smoothedRssi
             weakSinceMs = UNSET
             return decide("strong_near")
         }
@@ -115,6 +119,11 @@ internal class BleDepartureEvidence(
             weakSinceMs = UNSET
             return decide("not_weak")
         }
+        // The timed window counts only continuous DEEP-far time while walking.
+        if (smoothedRssi > lockThreshold - deepFarMarginDb) {
+            weakSinceMs = UNSET
+            return decide("not_deep_far")
+        }
         if (weakSinceMs == UNSET) weakSinceMs = nowMs
 
         return when {
@@ -122,9 +131,9 @@ internal class BleDepartureEvidence(
             nowMs - weakSinceMs < minWeakMs -> decide("weak_too_short")
             stepsSinceUnlock - baseSteps < minSteps -> decide("steps_too_few")
             // Absence of strong samples is not departure: the signal must actually have receded
-            // from the clear period's starting level and sit well below the lock threshold now.
-            smoothedRssi > clearStartSmoothed - minRecessionDb -> decide("not_receding")
-            smoothedRssi > lockThreshold - deepFarMarginDb -> decide("not_deep_far")
+            // from the last at-the-car level (strong reference) by a clear margin.
+            smoothedRssi > (strongRefSmoothed ?: clearStartSmoothed) - minRecessionDb ->
+                decide("not_receding")
             else -> {
                 if (confirmedAtMs == UNSET) confirmedAtMs = nowMs
                 decide("confirmed")
@@ -154,7 +163,7 @@ internal class BleDepartureEvidence(
         // Provisional values. They must be calibrated by private replay of recorded near-car
         // intervals (no confirmation allowed) and departures (lock distance) before release.
         const val MIN_CLEAR_MS = 6_000L
-        const val MIN_WEAK_MS = 2_000L
+        const val MIN_WEAK_MS = 6_000L
         const val MIN_STEPS = 8L
         const val MAX_GAP_MS = 1_000L
         const val MIN_RECESSION_DB = 6
