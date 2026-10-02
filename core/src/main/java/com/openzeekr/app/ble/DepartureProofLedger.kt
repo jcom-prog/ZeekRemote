@@ -15,6 +15,9 @@ package com.openzeekr.app.ble
  *  - a BLE Lock may use a held proof while the link is up;
  *  - a cloud Lock additionally requires that the link went down *after* the proof (the phone
  *    left radio range), so a car-side BLE failure beside the car cannot be bypassed via cloud.
+ *
+ * Note (0.1.52): the controller does not use the cloud rule. [BleDepartureRoute] never authorizes
+ * a cloud Lock, because no fresh reading can revoke a proof while the radio is down.
  */
 internal class DepartureProofLedger(
     private val lockThreshold: Int,

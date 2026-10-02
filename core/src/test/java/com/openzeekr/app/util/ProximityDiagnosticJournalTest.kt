@@ -47,6 +47,12 @@ class ProximityDiagnosticJournalTest {
         assertNull(ProximityDiagnosticJournal.event("prox", "ble departure revoked (latitude=51)"))
         assertNull("per-sample reasons are not journaled",
             ProximityDiagnosticJournal.event("prox", "ble departure evidence clear_too_short"))
+        assertEquals("BLE_DEPARTURE_ROUTE enabled", ProximityDiagnosticJournal.event("prox",
+            "ble departure route enabled (steps available)"))
+        assertEquals("BLE_DEPARTURE_ROUTE disabled", ProximityDiagnosticJournal.event("prox",
+            "ble departure route disabled (uncalibrated preset)"))
+        assertEquals("BLE_DEPARTURE_SUSPENDED", ProximityDiagnosticJournal.event("prox",
+            "ble departure route suspended for this epoch after unconfirmed Lock"))
         // Existing manual-lock events keep their meaning.
         assertEquals("LOCK_CONFIRMED", ProximityDiagnosticJournal.event("prox", "lock confirmed (manual) -> departure latched"))
     }

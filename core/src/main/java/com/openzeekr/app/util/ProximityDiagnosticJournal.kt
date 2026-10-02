@@ -77,6 +77,10 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                     message.startsWith("approach-unlock ARM (") -> "UNLOCK_STARTED"
                     message.startsWith("independent departure unverified:") -> "DEPARTURE_UNVERIFIED"
                     message == "ble departure confirmed" -> "BLE_DEPARTURE_CONFIRMED"
+                    message == "ble departure route disabled (uncalibrated preset)" -> "BLE_DEPARTURE_ROUTE disabled"
+                    message.startsWith("ble departure route enabled (") -> "BLE_DEPARTURE_ROUTE enabled"
+                    message == "ble departure route suspended for this epoch after unconfirmed Lock" ->
+                        "BLE_DEPARTURE_SUSPENDED"
                     message.startsWith("ble departure lock authorized (") -> "AUTO_LOCK_STARTED ble"
                     message.startsWith("auto lock confirmed (") -> autoLockConfirmed.matchEntire(message)
                         ?.let { "AUTO_LOCK_CONFIRMED ${it.groupValues[1]}" }

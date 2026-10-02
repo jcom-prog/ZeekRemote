@@ -141,6 +141,15 @@ internal class BleDepartureEvidence(
         }
     }
 
+    /**
+     * Withdraws any confirmation and requires a complete new clear + deep-far window. Used when a
+     * held proof was revoked elsewhere: the next sample must not simply re-issue it.
+     */
+    fun restart() {
+        restartObservation()
+        reason = "restarted"
+    }
+
     private fun restartObservation() {
         clearSinceMs = UNSET
         clearStartSteps = null
