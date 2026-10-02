@@ -18,6 +18,7 @@ on:
       - zeekremote-0.1.49-departure-location-window
       - zeekremote-0.1.50-protocol-diagnostics
       - zeekremote-0.1.51-fresh-rssi
+      - zeekremote-0.1.52-ble-departure
 
 permissions:
   contents: read
@@ -100,6 +101,9 @@ jobs:
           grep -Fq '.setDurationMillis(DepartureObservationWindow.WINDOW_MS)' core/src/main/java/com/openzeekr/app/ble/DepartureLocationSource.kt
           grep -Fq 'departureLocationSource.confirmsDeparture(anchor, steps = {' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq '"Automatic Lock unavailable"' core/src/main/java/com/openzeekr/app/ble/UnverifiedLockNotifier.kt
+          grep -Fq 'bleDeparture = BleDepartureEvidence(epochLockThreshold)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq '!bleLockAuthorized() && !confirmPhysicalDeparture()' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'const val MIN_WEAK_MS = 8_000L' core/src/main/java/com/openzeekr/app/ble/BleDepartureEvidence.kt
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -121,7 +125,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='89' versionName='0.1.51-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='90' versionName='0.1.52-work'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
           sha256sum "$APK"
