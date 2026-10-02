@@ -552,6 +552,11 @@ class ProximityController(
             else LockAlertPolicy.Event.DEPARTURE_CANDIDATE_UNVERIFIED
     }
 
+    /** Any fresh reading at the car ends a suspected departure. */
+    private fun noteFreshReading(rssi: Int) {
+        if (rssi >= STRONG_NEAR_DIAGNOSTIC_RSSI) lastStrongNearAtMs = System.currentTimeMillis()
+    }
+
     private fun departureSuspected(): Boolean =
         LockAlertPolicy.departureSuspected(lastWalkAwayCandidateAtMs, lastStrongNearAtMs)
 
@@ -567,8 +572,13 @@ class ProximityController(
             delay(LockAlertPolicy.DEPARTURE_ALARM_DELAY_MS)
             // A Lock in progress owns the outcome and raises its own alert if it fails.
             while (lockJob?.isActive == true) delay(1_000L)
-            val fresh = if (ble.state.value == DkBleManager.State.SESSION_READY) ble.pollRemoteRssi() else null
-            if (fresh != null && fresh >= STRONG_NEAR_DIAGNOSTIC_RSSI) lastStrongNearAtMs = System.currentTimeMillis()
+            // Best of a few fresh readings: one body-shadowed reading at the car must not sound it.
+            var fresh: Int? = null
+            repeat(DEPARTURE_ALARM_READS) { i ->
+                if (i > 0) delay(1_000L)
+                if (ble.state.value == DkBleManager.State.SESSION_READY)
+                    ble.pollRemoteRssi()?.let { r -> noteFreshReading(r); fresh = maxOf(fresh ?: r, r) }
+            }
             if (!_state.value.running || !LockAlertPolicy.departureAlarmDue(departureSuspected(), armedUnlocked,
                     fresh, store.current().sensitivityLockRssi)) return@launch
             val posted = UnverifiedLockNotifier.show(appContext, LockAlertPolicy.Event.DEPARTURE_UNVERIFIED)
@@ -611,6 +621,7 @@ class ProximityController(
                 }
                 val cooling = lastTriggerMs != 0L &&
                     System.currentTimeMillis() - lastTriggerMs < ACTION_COOLDOWN_MS
+                rssi?.let(::noteFreshReading)
                 if (rssi != null && smoothed != null && armedUnlocked && lockJob?.isActive != true &&
                     observeBleDeparture(rssi, smoothed) && !cooling && !actionInFlight) {
                     lockConfirmationJob?.cancel(); lockConfirmationJob = null
@@ -642,7 +653,7 @@ class ProximityController(
             val rssi = ble.pollRemoteRssi()
             // Sparse idle reads must never build BLE departure evidence (a raw spike would also
             // become the "at the car" reference), but they must REVOKE a held proof on return.
-            if (rssi != null) revokeBleDeparture(rssi)
+            if (rssi != null) { revokeBleDeparture(rssi); noteFreshReading(rssi) }
             val idleDecision = if (rssi == null) ProximityDecisionPolicy.ArmedDecision.NONE else
                 decisionPolicy.onUnlockedSample(
                     System.currentTimeMillis(), rssi,
@@ -1185,6 +1196,9 @@ class ProximityController(
                 if (r == ControlResult.CONFIRMED) {
                     confirmed = true
                     Logx.d("prox", "auto lock confirmed ($reason) by BLE receipt")
+                    // The car acknowledged: stop any alarm now, not after the cloud catches up.
+                    departureAlarmJob?.cancel(); departureAlarmJob = null
+                    UnverifiedLockNotifier.silenceAlarm(appContext)
                     break
                 }
                 resetLink()   // write-fail / no-response / reject → clear the wedge and retry
@@ -1213,6 +1227,7 @@ class ProximityController(
                 // This outcome is the warning for this Lock; a waiting link-loss alert must not
                 // override it (it would sound after a cloud-confirmed Lock, or sound twice).
                 pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
+                departureAlarmJob?.cancel(); departureAlarmJob = null
                 val posted = UnverifiedLockNotifier.show(appContext,
                     if (freshCloudLocked) LockAlertPolicy.Event.AUTO_LOCK_CLOUD_CONFIRMED
                     else LockAlertPolicy.Event.AUTO_LOCK_UNCONFIRMED)
@@ -1449,6 +1464,7 @@ class ProximityController(
         private const val UNVERIFIED_LOCK_ALERT_WAKE_MS = 15_000L
         private const val UNVERIFIED_LOCK_ESCALATION_MS = 30 * 60_000L
         private const val SHADOW_RECHECK_MS = 5_000L
+        private const val DEPARTURE_ALARM_READS = 3
         private const val SHADOW_REARM_MS = 15_000L
         private const val STRONG_NEAR_DIAGNOSTIC_RSSI = -78
         private const val CLOUD_LOCK_MAX_REQUESTS = 2
