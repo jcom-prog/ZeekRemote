@@ -1083,7 +1083,9 @@ class ProximityController(
                             lastStrongNearAtMs = System.currentTimeMillis()
                     }
                 }
-                if ((lastStrongNearAtMs > departureProofAtMs ||
+                // The 5 s grace only applies to GNSS-started loops: a BLE-route Lock needs the
+                // fresh confirming reading on EVERY attempt, including the first one.
+                if ((reason == "ble-departure" || lastStrongNearAtMs > departureProofAtMs ||
                     System.currentTimeMillis() - departureProofAtMs > 5_000L) &&
                     !bleProofFresh && !confirmPhysicalDeparture()) {
                     val posted = UnverifiedLockNotifier.showPossibleDeparture(appContext)

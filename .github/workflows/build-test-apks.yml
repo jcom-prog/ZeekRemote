@@ -102,7 +102,7 @@ jobs:
           grep -Fq 'departureLocationSource.confirmsDeparture(anchor, steps = {' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq '"Automatic Lock unavailable"' core/src/main/java/com/openzeekr/app/ble/UnverifiedLockNotifier.kt
           grep -Fq 'bleRoute = BleDepartureRoute.forLockThreshold(store.current().sensitivityLockRssi)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
-          grep -Fq '!bleProofFresh && !confirmPhysicalDeparture()' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'if ((reason == "ble-departure" || lastStrongNearAtMs > departureProofAtMs ||' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'departure = { confirmPhysicalDeparture() },' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'const val CALIBRATED_LOCK_RSSI = -82' core/src/main/java/com/openzeekr/app/ble/BleDepartureRoute.kt
           grep -Fq '!bleLockAuthorized() && !confirmPhysicalDeparture()' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
