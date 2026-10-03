@@ -53,6 +53,13 @@ class UnlockedSafetyNetsTest {
         assertEquals("once", CarSelfLockDetector.Event.NONE, d.observe(s(1, 3), 160_000L))
     }
 
+    @Test fun carOpenedWhileTheLinkWasDownReArmsOnTheNextSession() {
+        val d = CarSelfLockDetector()
+        d.observe(s(1, 1), 0L); d.onUnlockConfirmed(10L)
+        assertEquals(CarSelfLockDetector.Event.SELF_LOCK, d.observe(s(1, 3), 120_000L))
+        assertEquals(CarSelfLockDetector.Event.REOPENED, d.observe(s(2, 1), 300_000L))
+    }
+
     @Test fun noReopenEventWithoutAPriorSelfLock() {
         val d = CarSelfLockDetector()
         d.observe(s(1, 3), 0L)

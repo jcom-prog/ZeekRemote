@@ -37,7 +37,9 @@ internal class CarSelfLockDetector {
         if (status.sessionGeneration != generation) { generation = status.sessionGeneration; lastCode = -1 }
         val previous = lastCode
         lastCode = status.centralLockCode
-        if (selfLocked && previous == LOCKED && status.centralLockCode == UNLOCKED) {
+        // After a self-lock, "unlocked" as the first status of a new session also counts: the user may
+        // have opened the car at the handle while the link was down (re-review 0.1.60).
+        if (selfLocked && (previous == LOCKED || previous == -1) && status.centralLockCode == UNLOCKED) {
             selfLocked = false
             return Event.REOPENED
         }
