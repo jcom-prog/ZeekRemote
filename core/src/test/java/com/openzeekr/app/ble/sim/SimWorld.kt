@@ -275,7 +275,9 @@ internal class SimWorld(
         }
         override suspend fun pollRemoteRssi(): Int? {
             if (_state.value != DkBleManager.State.SESSION_READY && _state.value != DkBleManager.State.CONNECTED) return null
-            delay(40L)
+            // A real GATT RSSI read takes 25-55 ms: field 03/10 19:57 (0.1.63) the 1 s cadence ran
+            // 988-1018 ms apart, so a span of two readings is just as often 995 ms as 1005 ms.
+            delay(rnd.uniform(25.0, 55.0).toLong())
             return if (_state.value == DkBleManager.State.SESSION_READY || _state.value == DkBleManager.State.CONNECTED) readRssi() else null
         }
         override fun reconnectLast(): Boolean { connect(null); return true }
