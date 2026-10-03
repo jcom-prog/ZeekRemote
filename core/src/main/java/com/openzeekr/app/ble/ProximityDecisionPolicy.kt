@@ -447,13 +447,13 @@ internal class ProximityDecisionPolicy {
         val gap = manualDeepLastReadingAtMs != UNSET_MS && nowMs - manualDeepLastReadingAtMs > MANUAL_DEEP_MAX_GAP_MS
         manualDeepLastReadingAtMs = nowMs
         val deep = rssi <= unlockThreshold - MANUAL_DEEP_FAR_MARGIN_DB
+        // The Lock fired around the lock threshold; noise at 8-10 m must not reopen at once
+        // (review 0.1.63): a reading clearly outside the unlock band first, then the usual return.
+        // That reading also counts inside the post-lock guard: simulator 03/10 (0.1.64), the Lock
+        // landed as the user turned back at ~7 m, the only such reading fell in the guard and the
+        // car stayed locked at the door. Without it only a return clearly at the car counts.
+        if (deepReturnNeedsRecession && rssi <= unlockThreshold - FAR_MARGIN_DB) deepReturnNeedsRecession = false
         if (deepReturnNotBeforeMs != UNSET_MS && nowMs < deepReturnNotBeforeMs) return false
-        if (deepReturnNeedsRecession) {
-            // The Lock fired around the lock threshold; noise at 8-10 m must not reopen at once
-            // (review 0.1.63): first a reading clearly outside the unlock band, then the return.
-            if (rssi <= unlockThreshold - FAR_MARGIN_DB) deepReturnNeedsRecession = false
-            return false
-        }
         if (manualDeepFarSeen) {
             // A proven departure is for the walk back, not for standing at the car minutes later.
             if (deep) manualDeepFarLastAtMs = nowMs
@@ -478,15 +478,19 @@ internal class ProximityDecisionPolicy {
             }
             return false
         }
-        if (rssi < unlockThreshold + MANUAL_DEEP_RETURN_MARGIN_DB) {
+        val returnMargin = if (deepReturnNeedsRecession) AUTO_LOCK_NEAR_RETURN_MARGIN_DB else MANUAL_DEEP_RETURN_MARGIN_DB
+        if (rssi < unlockThreshold + returnMargin) {
             manualDeepReturnSinceMs = UNSET_MS
             manualDeepReturnReadings = 0
             return false
         }
         if (manualDeepReturnSinceMs == UNSET_MS || gap) { manualDeepReturnSinceMs = nowMs; manualDeepReturnReadings = 0 }
         manualDeepReturnReadings++
+        // The 1 s linked-watch cadence runs 988-1018 ms apart (GATT read time): field 03/10 19:57
+        // (0.1.63) two readings of -81/-82 at ~6 m were 995 ms apart, were refused, and the car
+        // opened only at the door. The span is "about a second", not "at least 1000 ms".
         return manualDeepReturnReadings >= MANUAL_DEEP_RETURN_MIN_READINGS &&
-            nowMs - manualDeepReturnSinceMs >= MANUAL_DEEP_RETURN_CONFIRM_MS
+            nowMs - manualDeepReturnSinceMs >= MANUAL_DEEP_RETURN_CONFIRM_MS - SAMPLE_JITTER_MS
     }
 
     private fun tryRearmManualWeakSleep(
@@ -774,6 +778,10 @@ internal class ProximityDecisionPolicy {
         const val MANUAL_DEEP_RETURN_MARGIN_DB = 4
         const val MANUAL_DEEP_RETURN_CONFIRM_MS = 1_000L
         const val MANUAL_DEEP_RETURN_MIN_READINGS = 2
+        /** Spread of the RSSI sampling cadence (GATT read time); see [tryRearmManualDeepFarReturn]. */
+        const val SAMPLE_JITTER_MS = 150L
+        /** After an automatic Lock with no clear recession: back at the car (pocket ~4-5 m); 8-10 m noise peaks at -80. */
+        const val AUTO_LOCK_NEAR_RETURN_MARGIN_DB = 10
         /** Linked-watch samples every 1 s; a longer silence is a far-sleep gap. */
         const val MANUAL_DEEP_MAX_GAP_MS = 2_500L
         const val MANUAL_DEEP_PROOF_TTL_MS = 60_000L

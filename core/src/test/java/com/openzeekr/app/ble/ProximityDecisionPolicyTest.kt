@@ -634,6 +634,30 @@ class ManualLockDeepFarReturnTest {
         assertTrue(p.consumeDeepFarReturnRearm())
     }
 
+    @Test fun twoStrongReadingsAboutOneSecondApartAreAReturnDespiteSamplingJitter() {
+        // Field shape 0.1.63 (03/10 19:57, car self-lock): back from ~25 m on the 1 s linked
+        // watch, -81 then -82 at ~6 m only 995 ms apart; the strict ">= 1000 ms" refused it, the
+        // next reading (-84) restarted the count and the car opened only at the door.
+        val p = locked()
+        var t = 0L
+        listOf(-95, -96, -95, -95, -93, -94, -95, -96, -96, -95, -93)
+            .forEach { assertFalse(p.shouldUnlock(t, it, false, -86)); t += 1_000L }
+        listOf(-89, -94, -91, -88, -85).forEach { assertFalse(p.shouldUnlock(t, it, false, -86)); t += 1_000L }
+        assertFalse(p.shouldUnlock(t, -81, false, -86)); t += 995L
+        assertTrue(p.shouldUnlock(t, -82, false, -86))
+        assertTrue(p.consumeDeepFarReturnRearm())
+    }
+
+    @Test fun twoStrongReadingsWellUnderASecondApartAreNotYetAReturn() {
+        val p = locked()
+        var t = 0L
+        repeat(8) { assertFalse(p.shouldUnlock(t, -96, false, -86)); t += 1_000L }
+        // Activity Recognition still says STILL (the motion-gated route has its own rules).
+        assertFalse(p.shouldUnlock(t, -80, false, -86)); t += 200L
+        assertFalse(p.shouldUnlock(t, -82, false, -86)); t += 200L
+        assertFalse(p.shouldUnlock(t, -84, false, -86))
+    }
+
     @Test fun standingAtTenMetresWithShortDeepDipsStaysLocked() {
         val p = locked()
         var t = 0L
@@ -702,6 +726,33 @@ class ManualLockDeepFarReturnTest {
         listOf(-88, -87, -86, -84).forEach { assertFalse(p.shouldUnlock(t, it, true, -86)); t += 500L }
         assertFalse(p.shouldUnlock(t, -81, true, -86)); t += 1_000L
         assertTrue(p.shouldUnlock(t, -80, true, -86))
+    }
+
+    @Test fun aLockWhileTurningBackStillReopensAtTheCar() {
+        // Simulator 03/10 (0.1.64) "turn back at 9 m": the Lock lands at ~7 m on the walk back.
+        val p = ProximityDecisionPolicy()
+        p.onUnlockConfirmed(0L)
+        p.onDepartureLockStarted(); p.onAutomaticLockProvenDeparture(10_000L)
+        var t = 10_200L
+        // The one reading outside the unlock band falls inside the post-lock guard...
+        listOf(-88, -86, -85, -86, -85, -83, -85, -83, -83).forEach { assertFalse(p.shouldUnlock(t, it, true, -86)); t += 200L }
+        // ...and the walk back to the door must still reopen.
+        listOf(-80, -81, -81, -82, -82, -81, -80, -78, -78).forEach { assertFalse(p.shouldUnlock(t, it, true, -86)); t += 200L }
+        var opened = false
+        listOf(-77, -76, -77, -74, -73, -73, -71).forEach { if (p.shouldUnlock(t, it, true, -86)) opened = true; t += 200L }
+        assertTrue(opened)
+    }
+
+    @Test fun aLockWhileTurningBackWithoutRecessionNeedsTheCarItself() {
+        // No reading outside the unlock band at all: noise at 8-10 m (up to -78) never reopens.
+        val p = ProximityDecisionPolicy()
+        p.onUnlockConfirmed(0L)
+        p.onDepartureLockStarted(); p.onAutomaticLockProvenDeparture(10_000L)
+        var t = 10_200L
+        repeat(60) { i -> assertFalse(p.shouldUnlock(t, listOf(-84, -82, -80, -78, -81, -85)[i % 6], true, -86)); t += 200L }
+        var opened = false
+        repeat(8) { if (p.shouldUnlock(t, -74, true, -86)) opened = true; t += 200L }
+        assertTrue(opened)
     }
 
     @Test fun afterAProvenAutomaticLockNoiseAtTheLockPointDoesNotReopen() {
