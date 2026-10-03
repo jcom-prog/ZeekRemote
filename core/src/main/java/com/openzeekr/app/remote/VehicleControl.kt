@@ -62,7 +62,7 @@ class VehicleControl(
             if (r == ControlResult.CONFIRMED) {
                 if (cmd == Command.UNLOCK) onUnlockConfirmed("manual BLE control")
                 if (cmd == Command.LOCK) onLockConfirmed("manual BLE control")
-                return CallResult.Ok(RemoteControlResponse(serviceId = cmd.serviceId, status = "ok (key)"))
+                return CallResult.Ok(RemoteControlResponse(serviceId = cmd.serviceId, status = BLE_OK_STATUS))
             }
             Logx.d("ctl", "${cmd.name}: BLE $r — falling back to cloud")
         }
@@ -80,5 +80,7 @@ class VehicleControl(
 
     companion object {
         private const val BLE_ACK_TIMEOUT_MS = 1_500L
+        /** Response status of a Lock/Unlock the car confirmed over the key link. */
+        const val BLE_OK_STATUS = "ok (key)"
     }
 }

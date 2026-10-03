@@ -61,5 +61,10 @@
         <receiver
             android:name="com.openzeekr.app.ble.ActivityRecognitionReceiver"
             android:exported="false" />
+
+        <!-- The "Lock" button on a lock warning (our own PendingIntent; only ever locks). -->
+        <receiver
+            android:name="com.openzeekr.app.ble.NotificationLockReceiver"
+            android:exported="false" />
     </application>
 </manifest>

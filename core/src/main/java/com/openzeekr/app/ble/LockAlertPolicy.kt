@@ -33,6 +33,14 @@ internal object LockAlertPolicy {
         LOCATION_REFERENCE_UNAVAILABLE,
     }
 
+    /**
+     * True when the warning carries a "Lock" button (usable from the lock screen without unlocking
+     * the phone; user choice 03/10). Locking is always safe, so every warning that advises a manual
+     * Lock offers it; a car the cloud already reports as locked does not. There is never an Unlock
+     * button.
+     */
+    fun offersLock(event: Event): Boolean = event != Event.AUTO_LOCK_CLOUD_CONFIRMED
+
     /** True when the event must produce sound even with the screen off. */
     fun audible(event: Event): Boolean = when (event) {
         Event.AUTO_LOCK_UNCONFIRMED,

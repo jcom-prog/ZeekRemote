@@ -29,6 +29,13 @@ internal object UnverifiedLockNotifier {
     /** Elapsed time of the alarm of the current unresolved episode; 0 = none. */
     @Volatile private var alarmRaisedAtElapsedMs = 0L
 
+    private const val LOCK_ACTION_REQUEST = 4401
+    private const val LOCK_SENDING_TITLE = "Locking the car..."
+    private const val LOCK_SENDING_TEXT = "Lock sent from the notification. This warning clears when the car confirms it."
+    private const val LOCK_FAILED_TITLE = "Lock failed: car may be unlocked"
+    private const val LOCK_FAILED_TEXT =
+        "Neither Bluetooth nor the cloud could lock the car. Tap Lock to try again, or lock at the car."
+
     private const val NOT_CONFIRMED_TITLE = "Vehicle lock not confirmed"
     private const val NOT_CONFIRMED_TEXT = "ZeekRemote cannot confirm the car is locked. Lock manually and check the car."
     private const val POSSIBLE_DEPARTURE_TITLE = "Possible departure: lock manually"
@@ -49,14 +56,16 @@ internal object UnverifiedLockNotifier {
             Event.LOCATION_REFERENCE_UNAVAILABLE -> "Automatic Lock unavailable" to
                 "No accurate location reference is available. Lock manually and check the car before leaving."
         }
-        val posted = post(context, CHANNEL_ID, NOTIFICATION_ID, title, message, alarm = false)
+        val lockButton = LockAlertPolicy.offersLock(event)
+        val posted = post(context, CHANNEL_ID, NOTIFICATION_ID, title, message, alarm = false, lockButton = lockButton)
         if (LockAlertPolicy.audible(event)) {
             val now = android.os.SystemClock.elapsedRealtime()
             if (!LockAlertPolicy.alarmShouldSound(alarmRaisedAtElapsedMs, now, alarmShowing(context))) {
                 com.openzeekr.app.util.Logx.w("prox", "lock alarm suppressed (${event.name})")
                 return posted
             }
-            val sounded = post(context, ALARM_CHANNEL_ID, ALARM_NOTIFICATION_ID, title, message, alarm = true)
+            val sounded = post(context, ALARM_CHANNEL_ID, ALARM_NOTIFICATION_ID, title, message, alarm = true,
+                lockButton = lockButton)
             if (sounded) alarmRaisedAtElapsedMs = now
             com.openzeekr.app.util.Logx.w("prox", "lock alarm ${if (sounded) "raised" else "unavailable"} (${event.name})")
         } else {
@@ -64,6 +73,19 @@ internal object UnverifiedLockNotifier {
             silenceAlarm(context)
         }
         return posted
+    }
+
+    /** The notification Lock button was tapped: the record shows that a Lock is on its way. */
+    fun showLockSending(context: Context) {
+        post(context, CHANNEL_ID, NOTIFICATION_ID, LOCK_SENDING_TITLE, LOCK_SENDING_TEXT, alarm = false, lockButton = false)
+    }
+
+    /** Neither the key link nor the cloud locked the car: one audible (not repeating) warning, Lock button again. */
+    fun showLockFailed(context: Context) {
+        post(context, CHANNEL_ID, NOTIFICATION_ID, LOCK_FAILED_TITLE, LOCK_FAILED_TEXT, alarm = false, lockButton = true)
+        val sounded = post(context, ALARM_CHANNEL_ID, ALARM_NOTIFICATION_ID, LOCK_FAILED_TITLE, LOCK_FAILED_TEXT,
+            alarm = true, lockButton = true, insistent = false)
+        if (sounded) alarmRaisedAtElapsedMs = android.os.SystemClock.elapsedRealtime()
     }
 
     private fun ensureChannels(system: NotificationManager) {
@@ -89,6 +111,7 @@ internal object UnverifiedLockNotifier {
 
     private fun post(
         context: Context, channel: String, id: Int, title: String, message: String, alarm: Boolean,
+        lockButton: Boolean, insistent: Boolean = alarm,
     ): Boolean = runCatching {
         val manager = NotificationManagerCompat.from(context)
         if (!manager.areNotificationsEnabled()) return false
@@ -113,6 +136,7 @@ internal object UnverifiedLockNotifier {
             .setPriority(if (alarm) NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_HIGH)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .apply { tap?.let { setContentIntent(it) } }
+            .apply { if (lockButton) addAction(lockAction(context)) }
         if (alarm) {
             // Sound and vibration come from the alarm channel (minSdk 26).
             builder.setAutoCancel(true).setTimeoutAfter(ALARM_TIMEOUT_MS)
@@ -121,10 +145,21 @@ internal object UnverifiedLockNotifier {
             builder.setSilent(true).setAutoCancel(false).setOngoing(true)
         }
         val notification = builder.build()
-        if (alarm) notification.flags = notification.flags or Notification.FLAG_INSISTENT
+        if (insistent) notification.flags = notification.flags or Notification.FLAG_INSISTENT
         manager.notify(id, notification)
         true
     }.getOrDefault(false)
+
+    /** "Lock" without unlocking the phone; it only ever locks (see [NotificationLockReceiver]). */
+    private fun lockAction(context: Context): NotificationCompat.Action {
+        val intent = Intent(context, NotificationLockReceiver::class.java).setAction(NotificationLockReceiver.ACTION_LOCK)
+        val pending = PendingIntent.getBroadcast(context, LOCK_ACTION_REQUEST, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        return NotificationCompat.Action.Builder(R.drawable.ic_logo, "Lock", pending)
+            .setAuthenticationRequired(false)
+            .setShowsUserInterface(false)
+            .build()
+    }
 
     private fun alarmShowing(context: Context): Boolean = runCatching {
         context.getSystemService(NotificationManager::class.java)?.activeNotifications
