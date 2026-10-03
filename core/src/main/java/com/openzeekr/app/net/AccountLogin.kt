@@ -307,6 +307,7 @@ class AccountLogin(private val store: ConfigStore) {
             val bearerExpiresAtMs = ReloginPolicy.expiryMs(jwtClaim(bearer, "exp")) ?: 0L
             Logx.d("login", "bearer expiry ${if (bearerExpiresAtMs > 0L) java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.ROOT).format(java.util.Date(bearerExpiresAtMs)) else "unknown"}")
             store.update { it.copy(
+                cloudSignedInElsewhere = false,
                 accessTokenExpiresAtMs = bearerExpiresAtMs,
                 accessToken = bearer,
                 userId = jwtUserId ?: userId ?: it.userId,

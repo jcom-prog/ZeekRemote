@@ -104,16 +104,19 @@ fun AppRoot(deps: Deps) {
     }
 
     // A revoked/ended share clears VIN; never leave the BLE key service active for a car that is
-    // no longer attached to this account.
-    AppBootstrap(deps, serviceEnabled = loggedIn && provisioned && cfg.vin.isNotBlank())
+    // no longer attached to this account. The key service does NOT depend on the cloud sign-in
+    // (user decision 03/10): when the official app takes the cloud session (079021) the digital key
+    // and automatic open/close keep working over BLE; only cloud features pause. Sign out clears the
+    // VIN and the key, which still stops the service.
+    AppBootstrap(deps, serviceEnabled = provisioned && cfg.vin.isNotBlank())
 
-    // Account taken over on another device (TSP 079021): the interceptor already cleared the
-    // token (so we're now on the signed-out flow) — just explain why. Mirrors the stock app,
-    // which also signs you out when the account goes active elsewhere.
+    // Account taken over on another device (TSP 079021): the interceptor already cleared the cloud
+    // token; the digital key keeps working. Explain it; never sign in again automatically.
     val loggedInElsewhere by com.openzeekr.app.net.SessionSignal.loggedInElsewhere.collectAsState()
     LaunchedEffect(loggedInElsewhere) {
         if (loggedInElsewhere) {
-            snackbar("Signed out — your account was opened on another device (e.g. the Zeekr app). Sign in again to reconnect.")
+            snackbar("Cloud paused: your account was opened on another device (e.g. the Zeekr app). " +
+                "Digital key and automatic open/close keep working.")
             com.openzeekr.app.net.SessionSignal.loggedInElsewhere.value = false
         }
     }
@@ -157,7 +160,7 @@ fun AppRoot(deps: Deps) {
     var tab by remember { mutableIntStateOf(Tab.SETTINGS.ordinal) }
     LaunchedEffect(loggedIn, provisioned) {
         tab = when {
-            !loggedIn -> Tab.SETTINGS.ordinal
+            !provisioned && !loggedIn -> Tab.SETTINGS.ordinal
             !provisioned -> Tab.KEY.ordinal
             else -> Tab.VEHICLE.ordinal
         }

@@ -23,7 +23,9 @@ class KickoutInterceptor(private val store: ConfigStore) : Interceptor {
             val body = runCatching { resp.peekBody(1024).string() }.getOrNull()
             if (body?.contains("079021") == true) {
                 Logx.w("session", "079021 account logged in elsewhere — signing out")
-                if (store.current().accessToken.isNotBlank()) store.update { it.copy(accessToken = "") }
+                if (store.current().accessToken.isNotBlank()) {
+                    store.update { it.copy(accessToken = "", cloudSignedInElsewhere = true) }
+                }
                 SessionSignal.kickouts++
                 SessionSignal.loggedInElsewhere.value = true
             }

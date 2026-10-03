@@ -70,6 +70,8 @@ data class SecretsConfig(
     /** Automatic sign-in renewal bookkeeping (see net/SessionRenewal.kt). */
     val reloginFailures: Int = 0,
     val reloginLastAttemptAtMs: Long = 0L,
+    /** The official app took the cloud session (079021); cleared by a successful sign-in. */
+    val cloudSignedInElsewhere: Boolean = false,
     /** Azure/overseas `Authorization` token — the `tokenValue` RETURNED by the user-center
      *  loginByEmailEncrypt (server-issued HS256, NOT client-minted; captured 2026-09-16). This is
      *  what every gateway-pub-azure.zeekr.eu call (inbox/notifications) authenticates with — the TSP

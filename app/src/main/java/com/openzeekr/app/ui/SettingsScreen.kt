@@ -124,6 +124,11 @@ fun SettingsScreen(deps: Deps, modifier: Modifier = Modifier) {
                 Box(Modifier.size(8.dp).clip(CircleShape).background(if (loggedIn) Brand.good else Brand.faint))
             }
 
+            if (!loggedIn && liveCfg.cloudSignedInElsewhere) {
+                Text("Cloud paused: your account is signed in on another device (e.g. the Zeekr app). " +
+                    "The digital key and automatic open/close keep working. Signing in here takes the " +
+                    "cloud session back from that device.", color = Brand.energy, fontSize = 12.5.sp)
+            }
             if (!loggedIn) {
                 Field("Email", cfg.email) { v -> set { it.copy(email = v) } }
                 Field("Password", cfg.password, secret = true) { v -> set { it.copy(password = v) } }
