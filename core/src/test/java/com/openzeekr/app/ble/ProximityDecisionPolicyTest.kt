@@ -628,7 +628,7 @@ class ManualLockDeepFarReturnTest {
         // Recognition STILL nearly the whole way; the motion-edge route voided itself at ~10 m.
         val p = locked()
         var t = 0L
-        listOf(-70, -70, -71, -81, -84, -84, -85, -89, -90, -90, -91, -92, -93, -94, -95)
+        listOf(-70, -70, -71, -81, -84, -84, -85, -89, -90, -90, -91, -92, -93, -94, -95, -95)
             .forEach { assertFalse(p.shouldUnlock(t, it, false, -86)); t += 1_000L }
         t += 5_000L // far-sleep gap
         listOf(-97, -95, -93, -94, -90, -88, -84, -84).forEach { assertFalse(p.shouldUnlock(t, it, false, -86)); t += 1_000L }
@@ -670,5 +670,46 @@ class ManualLockDeepFarReturnTest {
         assertFalse(p.shouldUnlock(t, -90, false, -86)); t += 1_000L
         assertFalse(p.shouldUnlock(t, -79, false, -86)); t += 500L
         assertFalse(p.shouldUnlock(t, -88, false, -86))
+    }
+
+    @Test fun isolatedDeepDipsAcrossFarSleepGapsNeverProveADeparture() {
+        // Review 0.1.61: at the door or at 10 m, one dip before a far-sleep gap and one after it.
+        val p = locked()
+        var t = 0L
+        repeat(6) {
+            assertFalse(p.shouldUnlock(t, -84, false, -86)); t += 1_000L
+            assertFalse(p.shouldUnlock(t, -93, false, -86)); t += 30_000L
+            assertFalse(p.shouldUnlock(t, -94, false, -86)); t += 1_000L
+        }
+        repeat(6) { assertFalse(p.shouldUnlock(t, -78, false, -86)); t += 500L }
+    }
+
+    @Test fun anAutomaticLockAfterAnEarlierManualLockDoesNotUseTheManualRoutes() {
+        val p = locked()
+        p.onUnlockConfirmed(0L)          // e.g. "car reopened" on the same link
+        p.onDepartureLockStarted()       // then a walk-away auto-lock
+        var t = 1_000L
+        repeat(8) { assertFalse(p.shouldUnlock(t, -96, false, -86)); t += 1_000L }
+        repeat(6) { assertFalse(p.shouldUnlock(t, -78, false, -86)); t += 500L }
+    }
+
+    @Test fun aProvenDepartureExpiresAfterAMinuteBackAtTheCar() {
+        val p = locked()
+        var t = 0L
+        repeat(6) { assertFalse(p.shouldUnlock(t, -96, false, -86)); t += 1_000L }
+        // Back at the door but just under the return level for more than a minute.
+        repeat(70) { assertFalse(p.shouldUnlock(t, -84, false, -86)); t += 1_000L }
+        repeat(6) { assertFalse(p.shouldUnlock(t, -78, false, -86)); t += 500L }
+    }
+
+    @Test fun theReturnRequalifiesWithoutMotionAfterTheEvidenceExpired() {
+        val p = locked()
+        var t = 0L
+        repeat(6) { assertFalse(p.shouldUnlock(t, -96, false, -86)); t += 1_000L }
+        assertFalse(p.shouldUnlock(t, -80, false, -86)); t += 500L
+        assertFalse(p.shouldUnlock(t, -80, false, -86)); t += 500L
+        assertTrue(p.shouldUnlock(t, -80, false, -86)); t += 1_000L
+        assertFalse(p.shouldUnlock(t, -90, false, -86)); t += 6_000L // evidence gone (FAR + TTL)
+        assertTrue(p.shouldUnlock(t, -79, false, -86))
     }
 }

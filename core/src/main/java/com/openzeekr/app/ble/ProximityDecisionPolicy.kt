@@ -60,6 +60,10 @@ internal class ProximityDecisionPolicy {
     private var manualDeepFarSeen = false
     private var manualDeepReturnSinceMs = UNSET_MS
     private var manualDeepReturnReadings = 0
+    private var manualDeepLastReadingAtMs = UNSET_MS
+    private var manualDeepFarLastAtMs = UNSET_MS
+    /** After a signal-recognised return the unlock may be re-qualified until this time (no motion needed). */
+    private var deepReturnUnlockUntilMs = UNSET_MS
 
     /** Set once when a return after a Lock was recognised from the signal alone (for the log). */
     var deepFarReturnRearmed = false
@@ -86,6 +90,7 @@ internal class ProximityDecisionPolicy {
         manualDeparture = false
         resetSameLinkReturn()
         pendingUnlockFarSinceMs = UNSET_MS
+        deepReturnUnlockUntilMs = UNSET_MS
     }
 
     /** Records hardware-offloaded arrival evidence before connect/handshake timing can erase it. */
@@ -173,11 +178,18 @@ internal class ProximityDecisionPolicy {
         if (unlockQualifiedAtMs != UNSET_MS && nowMs - unlockQualifiedAtMs > UNLOCK_EVIDENCE_TTL_MS) {
             unlockQualifiedAtMs = UNSET_MS
         }
+        // A session renewal or cooldown can outlast the 5 s evidence; within the window a strong
+        // reading re-qualifies without a motion edge (review 0.1.61).
+        if (unlockQualifiedAtMs == UNSET_MS && deepReturnUnlockUntilMs != UNSET_MS && nowMs <= deepReturnUnlockUntilMs &&
+            rssi >= unlockThreshold + MANUAL_DEEP_RETURN_MARGIN_DB) {
+            unlockQualifiedAtMs = nowMs
+        }
         return unlockQualifiedAtMs != UNSET_MS
     }
 
     fun onUnlockConfirmed(nowMs: Long) {
         lastUnlockedSampleAtMs = UNSET_MS
+        deepReturnUnlockUntilMs = UNSET_MS
         pendingUnlockFarSinceMs = UNSET_MS
         clearPresenceApproach()
         unlockConfirmedAtMs = nowMs
@@ -191,6 +203,10 @@ internal class ProximityDecisionPolicy {
     fun onDepartureLockStarted() {
         pendingUnlockFarSinceMs = UNSET_MS
         departureLatched = true
+        // An automatic lock never inherits the manual routes of an earlier manual Lock on the same
+        // link (review 0.1.61); onManualLockConfirmed sets it again right after this.
+        manualDeparture = false
+        deepReturnUnlockUntilMs = UNSET_MS
         departureLinkEnded = false
         resetSameLinkReturn()
         sawStrongNearWhileLocked = false
@@ -254,6 +270,7 @@ internal class ProximityDecisionPolicy {
                 finishSameLinkReturn()
                 // The sustained strong return is itself the approach proof: no motion edge needed.
                 unlockQualifiedAtMs = nowMs
+                deepReturnUnlockUntilMs = nowMs + DEEP_RETURN_UNLOCK_WINDOW_MS
                 deepFarReturnRearmed = true
                 return true
             }
@@ -376,12 +393,29 @@ internal class ProximityDecisionPolicy {
      * stronger than the unlock threshold (an ordinary approach unlocks around the threshold).
      */
     private fun tryRearmManualDeepFarReturn(nowMs: Long, rssi: Int, unlockThreshold: Int): Boolean {
+        // Readings must be dense: across a far-sleep gap nothing is known, so a gap restarts every
+        // run (review 0.1.61: two isolated dips 30 s apart must never prove a departure).
+        val gap = manualDeepLastReadingAtMs != UNSET_MS && nowMs - manualDeepLastReadingAtMs > MANUAL_DEEP_MAX_GAP_MS
+        manualDeepLastReadingAtMs = nowMs
+        val deep = rssi <= unlockThreshold - MANUAL_DEEP_FAR_MARGIN_DB
+        if (manualDeepFarSeen) {
+            // A proven departure is for the walk back, not for standing at the car minutes later.
+            if (deep) manualDeepFarLastAtMs = nowMs
+            else if (nowMs - manualDeepFarLastAtMs > MANUAL_DEEP_PROOF_TTL_MS) {
+                manualDeepFarSeen = false
+                manualDeepFarSinceMs = UNSET_MS
+                manualDeepFarReadings = 0
+            }
+        }
         if (!manualDeepFarSeen) {
-            if (rssi <= unlockThreshold - MANUAL_DEEP_FAR_MARGIN_DB) {
-                if (manualDeepFarSinceMs == UNSET_MS) manualDeepFarSinceMs = nowMs
+            if (deep) {
+                if (manualDeepFarSinceMs == UNSET_MS || gap) { manualDeepFarSinceMs = nowMs; manualDeepFarReadings = 0 }
                 manualDeepFarReadings++
                 if (manualDeepFarReadings >= MANUAL_DEEP_FAR_MIN_READINGS &&
-                    nowMs - manualDeepFarSinceMs >= MANUAL_DEEP_FAR_CONFIRM_MS) manualDeepFarSeen = true
+                    nowMs - manualDeepFarSinceMs >= MANUAL_DEEP_FAR_CONFIRM_MS) {
+                    manualDeepFarSeen = true
+                    manualDeepFarLastAtMs = nowMs
+                }
             } else {
                 manualDeepFarSinceMs = UNSET_MS
                 manualDeepFarReadings = 0
@@ -393,9 +427,9 @@ internal class ProximityDecisionPolicy {
             manualDeepReturnReadings = 0
             return false
         }
-        if (manualDeepReturnSinceMs == UNSET_MS) manualDeepReturnSinceMs = nowMs
+        if (manualDeepReturnSinceMs == UNSET_MS || gap) { manualDeepReturnSinceMs = nowMs; manualDeepReturnReadings = 0 }
         manualDeepReturnReadings++
-        return manualDeepReturnReadings >= MANUAL_DEEP_FAR_MIN_READINGS &&
+        return manualDeepReturnReadings >= MANUAL_DEEP_RETURN_MIN_READINGS &&
             nowMs - manualDeepReturnSinceMs >= MANUAL_DEEP_RETURN_CONFIRM_MS
     }
 
@@ -471,6 +505,8 @@ internal class ProximityDecisionPolicy {
         manualDeepFarSeen = false
         manualDeepReturnSinceMs = UNSET_MS
         manualDeepReturnReadings = 0
+        manualDeepLastReadingAtMs = UNSET_MS
+        manualDeepFarLastAtMs = UNSET_MS
     }
 
     /** Reads and clears [deepFarReturnRearmed]. */
@@ -679,6 +715,11 @@ internal class ProximityDecisionPolicy {
         const val MANUAL_DEEP_FAR_CONFIRM_MS = 4_000L
         const val MANUAL_DEEP_RETURN_MARGIN_DB = 4
         const val MANUAL_DEEP_RETURN_CONFIRM_MS = 1_000L
+        const val MANUAL_DEEP_RETURN_MIN_READINGS = 2
+        /** Linked-watch samples every 1 s; a longer silence is a far-sleep gap. */
+        const val MANUAL_DEEP_MAX_GAP_MS = 2_500L
+        const val MANUAL_DEEP_PROOF_TTL_MS = 60_000L
+        const val DEEP_RETURN_UNLOCK_WINDOW_MS = 30_000L
         const val MANUAL_WEAK_RETURN_RISE_DB = 8
         const val MANUAL_WEAK_RETURN_CONFIRM_MS = 400L
     }
