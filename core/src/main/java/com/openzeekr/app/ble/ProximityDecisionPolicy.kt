@@ -70,6 +70,8 @@ internal class ProximityDecisionPolicy {
     private var deepReturnNeedsRecession = false
     /** After a signal-recognised return the unlock may be re-qualified until this time (no motion needed). */
     private var deepReturnUnlockUntilMs = UNSET_MS
+    /** The current arrival epoch replaced a Lock's departure latch (see [onPresenceMatch]). */
+    private var arrivalEpochAfterLock = false
 
     /** Set once when a return after a Lock was recognised from the signal alone (for the log). */
     var deepFarReturnRearmed = false
@@ -96,6 +98,7 @@ internal class ProximityDecisionPolicy {
         departureLinkEnded = false
         manualDeparture = false
         resetSameLinkReturn()
+        arrivalEpochAfterLock = false
         pendingUnlockFarSinceMs = UNSET_MS
         deepReturnUnlockUntilMs = UNSET_MS
     }
@@ -112,6 +115,7 @@ internal class ProximityDecisionPolicy {
             departureLatched = false
             departureLinkEnded = false
             manualDeparture = false
+            arrivalEpochAfterLock = true
         }
         if (presenceApproachAtMs != UNSET_MS) {
             presencePeakRssi = maxOf(presencePeakRssi, rssi)
@@ -134,6 +138,17 @@ internal class ProximityDecisionPolicy {
     fun shouldUnlock(nowMs: Long, rssi: Int, moving: Boolean, unlockThreshold: Int): Boolean {
         if (departureLatched && !tryRearmSameLinkReturn(nowMs, rssi, moving, unlockThreshold)) {
             return false
+        }
+        // The key can wake while the user walks AWAY (security sleep at the car, car self-locked):
+        // that presence hit opens an arrival epoch that lapses after [PRESENCE_TTL_MS], and the walk
+        // back on the same link then had no route at all (simulator 03/10, 0.1.64: the car stayed
+        // locked at the door). Keep the signal-only return after a Lock alive for this epoch.
+        if (!departureLatched && arrivalEpochAfterLock && tryRearmManualDeepFarReturn(nowMs, rssi, unlockThreshold)) {
+            finishSameLinkReturn()
+            arrivalEpochAfterLock = false
+            unlockQualifiedAtMs = nowMs
+            deepReturnUnlockUntilMs = nowMs + DEEP_RETURN_UNLOCK_WINDOW_MS
+            deepFarReturnRearmed = true
         }
         expirePresenceApproach(nowMs)
         if (presenceApproachAtMs != UNSET_MS) {
@@ -210,6 +225,7 @@ internal class ProximityDecisionPolicy {
 
     fun onUnlockConfirmed(nowMs: Long) {
         lastUnlockedSampleAtMs = UNSET_MS
+        arrivalEpochAfterLock = false
         deepReturnUnlockUntilMs = UNSET_MS
         pendingUnlockFarSinceMs = UNSET_MS
         clearPresenceApproach()
@@ -223,6 +239,7 @@ internal class ProximityDecisionPolicy {
     /** Suppress every unlock decision from the moment walk-away locking starts. */
     fun onDepartureLockStarted() {
         pendingUnlockFarSinceMs = UNSET_MS
+        arrivalEpochAfterLock = false
         departureLatched = true
         // An automatic lock never inherits the manual routes of an earlier manual Lock on the same
         // link (review 0.1.61); onManualLockConfirmed sets it again right after this.

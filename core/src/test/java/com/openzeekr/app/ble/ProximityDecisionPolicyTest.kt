@@ -658,6 +658,31 @@ class ManualLockDeepFarReturnTest {
         assertFalse(p.shouldUnlock(t, -84, false, -86))
     }
 
+    @Test fun keyWakingWhileWalkingAwayStillAllowsTheReturn() {
+        // Simulator 03/10 (0.1.64): car self-locked, phone asleep at the car; the key wakes on the
+        // walk away (presence -94, moving), the arrival epoch lapses, the user comes back later.
+        val p = locked()
+        p.onLinkEnded()
+        var t = 100_000L
+        p.onPresenceMatch(t, -94, true, -86); t += 1_000L
+        repeat(60) { assertFalse(p.shouldUnlock(t, -96 - it % 4, true, -86)); t += 200L }   // away to 25 m
+        repeat(25) { assertFalse(p.shouldUnlock(t, -95, false, -86)); t += 1_000L }         // waiting, epoch lapses
+        listOf(-93, -91, -89, -88, -86, -85).forEach { assertFalse(p.shouldUnlock(t, it, true, -86)); t += 500L }
+        var opened = false
+        listOf(-82, -81, -80, -79, -77).forEach { if (p.shouldUnlock(t, it, true, -86)) opened = true; t += 300L }
+        assertTrue(opened)
+    }
+
+    @Test fun keyWakingWhileWalkingAwayDoesNotOpenAtTenMetres() {
+        val p = locked()
+        p.onLinkEnded()
+        var t = 100_000L
+        p.onPresenceMatch(t, -90, true, -86); t += 1_000L
+        repeat(40) { assertFalse(p.shouldUnlock(t, -88, false, -86)); t += 1_000L }   // epoch lapses at ~10 m
+        // No clear departure (>= 4 s at <= -92) was ever seen: 10 m noise must not open the car.
+        repeat(60) { assertFalse(p.shouldUnlock(t, listOf(-86, -88, -84, -89, -87, -85)[it % 6], it % 2 == 0, -86)); t += 1_000L }
+    }
+
     @Test fun standingAtTenMetresWithShortDeepDipsStaysLocked() {
         val p = locked()
         var t = 0L

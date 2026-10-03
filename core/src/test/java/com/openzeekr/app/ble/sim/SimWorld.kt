@@ -472,10 +472,13 @@ internal class SimWorld(
             updateRadio()
             car.tick(); link.tick(); motion.tick(dt, cpuAwake()); service.tick()
             scheduler.advanceTimeBy(dt); scheduler.runCurrent()
+            onTick?.invoke(now())
             if (now() % 1_000L < dt) samples += Sample(now(), distanceM, car.locked, walking)
             left -= dt
         }
     }
+    /** Test hook: called after every tick (diagnostics). */
+    var onTick: ((Long) -> Unit)? = null
     private var walkTarget = 0.0
 
     fun play(legs: List<Leg>) {
