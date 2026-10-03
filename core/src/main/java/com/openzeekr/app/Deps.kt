@@ -64,6 +64,11 @@ class Deps(context: Context) {
     val apiClient: ApiClient = ApiClient.get(config)
 
     val auth = AuthRepository(config, apiClient)
+    /** Renews the cloud sign-in on 079012, ahead of expiry, or on request; never touches the key. */
+    val session = com.openzeekr.app.net.SessionRenewer(config, appScope).also { renewer ->
+        com.openzeekr.app.net.TokenExpirySignal.listener = { renewer.onTokenExpired() }
+        renewer.maybeRenewAhead()
+    }
     val control = RemoteControlRepository(config, apiClient)
     val sentry = SentryRepository(config, apiClient)
     /** Journey log: trip history (distance / energy / duration) with CSV export. */

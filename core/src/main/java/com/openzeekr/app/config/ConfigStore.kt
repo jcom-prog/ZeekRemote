@@ -82,6 +82,7 @@ class ConfigStore private constructor(private val prefs: SharedPreferences) {
     fun signOut() = update {
         it.copy(
             email = "", password = "", accessToken = "", userId = "", accountUuid = "",
+            accessTokenExpiresAtMs = 0L, reloginFailures = 0, reloginLastAttemptAtMs = 0L,
             vin = "", carNickname = "",
             deviceIdentifier = "", appInstanceId = "",
         )

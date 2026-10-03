@@ -37,6 +37,8 @@ class ApiClient private constructor(private val store: ConfigStore) {
             .readTimeout(30, TimeUnit.SECONDS)
             // Watches every response for the 079021 "logged in elsewhere" kick-out.
             .addInterceptor(KickoutInterceptor(store))
+            // Watches for 079012 "Token expired" -> silent re-login (SessionRenewer).
+            .addInterceptor(TokenExpiryInterceptor())
             .addInterceptor(HeaderInterceptor(store))
             .addInterceptor(SignInterceptor(store))
             // Signs the overseas-app inbox host with its own HMAC AK/SK (the two above

@@ -36,6 +36,7 @@ class App : Application(), DepsHolder {
         heartbeatJob = deps.appScope.launch {
             while (isActive) {
                 if (deps.config.current().accessToken.isNotBlank()) {
+                    deps.session.maybeRenewAhead()
                     runCatching { AccountLogin(deps.config).heartbeat() }
                         .onFailure { Logx.w("app", "app/hb failed: ${it.message}") }
                 }

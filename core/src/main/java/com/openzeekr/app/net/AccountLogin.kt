@@ -65,6 +65,7 @@ class AccountLogin(private val store: ConfigStore) {
         .build()
     // TSP client: LOGGED_IN_HEADERS + X-SIGNATURE (key = prod_secret) — reuses the app transport
     private val tspClient = OkHttpClient.Builder()
+        .addInterceptor(TokenExpiryInterceptor())
         .addInterceptor(HeaderInterceptor(store))
         .addInterceptor(SignInterceptor(store))
         .addInterceptor(httpLogGate)
@@ -302,7 +303,11 @@ class AccountLogin(private val store: ConfigStore) {
 
             // persist token+userId (+ account openId for the inbox HS256 token, see
             // InboxAuthToken) BEFORE the vehicle-list call (it needs auth)
+            // Only the expiry DATE of the bearer is kept (for renewal ahead of time), never logged as token.
+            val bearerExpiresAtMs = ReloginPolicy.expiryMs(jwtClaim(bearer, "exp")) ?: 0L
+            Logx.d("login", "bearer expiry ${if (bearerExpiresAtMs > 0L) java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.ROOT).format(java.util.Date(bearerExpiresAtMs)) else "unknown"}")
             store.update { it.copy(
+                accessTokenExpiresAtMs = bearerExpiresAtMs,
                 accessToken = bearer,
                 userId = jwtUserId ?: userId ?: it.userId,
                 accountUuid = accountUuid ?: it.accountUuid,

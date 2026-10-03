@@ -141,10 +141,20 @@ fun SettingsScreen(deps: Deps, modifier: Modifier = Modifier) {
                     }
                 }
             } else {
+                // Renews only the cloud sign-in with the stored credentials; the digital key stays.
+                val renewal by deps.session.state.collectAsState()
+                PrimaryButton(if (renewal.inFlight) "Refreshing…" else "Refresh sign-in", Modifier.fillMaxWidth(),
+                    enabled = !renewal.inFlight) {
+                    scope.launch {
+                        status = if (deps.session.refreshNow()) "Signed in again ✓ (digital key unchanged)"
+                            else deps.session.state.value.message ?: "Sign-in refresh failed"
+                    }
+                }
+                renewal.message?.let { if (it != status) Text(it, color = if (renewal.autoStopped) Brand.crit else Brand.muted, fontSize = 12.5.sp) }
                 OutlinedButton(
                     onClick = { confirmSignOut = true },
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text("Sign out") }
+                ) { Text("Sign out (also removes the digital key)") }
             }
             // Keep account feedback beside the action that produced it. Previously login errors
             // appeared below Import / Export, several screens away from the Sign in button.

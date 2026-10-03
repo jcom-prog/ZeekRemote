@@ -65,6 +65,11 @@ data class SecretsConfig(
     val accountUuid: String = "",
     /** A pre-captured bearer/access token, if you already have one (skips login). */
     val accessToken: String = "",
+    /** Expiry of [accessToken] (epoch ms, from its JWT `exp`); 0 = unknown. Never the token itself. */
+    val accessTokenExpiresAtMs: Long = 0L,
+    /** Automatic sign-in renewal bookkeeping (see net/SessionRenewal.kt). */
+    val reloginFailures: Int = 0,
+    val reloginLastAttemptAtMs: Long = 0L,
     /** Azure/overseas `Authorization` token — the `tokenValue` RETURNED by the user-center
      *  loginByEmailEncrypt (server-issued HS256, NOT client-minted; captured 2026-09-16). This is
      *  what every gateway-pub-azure.zeekr.eu call (inbox/notifications) authenticates with — the TSP

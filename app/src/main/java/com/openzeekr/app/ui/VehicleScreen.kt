@@ -37,7 +37,6 @@ import androidx.compose.material.icons.filled.AcUnit
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.FlashOn
-import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Luggage
@@ -267,13 +266,9 @@ fun VehicleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = M
                 Ctl(Icons.Filled.Campaign, "Flash+Honk", modifier = Modifier.weight(1f)) { fire("Locate") { deps.vehicleControl.send(Command.FLASH_HORN) } }
                 Ctl(Icons.Filled.FlashOn, "Flash", modifier = Modifier.weight(1f)) { fire("Flash") { deps.vehicleControl.send(Command.FLASH) } }
                 Ctl(Icons.Filled.Luggage, if (trunkOpen) "Open" else "Trunk", tint = Brand.energy, active = trunkOpen, modifier = Modifier.weight(1f)) { showTrunk = true }
-                if (caps.frunk) {
-                    Ctl(Icons.Filled.Inventory2, "Frunk", modifier = Modifier.weight(1f)) {
-                        fire("Frunk") { deps.vehicleControl.send(Command.FRONT_TRUNK) }
-                    }
-                } else {
-                    Spacer(Modifier.weight(1f))
-                }
+                // Frunk tile removed on user request (03/10): on this 7GT the frunk is opened by hand
+                // from the car. The 0x04 key command stays in the protocol layer.
+                Spacer(Modifier.weight(1f))
             }
         }
 

@@ -62,7 +62,6 @@ import android.content.Intent
 import android.net.Uri
 import com.openzeekr.app.Deps
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.material.icons.filled.SystemUpdate
 import com.openzeekr.app.ble.DkBleManager
 import com.openzeekr.app.ble.DkProvisioning
 import com.openzeekr.app.ui.theme.Brand
@@ -74,7 +73,8 @@ private enum class Tab(val label: String, val icon: ImageVector) {
     SECURITY("Security", Icons.Filled.Shield),
     SCHEDULE("Schedule", Icons.Filled.CalendarMonth),
     KEY("Key", Icons.Filled.VpnKey),
-    UPDATES("Updates", Icons.Filled.SystemUpdate),
+    // Software-status tab removed on user request (03/10): it needs overseas-app keys the user
+    // does not have. OtaScreen/OtaRepository are kept for a possible return.
     SETTINGS("Settings", Icons.Filled.Settings),
     // Sentry footage/live-view stays hidden (sentinel-monitoring-service is CN-only /
     // unrouted on EU). SentryScreen is kept in the tree for when a workaround is found.
@@ -280,7 +280,6 @@ fun AppRoot(deps: Deps) {
                     snackbar = snackbar,
                 )
             }
-            Tab.UPDATES -> OtaScreen(deps, m)
             Tab.SETTINGS -> SettingsScreen(deps, m)
         }
     }
