@@ -14,7 +14,7 @@ class WholeAppSimulationTest {
         val outDir = File(System.getenv("SIM_OUT") ?: "build/sim-report").apply { mkdirs() }
         val seeds = (System.getenv("SIM_SEEDS") ?: "3").toInt()
         val only = System.getenv("SIM_ONLY")
-        val runs = SimScenarios.matrix(seeds).filter { only == null || it.first.family.startsWith(only) }
+        val runs = SimScenarios.matrix(seeds).filter { r -> only == null || only.split(",").any { r.first.family.startsWith(it) } }
         data class Result(val scenario: Scenario, val carry: Carry, val profile: MotionProfile, val seed: Long,
                           val findings: List<SimOracle.Finding>, val world: SimWorld)
         val results = runs.map { (sc, carry, mp) ->
