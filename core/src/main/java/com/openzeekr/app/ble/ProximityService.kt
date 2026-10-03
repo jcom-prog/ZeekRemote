@@ -513,7 +513,12 @@ class ProximityService : Service() {
                         Logx.d("svc", "confirmed motion: engaging saved early presence (rssi=${prepared.rssi})")
                         if (!deps.ble.connectFromPresence(prepared)) recoveryProbe(deps, reason, confirmedMotionWake = true)
                     } else recoveryProbe(deps, reason, confirmedMotionWake = !driveOverride)
-                } else {
+                } else if (!EarlyPresencePolicy.mayRetain(keySleeping,
+                        deps.motion.state.value == MotionMonitor.Motion.MOVING,
+                        earlyPresenceUntilMs, System.currentTimeMillis())) {
+                    // Keep the motion-edge scan alive through the debounce (it never connects on its
+                    // own): field 03/10 19:55 (0.1.63) this poll disarmed it 0.2 s after arming, the
+                    // advert was only heard after the wake and the car opened at the door.
                     deps.ble.disarmPresenceScan()
                 }
             }
