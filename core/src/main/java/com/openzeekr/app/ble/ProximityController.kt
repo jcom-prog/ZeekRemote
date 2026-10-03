@@ -138,6 +138,10 @@ class ProximityController(
     private var departureAlarmJob: Job? = null
     private val carSelfLock = CarSelfLockDetector()
     private val stationaryFar = StationaryFarWatch()
+    private var idleFarStreak = 0
+    /** Consistent clear separation measured right before the link dropped (frozen, not running on). */
+    private var deepFarAtLinkLossMs = 0L
+    private var idleFastWindows = 0
     private var vehicleStatusJob: Job? = null
     @Volatile private var measureUntilElapsedMs = 0L
     private val _measuring = kotlinx.coroutines.flow.MutableStateFlow(false)
@@ -250,6 +254,7 @@ class ProximityController(
                                 _state.value = _state.value.copy(lastAction =
                                     "BLE restored · vehicle lock still unverified")
                             }
+                            deepFarAtLinkLossMs = 0L
                             Logx.d("prox", "link restored; proximity monitoring resumed")
                         }
                         // Unlocked at the car (NEAR): don't burn battery polling — idle until the car
@@ -304,6 +309,7 @@ class ProximityController(
     fun stop() {
         monitorJob?.cancel(); monitorJob = null
         vehicleStatusJob?.cancel(); vehicleStatusJob = null
+        measureUntilElapsedMs = 0L; _measuring.value = false
         departureAnchorJob?.cancel(); departureAnchorJob = null; departureAnchor = null
         linkDepartureJob?.cancel(); linkDepartureJob = null
         departureProofAtMs = 0L
@@ -425,6 +431,7 @@ class ProximityController(
         ble.noteUnlockConfirmed()
         carSelfLock.onUnlockConfirmed(unlockElapsed)
         stationaryFar.reset()
+        idleFarStreak = 0; idleFastWindows = 0; deepFarAtLinkLossMs = 0L
         armedUnlocked = true
         postUnlockFastUntilElapsedMs = android.os.SystemClock.elapsedRealtime() + POST_UNLOCK_FAST_MONITOR_MS
         decisionPolicy.onUnlockConfirmed(now)
@@ -482,6 +489,8 @@ class ProximityController(
         if (linkLostAtMs == 0L) {
             decisionPolicy.onLinkEnded()
             linkLostAtMs = System.currentTimeMillis()
+            deepFarAtLinkLossMs = stationaryFar.deepFarForMs(linkLostAtMs)
+            stationaryFar.onReadingsStopped()
             // RSSI/body shielding and a real departure can both tear down the link. Neither a timer
             // nor the last (possibly stale) RSSI can tell them apart; position must corroborate.
             val observedStepsSinceUnlock = stepsAtUnlock?.let { baseline ->
@@ -592,7 +601,8 @@ class ProximityController(
 
     private fun departureSuspected(): Boolean =
         LockAlertPolicy.departureSuspected(lastWalkAwayCandidateAtMs, lastStrongNearAtMs) ||
-            stationaryFar.deepFarForMs(System.currentTimeMillis()) >= StationaryFarWatch.LINK_LOSS_FAR_MS
+            maxOf(deepFarAtLinkLossMs, stationaryFar.deepFarForMs(System.currentTimeMillis())) >=
+            StationaryFarWatch.LINK_LOSS_FAR_MS
 
     /** Unlocked and clearly far for a minute without any motion signal: alarm, never a Lock. */
     private fun observeStationaryFar(rssi: Int, lockThresh: Int) {
@@ -607,17 +617,28 @@ class ProximityController(
 
     /** The car's own status push: a fresh unlocked -> locked transition means the car locked itself. */
     private fun onVehicleStatus(status: ObservedVehicleStatus) {
-        if (!carSelfLock.observe(status, android.os.SystemClock.elapsedRealtime())) return
-        scope.launch {
-            // A manual Lock's own "3" precedes its receipt by ~20 ms: let that receipt win first.
-            delay(SELF_LOCK_SETTLE_MS)
-            if (!armedUnlocked || lockJob?.isActive == true || !_state.value.running) return@launch
-            handleCarSelfLock(status)
+        when (carSelfLock.observe(status, android.os.SystemClock.elapsedRealtime())) {
+            CarSelfLockDetector.Event.NONE -> Unit
+            CarSelfLockDetector.Event.SELF_LOCK -> scope.launch {
+                // A manual Lock's own "3" precedes its receipt by ~20 ms: let that receipt win first.
+                delay(SELF_LOCK_SETTLE_MS)
+                if (!armedUnlocked || lockJob?.isActive == true || !_state.value.running) return@launch
+                handleCarSelfLock(status)
+            }
+            CarSelfLockDetector.Event.REOPENED -> scope.launch {
+                // Our own Unlock's "1" also precedes its receipt: only an Unlock we did not send counts.
+                delay(SELF_LOCK_SETTLE_MS)
+                if (armedUnlocked || !_state.value.running) return@launch
+                Logx.w("prox", "car reopened after its self-lock (key status central=${status.centralLockCode}) " +
+                    "-> departure watch re-armed")
+                onExternalUnlockConfirmed("car reopened")
+            }
         }
     }
 
     private fun handleCarSelfLock(status: ObservedVehicleStatus) {
         departureAlarmJob?.cancel(); departureAlarmJob = null
+        lockConfirmationJob?.cancel(); lockConfirmationJob = null
         UnverifiedLockNotifier.silenceAlarm(appContext)
         com.openzeekr.app.remote.LocalLockEvidence.onKeyConfirmed(locked = true)
         Logx.w("prox", "car locked itself (key status central=${status.centralLockCode}) -> treated as Lock")
@@ -724,10 +745,14 @@ class ProximityController(
                 observeStationaryFar(rssi, lockThresh)
                 // Beyond the lock threshold while the motion signal says STILL: look closer. A slow
                 // walk-away with stops kept Activity Recognition at STILL for 1.5 min (03/10).
-                if (rssi <= lockThresh) {
+                idleFarStreak = if (rssi <= lockThresh) idleFarStreak + 1 else 0
+                if (idleFarStreak >= 2 && idleFastWindows < StationaryFarWatch.MAX_IDLE_FAST_WINDOWS) {
+                    idleFarStreak = 0
+                    idleFastWindows++
                     postUnlockFastUntilElapsedMs =
                         android.os.SystemClock.elapsedRealtime() + StationaryFarWatch.IDLE_FAR_FAST_MS
-                    Logx.d("prox", "armed idle far read -> fast sampling ${StationaryFarWatch.IDLE_FAR_FAST_MS / 1000}s")
+                    Logx.d("prox", "armed idle far read -> fast sampling ${StationaryFarWatch.IDLE_FAR_FAST_MS / 1000}s " +
+                        "($idleFastWindows/${StationaryFarWatch.MAX_IDLE_FAST_WINDOWS})")
                 }
             }
             val idleDecision = if (rssi == null) ProximityDecisionPolicy.ArmedDecision.NONE else
