@@ -28,12 +28,12 @@ internal object DepartureSafetyEvidence {
     /** Categorical reasons only; never include a phone or vehicle position in logs. */
     fun diagnostic(
         anchor: DepartureFix?, first: DepartureFix?, second: DepartureFix?,
-        stepsSinceUnlock: Long?, nowElapsedMs: Long,
+        stepsSinceUnlock: Long?, nowElapsedMs: Long, bleCorroborated: Boolean = false,
     ): String = when {
         anchor == null -> "location anchor unavailable"
         first == null || second == null -> "fresh location unavailable"
         !valid(anchor) || !valid(first) || !valid(second) -> "location accuracy invalid or insufficient"
-        stepsSinceUnlock == null || stepsSinceUnlock < MIN_STEPS -> "too few observed steps"
+        !bleCorroborated && (stepsSinceUnlock == null || stepsSinceUnlock < MIN_STEPS) -> "too few observed steps"
         first.elapsedAtMs <= anchor.elapsedAtMs ||
             second.elapsedAtMs - first.elapsedAtMs < MIN_FIX_SEPARATION_MS ||
             second.elapsedAtMs > nowElapsedMs ||
@@ -43,12 +43,19 @@ internal object DepartureSafetyEvidence {
         else -> "distance lower bound insufficient"
     }
 
+    /**
+     * @param bleCorroborated the key link itself shows a sustained clear separation (see
+     *  ProximityController.departureBleCorroborated). It replaces the step count, which the S24+
+     *  does not deliver with the screen off (field 03/10, simulator): the GNSS pair must still be
+     *  clear of the car by twice the reported accuracy, so a stationary GNSS drift alone, or BLE
+     *  body shadow alone, never confirms.
+     */
     fun confirmsDeparture(
         anchor: DepartureFix?, first: DepartureFix?, second: DepartureFix?,
-        stepsSinceUnlock: Long?, nowElapsedMs: Long,
+        stepsSinceUnlock: Long?, nowElapsedMs: Long, bleCorroborated: Boolean = false,
     ): Boolean {
-        if (anchor == null || first == null || second == null ||
-            stepsSinceUnlock == null || stepsSinceUnlock < MIN_STEPS) return false
+        if (anchor == null || first == null || second == null) return false
+        if (!bleCorroborated && (stepsSinceUnlock == null || stepsSinceUnlock < MIN_STEPS)) return false
         if (listOf(anchor, first, second).any { !valid(it) }) return false
         if (first.elapsedAtMs <= anchor.elapsedAtMs ||
             second.elapsedAtMs - first.elapsedAtMs < MIN_FIX_SEPARATION_MS ||

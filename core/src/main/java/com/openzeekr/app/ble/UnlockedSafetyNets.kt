@@ -71,8 +71,9 @@ internal class StationaryFarWatch {
     private var farSinceMs: Long? = null
     private var deepReadings = 0
     private var raised = false
+    private var shallowRun = 0
 
-    fun reset() { farSinceMs = null; deepReadings = 0; raised = false }
+    fun reset() { farSinceMs = null; deepReadings = 0; raised = false; shallowRun = 0 }
 
     /** Feeds one fresh reading; true once when the alarm is due. */
     fun observe(nowMs: Long, rssi: Int, lockThreshold: Int): Boolean {
@@ -81,9 +82,15 @@ internal class StationaryFarWatch {
         if (rssi <= lockThreshold - DEEP_MARGIN_DB) {
             if (farSinceMs == null) farSinceMs = nowMs
             deepReadings++
+            shallowRun = 0
+        } else if (farSinceMs != null && rssi <= lockThreshold - NEUTRAL_MARGIN_DB && ++shallowRun < MAX_SHALLOW_RUN) {
+            // One slightly stronger reading 20-30 m away (fading) neither counts nor restarts the
+            // clock (simulator 03/10: a +3 dB reading every minute kept the alarm from ever
+            // sounding while the open car was 30 m away). It never starts a clock either.
         } else {
             farSinceMs = null
             deepReadings = 0
+            shallowRun = 0
         }
         val since = farSinceMs ?: return false
         if (raised || deepReadings < MIN_DEEP_READINGS || nowMs - since < ALARM_AFTER_MS) return false
@@ -92,7 +99,7 @@ internal class StationaryFarWatch {
     }
 
     /** No fresh readings any more (link lost): the clock stops, it does not keep running. */
-    fun onReadingsStopped() { farSinceMs = null; deepReadings = 0 }
+    fun onReadingsStopped() { farSinceMs = null; deepReadings = 0; shallowRun = 0 }
 
     /** How long the phone has been consistently clearly far (0 when not, or too few readings). */
     fun deepFarForMs(nowMs: Long): Long =
@@ -100,10 +107,16 @@ internal class StationaryFarWatch {
 
     companion object {
         const val DEEP_MARGIN_DB = 6
+        /** Readings between lock-6 and lock-2 dB are neutral once a clock runs, ... */
+        const val NEUTRAL_MARGIN_DB = 2
+        /** ... but not two in a row. */
+        const val MAX_SHALLOW_RUN = 2
         const val MIN_DEEP_READINGS = 5
         const val ALARM_AFTER_MS = 60_000L
         /** A link loss after this much clear separation counts as a suspected departure (audible). */
         const val LINK_LOSS_FAR_MS = 20_000L
+        /** Consistent clear separation that may stand in for the step count in the GNSS proof. */
+        const val CORROBORATION_MS = 20_000L
         /** Two consecutive idle safety reads beyond the lock threshold switch to fast sampling this long, */
         const val IDLE_FAR_FAST_MS = 30_000L
         /** ... at most this often per unlock (a shadowed phone at the car must not sample forever). */

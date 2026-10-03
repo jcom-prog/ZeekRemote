@@ -32,9 +32,9 @@ class ProximityDecisionPolicyTest {
             assertFalse(policy.shouldUnlock(time, -86, false, -86))
         }
         assertFalse(policy.shouldUnlock(7_200L, -86, true, -86))
+        // 0.1.63: the return must reach -82 (simulator: -85 noise at 10 m reopened the car).
         assertFalse(policy.shouldUnlock(7_400L, -83, true, -86))
-        assertFalse(policy.shouldUnlock(7_600L, -83, true, -86))
-        assertTrue(policy.shouldUnlock(7_800L, -83, true, -86))
+        assertTrue(policy.shouldUnlock(7_600L, -81, true, -86))
     }
 
     @Test
@@ -47,8 +47,7 @@ class ProximityDecisionPolicyTest {
         assertFalse(policy.shouldUnlock(2_800L, -89, false, -86))
         assertFalse(policy.shouldUnlock(23_500L, -89, true, -86))
         assertFalse(policy.shouldUnlock(23_700L, -83, true, -86))
-        assertFalse(policy.shouldUnlock(23_900L, -83, true, -86))
-        assertTrue(policy.shouldUnlock(24_100L, -83, true, -86))
+        assertTrue(policy.shouldUnlock(23_900L, -81, true, -86))
     }
 
     @Test
@@ -68,9 +67,7 @@ class ProximityDecisionPolicyTest {
         assertFalse(policy.shouldUnlock(35_600L, -88, true, -86))
         assertFalse(policy.shouldUnlock(35_800L, -89, true, -86))
         assertFalse(policy.shouldUnlock(37_200L, -86, true, -86))
-        assertFalse(policy.shouldUnlock(37_400L, -80, true, -86))
-        assertFalse(policy.shouldUnlock(37_600L, -76, true, -86))
-        assertTrue(policy.shouldUnlock(37_800L, -75, true, -86))
+        assertTrue(policy.shouldUnlock(37_400L, -80, true, -86))
     }
 
     @Test
@@ -120,8 +117,7 @@ class ProximityDecisionPolicyTest {
         assertFalse(policy.shouldUnlock(8_000L, -87, false, -86))
         assertFalse(policy.shouldUnlock(8_200L, -87, true, -86))
         assertFalse(policy.shouldUnlock(8_400L, -84, true, -86))
-        assertFalse(policy.shouldUnlock(8_600L, -78, true, -86))
-        assertTrue(policy.shouldUnlock(8_800L, -74, true, -86))
+        assertTrue(policy.shouldUnlock(8_600L, -78, true, -86))
     }
 
     @Test
@@ -684,12 +680,36 @@ class ManualLockDeepFarReturnTest {
         repeat(6) { assertFalse(p.shouldUnlock(t, -78, false, -86)); t += 500L }
     }
 
-    @Test fun anAutomaticLockAfterAnEarlierManualLockDoesNotUseTheManualRoutes() {
+    @Test fun anAutomaticLockAfterAnEarlierManualLockDoesNotUseTheMotionGatedManualRoutes() {
         val p = locked()
         p.onUnlockConfirmed(0L)          // e.g. "car reopened" on the same link
         p.onDepartureLockStarted()       // then a walk-away auto-lock
         var t = 1_000L
-        repeat(8) { assertFalse(p.shouldUnlock(t, -96, false, -86)); t += 1_000L }
+        // Not clearly far (the deep-far return needs <= -92): the manual still/motion routes must not apply.
+        repeat(8) { assertFalse(p.shouldUnlock(t, -89, it % 2 == 0, -86)); t += 1_000L }
+        repeat(6) { assertFalse(p.shouldUnlock(t, -83, true, -86)); t += 500L }
+    }
+
+    @Test fun afterAProvenAutomaticLockTheWalkBackReopens() {
+        // Simulator 03/10 "turn back at 9 m": the Lock fires as the user turns around.
+        val p = ProximityDecisionPolicy()
+        p.onUnlockConfirmed(0L)
+        p.onDepartureLockStarted(); p.onAutomaticLockProvenDeparture(10_000L)
+        var t = 10_200L
+        // A post-lock rebound inside the guard never reopens (0.1.29 shape).
+        listOf(-90, -86, -84, -80, -80, -84).forEach { assertFalse(p.shouldUnlock(t, it, true, -86)); t += 200L }
+        t = 14_000L
+        listOf(-88, -87, -86, -84).forEach { assertFalse(p.shouldUnlock(t, it, true, -86)); t += 500L }
+        assertFalse(p.shouldUnlock(t, -81, true, -86)); t += 1_000L
+        assertTrue(p.shouldUnlock(t, -80, true, -86))
+    }
+
+    @Test fun aProvenAutomaticLockDoesNotReopenAMinuteLaterAtTheCar() {
+        val p = ProximityDecisionPolicy()
+        p.onUnlockConfirmed(0L)
+        p.onDepartureLockStarted(); p.onAutomaticLockProvenDeparture(10_000L)
+        var t = 11_000L
+        repeat(70) { assertFalse(p.shouldUnlock(t, -87, false, -86)); t += 1_000L }
         repeat(6) { assertFalse(p.shouldUnlock(t, -78, false, -86)); t += 500L }
     }
 

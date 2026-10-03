@@ -180,7 +180,7 @@ internal class SimWorld(
         override val hasSource = true
         override val hasStepAssist = motionProfile.hasStepDetector
         private var steps = 0L
-        override val observedSteps: Long? get() = if (motionProfile.stepAssistWhileAwake) steps else null
+        override val observedSteps: Long? get() = if (motionProfile.hasStepDetector) steps else null
         override var onMovingEdge: (() -> Unit)? = null
         private var running = false
         override fun start() { running = true; if (_state.value == MotionMonitor.Motion.UNKNOWN) setStill() }
@@ -418,14 +418,15 @@ internal class SimWorld(
             }
             return null
         }
-        override suspend fun confirmsDeparture(anchor: DepartureFix, steps: () -> Long?, enabled: () -> Boolean): Boolean {
+        override suspend fun confirmsDeparture(anchor: DepartureFix, steps: () -> Long?, enabled: () -> Boolean,
+                                               bleCorroborated: () -> Boolean): Boolean {
             if (!enabled()) return false
             val window = DepartureObservationWindow(anchor, clock.elapsedMs())
             val until = now() + DepartureObservationWindow.WINDOW_MS
             while (now() < until) {
                 delay(1_000L)
                 if (!enabled()) return false
-                if (window.observe(fix(), steps(), clock.elapsedMs()) && enabled()) return true
+                if (window.observe(fix(), steps(), clock.elapsedMs(), bleCorroborated()) && enabled()) return true
             }
             return false
         }

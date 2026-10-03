@@ -56,6 +56,10 @@ internal object SimScenarios {
         Scenario("F12 manual lock, away+stop at 10 m, back", "manual Lock, walk 25 m, return with a 10 s stop at 10 m", 30.0,
             approachAndOpen() + listOf(ManualLock, Mark("-"), Walk(25.0), Stand(10_000), Mark("expect-unlock"), Walk(10.0),
                 Stand(10_000), Walk(1.0), Stand(10_000))),
+        Scenario("F13 waiting at 12 m", "car locked; the user waits 3 min at 12 m, turning around", 30.0,
+            listOf(Walk(12.0), Mark("expect-stay-locked"), Shuffle(180_000, -6.0), Stand(5_000, Facing.TOWARD))),
+        Scenario("F14 waiting at 8 m", "car locked; the user waits 2 min at 8 m facing the car, then leaves", 30.0,
+            listOf(Walk(8.0), Mark("-"), Stand(120_000, Facing.TOWARD), Walk(30.0), Stand(30_000))),
     )
 
     /** families x carry x motion profile x seeds. */
@@ -136,7 +140,7 @@ internal object SimOracle {
                 "expect-stay-unlocked" -> seg.firstOrNull { it.kind == "KEY_LOCK_CMD" }?.let {
                     out += f("UNWANTED_LOCK_NEAR", it, "Lock at %.1f m while staying near".format(it.distanceM)) }
                 "expect-stay-locked" -> seg.firstOrNull { it.kind == "KEY_UNLOCK_CMD" }?.let {
-                    out += f("UNWANTED_UNLOCK_AFTER_LOCK", it, "unlock at %.1f m after a Lock while near".format(it.distanceM)) }
+                    out += f("UNWANTED_UNLOCK", it, "unlock at %.1f m where the car should stay locked".format(it.distanceM)) }
                 "expect-unlocked-by-end" -> segSamples.lastOrNull()?.let { if (it.carLocked && everUnlockedBefore)
                     out += Finding("BACK_AT_CAR_BUT_LOCKED", it.atMs, it.distanceM, "user back at the car, car locked") }
                 "expect-locked-by-end" -> segSamples.lastOrNull()?.let { if (!it.carLocked)

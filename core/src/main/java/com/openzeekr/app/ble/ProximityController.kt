@@ -145,6 +145,9 @@ class ProximityController internal constructor(
     private var stepsAtUnlock: Long? = null
     private var strongestRssiSinceUnlock = Int.MIN_VALUE
     private var lastStrongNearAtMs = 0L
+        set(value) { field = value; stepsAtLastStrongNear = motion.observedSteps }
+    // Step count at the latest strong at-the-car reading (null without a step source).
+    private var stepsAtLastStrongNear: Long? = null
     private var lastShadowDepartureAtMs = 0L
     private var shadowDepartureWarned = false
     // Latest moving walk-away candidate in this unlock (wall clock); with no strong reading after
@@ -340,6 +343,7 @@ class ProximityController internal constructor(
         needToUnlock = false; unlockJob?.cancel(); unlockJob = null
         lockJob?.cancel(); lockJob = null
         lockConfirmationJob?.cancel(); lockConfirmationJob = null
+        farNoMotionCheck?.cancel(); farNoMotionCheck = null
         ble.onInboundActivity = null; activityWake?.complete(Unit); activityWake = null
         motion.onMovingEdge = null; motionWake?.complete(Unit); motionWake = null
         motion.stop()
@@ -400,6 +404,7 @@ class ProximityController internal constructor(
         scope.launch {
             departureAnchorJob?.cancel(); departureAnchorJob = null; departureAnchor = null
             linkDepartureJob?.cancel(); linkDepartureJob = null
+            farNoMotionCheck?.cancel(); farNoMotionCheck = null
             departureProofAtMs = 0L
             clearBleDeparture()
             stationaryFar.reset()
@@ -442,6 +447,7 @@ class ProximityController internal constructor(
         lockJob?.cancel(); lockJob = null
         departureAnchorJob?.cancel(); departureAnchor = null
         linkDepartureJob?.cancel(); linkDepartureJob = null
+        farNoMotionCheck?.cancel(); farNoMotionCheck = null; farNoMotionCheckAtMs = 0L
         departureProofAtMs = 0L
         bleRoute = BleDepartureRoute.forLockThreshold(config().sensitivityLockRssi)
         bleDepartureLoggedReason = ""
@@ -629,9 +635,43 @@ class ProximityController internal constructor(
             StationaryFarWatch.LINK_LOSS_FAR_MS
 
     /** Unlocked and clearly far for a minute without any motion signal: alarm, never a Lock. */
+    /**
+     * The key link shows a sustained, consistent clear separation (>= [StationaryFarWatch.CORROBORATION_MS]
+     * of consecutive readings beyond the lock threshold, possibly frozen at a link loss). Replaces
+     * the step count in the GNSS departure proof; never authorizes a Lock on its own.
+     */
+    private fun departureBleCorroborated(): Boolean =
+        maxOf(deepFarAtLinkLossMs, stationaryFar.deepFarForMs(clock.wallMs())) >= StationaryFarWatch.CORROBORATION_MS
+
+    private var farNoMotionCheck: Job? = null
+    private var farNoMotionCheckAtMs = 0L
+
+    /**
+     * Walked away without any motion or step signal (S24+ screen off): once the link shows a
+     * sustained clear separation, ask GNSS for the independent departure proof and lock on it.
+     */
+    private fun maybeStartFarNoMotionCheck() {
+        val now = clock.wallMs()
+        if (!armedUnlocked || departureAnchor == null || !departureBleCorroborated() ||
+            lockJob?.isActive == true || lockConfirmationJob?.isActive == true ||
+            linkDepartureJob?.isActive == true || farNoMotionCheck?.isActive == true ||
+            now - farNoMotionCheckAtMs < FAR_NO_MOTION_RETRY_MS) return
+        farNoMotionCheckAtMs = now
+        Logx.d("prox", "clear separation without a motion signal -> checking position for departure")
+        farNoMotionCheck = scope.launch {
+            if (confirmPhysicalDeparture() && armedUnlocked && _state.value.running && config().proximityEnabled &&
+                lockJob?.isActive != true && autoLockGate.onVerifiedDeparture() == AutomaticLockGate.Action.LOCK) {
+                Logx.d("prox", "departure corroborated by position and sustained separation; sending Lock")
+                startLockLoop("far-no-motion")
+            }
+        }
+    }
+
     private fun observeStationaryFar(rssi: Int, lockThresh: Int) {
         if (!armedUnlocked || lockJob?.isActive == true) return
-        if (!stationaryFar.observe(clock.wallMs(), rssi, lockThresh)) return
+        val due = stationaryFar.observe(clock.wallMs(), rssi, lockThresh)
+        maybeStartFarNoMotionCheck()
+        if (!due) return
         val posted = alerts.show(LockAlertPolicy.Event.DEPARTURE_UNVERIFIED)
         unverifiedLockAlertRaised = true
         _state.value = _state.value.copy(lastAction = "Far from the car · car not locked; Lock manually")
@@ -690,6 +730,17 @@ class ProximityController internal constructor(
             }
             if (!_state.value.running || !LockAlertPolicy.departureAlarmDue(departureSuspected(), armedUnlocked,
                     fresh, config().sensitivityLockRssi)) return@launch
+            // Moving around the car with the body between phone and car reads like a departure
+            // (simulator 03/10, loading the boot). Where steps are counted, a real departure has
+            // walked clearly further than that; hold the alarm and look again. The 60 s far watch
+            // and the link-loss alarm stay as the backstop.
+            val stepsSinceCar = stepsAtLastStrongNear?.let { base -> motion.observedSteps?.let { it - base } }
+            if (!LockAlertPolicy.departureWalkedFarEnough(stepsSinceCar, stepsSinceUnlock())) {
+                Logx.d("prox", "departure alarm held: only $stepsSinceCar steps since the car; re-checking")
+                departureAlarmJob = null
+                armDepartureAlarm()
+                return@launch
+            }
             val posted = alerts.show(LockAlertPolicy.Event.DEPARTURE_UNVERIFIED)
             unverifiedLockAlertRaised = true
             _state.value = _state.value.copy(lastAction = "Walked away · car not locked; Lock manually")
@@ -891,7 +942,7 @@ class ProximityController internal constructor(
             stepsAtUnlock?.let { baseline ->
                 motion.observedSteps?.let { (it - baseline).coerceAtLeast(0L) }
             }
-        }, enabled = ::sameSession) && sameSession()
+        }, enabled = ::sameSession, bleCorroborated = ::departureBleCorroborated) && sameSession()
         if (confirmed) departureProofAtMs = clock.wallMs()
         else Logx.d("prox", "independent departure unverified: bounded live location proof unavailable")
         return confirmed
@@ -1279,6 +1330,7 @@ class ProximityController internal constructor(
         // Terminal for this BLE session: a post-lock RSSI rebound must never emit CTRL_UNLOCK.
         // A genuine later arrival is rearmed only by link-down + a fresh hardware presence hit.
         decisionPolicy.onDepartureLockStarted()
+        decisionPolicy.onAutomaticLockProvenDeparture(clock.wallMs())
         lockJob = scope.launch {
             val lockStartedAtMs = clock.wallMs()
             lastTriggerMs = lockStartedAtMs   // start the action cooldown
@@ -1644,6 +1696,7 @@ class ProximityController internal constructor(
         // walk-away lock is worth more (per the user). Was 30s, which missed the connected window.
         private const val ARMED_IDLE_MAX_MS = 3_000L
         private const val SELF_LOCK_SETTLE_MS = 1_500L
+        private const val FAR_NO_MOTION_RETRY_MS = 30_000L
         private const val MAX_UNLOCK_ATTEMPTS = 5          // bound so a walked-away/absent car can't spin
         private const val UNLOCK_SESSION_WAIT_MS = 8_000L  // wait for SESSION_READY before an attempt
         private const val UNLOCK_ACK_TIMEOUT_MS = 1_500L   // wait for the car's 0x0111 receipt

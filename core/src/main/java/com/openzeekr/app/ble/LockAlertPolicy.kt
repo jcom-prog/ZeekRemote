@@ -78,6 +78,18 @@ internal object LockAlertPolicy {
 
     const val DEPARTURE_ALARM_DELAY_MS = 30_000L
 
+    /** Steps a real walk-away to beyond the lock range takes at least (~12 m); null = no step source. */
+    const val DEPARTURE_ALARM_MIN_STEPS = 16L
+
+    /**
+     * Holds the departure alarm only while the step counter demonstrably works in this unlock
+     * ([stepsSinceUnlock] > 0) and shows less than a real walk-away since the car. A detector that
+     * delivers nothing (S24+ screen off) never holds it.
+     */
+    fun departureWalkedFarEnough(stepsSinceCar: Long?, stepsSinceUnlock: Long? = stepsSinceCar): Boolean =
+        stepsSinceCar == null || stepsSinceUnlock == null || stepsSinceUnlock <= 0L ||
+            stepsSinceCar >= DEPARTURE_ALARM_MIN_STEPS
+
     /**
      * One alarm per episode: a second audible event while an alarm raised less than
      * [ALARM_EPISODE_MS] ago is still unresolved (no Lock, no return, no new unlock) only updates

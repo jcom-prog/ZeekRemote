@@ -61,7 +61,8 @@ internal class AndroidProximityAlerts(private val context: android.content.Conte
 /** GNSS departure evidence (implemented by [DepartureLocationSource]). */
 internal interface DepartureLocator {
     suspend fun nearAnchor(policy: NearDepartureAnchor, enabled: () -> Boolean): DepartureFix?
-    suspend fun confirmsDeparture(anchor: DepartureFix, steps: () -> Long?, enabled: () -> Boolean): Boolean
+    suspend fun confirmsDeparture(anchor: DepartureFix, steps: () -> Long?, enabled: () -> Boolean,
+                                  bleCorroborated: () -> Boolean = { false }): Boolean
 }
 
 /** Bounded partial wakelocks for safety checks. */

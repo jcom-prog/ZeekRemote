@@ -78,7 +78,7 @@ class UnlockedSafetyNetsTest {
         val w = StationaryFarWatch()
         val lock = -82
         for (t in 0L..30_000L step 3_000L) w.observe(t, -90, lock)
-        w.observe(33_000L, -85, lock)        // not clearly far: restart
+        w.observe(33_000L, -83, lock)        // not far at all (above lock-2): restart
         assertEquals(0L, w.deepFarForMs(33_000L))
         for (t in 36_000L..93_000L step 3_000L) assertFalse(w.observe(t, -90, lock))
         assertTrue(w.observe(96_000L, -90, lock))
@@ -103,5 +103,23 @@ class UnlockedSafetyNetsTest {
         assertTrue(MeasurementMode.active(10_000L, 9_999L))
         assertFalse(MeasurementMode.active(10_000L, 10_000L))
         assertEquals(300_000L, MeasurementMode.DURATION_MS)
+    }
+
+    @Test fun aSingleSlightlyStrongerReadingFarAwayDoesNotRestartTheClock() {
+        val w = StationaryFarWatch()
+        var t = 0L; var alarm = false
+        // 30 m away: -90..-94 with one -86 every 20 readings (lock -82: deep <= -88, neutral -87..-84).
+        repeat(400) { i -> alarm = alarm or w.observe(t, if (i % 20 == 19) -86 else -91, -82); t += 200L }
+        assertTrue(alarm)
+    }
+
+    @Test fun twoShallowReadingsInARowOrAStrongOneStillRestart() {
+        val w = StationaryFarWatch()
+        var t = 0L; var alarm = false
+        repeat(400) { i -> alarm = alarm or w.observe(t, if (i % 20 >= 18) -86 else -91, -82); t += 200L }
+        assertFalse(alarm)
+        val v = StationaryFarWatch(); t = 0L; alarm = false
+        repeat(400) { i -> alarm = alarm or v.observe(t, if (i % 20 == 19) -82 else -91, -82); t += 200L }
+        assertFalse(alarm)
     }
 }

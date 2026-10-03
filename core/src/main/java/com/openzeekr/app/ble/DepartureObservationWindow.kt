@@ -11,7 +11,7 @@ internal class DepartureObservationWindow(
     var outcome: String = "waiting_for_pair"
         private set
 
-    fun observe(fix: DepartureFix?, steps: Long?, nowMs: Long): Boolean {
+    fun observe(fix: DepartureFix?, steps: Long?, nowMs: Long, bleCorroborated: Boolean = false): Boolean {
         if (nowMs < startedAtMs || nowMs - startedAtMs >= WINDOW_MS) {
             outcome = "observation_expired"
             first = null
@@ -48,9 +48,9 @@ internal class DepartureObservationWindow(
             outcome = "waiting_for_pair"
             return false
         }
-        val confirmed = DepartureSafetyEvidence.confirmsDeparture(anchor, previous, current, steps, nowMs)
+        val confirmed = DepartureSafetyEvidence.confirmsDeparture(anchor, previous, current, steps, nowMs, bleCorroborated)
         outcome = if (confirmed) "departure_confirmed" else when (
-            DepartureSafetyEvidence.diagnostic(anchor, previous, current, steps, nowMs)
+            DepartureSafetyEvidence.diagnostic(anchor, previous, current, steps, nowMs, bleCorroborated)
         ) {
             "too few observed steps" -> "departure_steps_insufficient"
             "returning toward car" -> "departure_returning"

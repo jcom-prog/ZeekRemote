@@ -55,6 +55,9 @@ internal class ProximityDecisionPolicy {
     private var manualWeakReturnMoving = false
     private var manualWeakNearSinceMs = UNSET_MS
     private var pendingUnlockFarSinceMs = UNSET_MS
+    // Weakest reading of the current FAR baseline and the start of a motionless approach candidate.
+    private var farFloorRssi = 0
+    private var stillApproachSinceMs = UNSET_MS
     private var manualDeepFarSinceMs = UNSET_MS
     private var manualDeepFarReadings = 0
     private var manualDeepFarSeen = false
@@ -62,6 +65,7 @@ internal class ProximityDecisionPolicy {
     private var manualDeepReturnReadings = 0
     private var manualDeepLastReadingAtMs = UNSET_MS
     private var manualDeepFarLastAtMs = UNSET_MS
+    private var deepReturnNotBeforeMs = UNSET_MS
     /** After a signal-recognised return the unlock may be re-qualified until this time (no motion needed). */
     private var deepReturnUnlockUntilMs = UNSET_MS
 
@@ -76,6 +80,7 @@ internal class ProximityDecisionPolicy {
         departureObserved = false
         farSinceMs = UNSET_MS
         farQualified = false
+        farFloorRssi = 0; stillApproachSinceMs = UNSET_MS
         nearCandidateSinceMs = UNSET_MS
         unlockQualifiedAtMs = UNSET_MS
         clearPresenceApproach()
@@ -149,6 +154,8 @@ internal class ProximityDecisionPolicy {
             if (sawStrongNearWhileLocked) departureObserved = true
             if (farSinceMs == UNSET_MS) farSinceMs = nowMs
             if (nowMs - farSinceMs >= FAR_BASELINE_MS) farQualified = true
+            farFloorRssi = minOf(farFloorRssi, rssi)
+            stillApproachSinceMs = UNSET_MS
             nearCandidateSinceMs = UNSET_MS
             unlockQualifiedAtMs = UNSET_MS
             return false
@@ -161,6 +168,17 @@ internal class ProximityDecisionPolicy {
         val qualifiedApproach = farQualified && !departureObserved && moving &&
             rssi >= unlockThreshold + UNLOCK_MARGIN_DB
         val freshDoorSession = !farQualified && !departureObserved && rssi >= STRONG_NEAR_RSSI
+        // Approach while the motion sensor still says STILL (field 0.1.54 and the simulator: the
+        // S24+ reported STILL for a whole walk to the car and the door stayed locked). Only a clear,
+        // sustained rise from a FAR baseline to well inside the approach band counts; a turn or
+        // a passer-by at 10-15 m does not lift a FAR floor this far for this long.
+        val stillApproach = farQualified && !departureObserved && !moving &&
+            rssi >= unlockThreshold + STILL_APPROACH_MARGIN_DB && rssi >= farFloorRssi + STILL_APPROACH_RISE_DB
+        if (stillApproach) {
+            if (stillApproachSinceMs == UNSET_MS) stillApproachSinceMs = nowMs
+            if (nowMs - stillApproachSinceMs >= STILL_APPROACH_CONFIRM_MS && unlockQualifiedAtMs == UNSET_MS)
+                unlockQualifiedAtMs = nowMs
+        } else stillApproachSinceMs = UNSET_MS
         if (qualifiedApproach || freshDoorSession) {
             if (nearCandidateSinceMs == UNSET_MS) nearCandidateSinceMs = nowMs
             val holdMs = if (qualifiedApproach) APPROACH_CONFIRM_MS else DOOR_CONFIRM_MS
@@ -213,10 +231,25 @@ internal class ProximityDecisionPolicy {
         departureObserved = true
         farSinceMs = UNSET_MS
         farQualified = false
+        farFloorRssi = 0; stillApproachSinceMs = UNSET_MS
         nearCandidateSinceMs = UNSET_MS
         unlockQualifiedAtMs = UNSET_MS
         clearPresenceApproach()
         resetWalkAwayCandidate()
+    }
+
+    /**
+     * An automatic Lock is only ever sent on a proven departure (BLE departure route or two GNSS
+     * fixes clear of the car), so that departure counts as the "clearly far" half of a return:
+     * walking back then rearms on the return level alone (simulator 03/10, "turn back at 9 m": the
+     * Lock fired as the user turned and the car stayed locked at the door). Not within
+     * [DEEP_RETURN_GUARD_MS] of the Lock: a post-lock multipath rebound (0.1.29, peak -84 for
+     * 1.2 s) must not reopen the car, and the proof lapses like any other ([MANUAL_DEEP_PROOF_TTL_MS]).
+     */
+    fun onAutomaticLockProvenDeparture(nowMs: Long) {
+        manualDeepFarSeen = true
+        manualDeepFarLastAtMs = nowMs
+        deepReturnNotBeforeMs = nowMs + DEEP_RETURN_GUARD_MS
     }
 
     /** Confirmed manual lock shares the departure latch. */
@@ -242,6 +275,7 @@ internal class ProximityDecisionPolicy {
             sawStrongNearWhileLocked = false
             farSinceMs = UNSET_MS
             farQualified = false
+            farFloorRssi = 0; stillApproachSinceMs = UNSET_MS
             nearCandidateSinceMs = UNSET_MS
             unlockQualifiedAtMs = UNSET_MS
         }
@@ -264,16 +298,19 @@ internal class ProximityDecisionPolicy {
     ): Boolean {
         if (departureLinkEnded) return false // fresh offloaded presence owns this path
 
+        // A return from clearly far away rearms after any Lock (manual, the car's own, or automatic):
+        // simulator 03/10, "turn back at 9 m": after an automatic Lock the motion-gated route below
+        // missed the walk back and the car stayed locked at the door.
+        if (tryRearmManualDeepFarReturn(nowMs, rssi, unlockThreshold)) {
+            finishSameLinkReturn()
+            // The sustained strong return is itself the approach proof: no motion edge needed.
+            unlockQualifiedAtMs = nowMs
+            deepReturnUnlockUntilMs = nowMs + DEEP_RETURN_UNLOCK_WINDOW_MS
+            deepFarReturnRearmed = true
+            return true
+        }
         if (manualDeparture) {
             manualNearPeakRssi = maxOf(manualNearPeakRssi, rssi)
-            if (tryRearmManualDeepFarReturn(nowMs, rssi, unlockThreshold)) {
-                finishSameLinkReturn()
-                // The sustained strong return is itself the approach proof: no motion edge needed.
-                unlockQualifiedAtMs = nowMs
-                deepReturnUnlockUntilMs = nowMs + DEEP_RETURN_UNLOCK_WINDOW_MS
-                deepFarReturnRearmed = true
-                return true
-            }
             // A motion sensor can report STILL during departure and allow far-sleep before the
             // ordinary FAR threshold is sampled. Admit that route only after a large drop from
             // the manual-lock near signal, a long stationary interval, a new motion edge, and a
@@ -354,9 +391,17 @@ internal class ProximityDecisionPolicy {
                 manualReturnMoving = true
                 manualStillRssi = minOf(manualStillRssi, rssi)
             }
+            // The return must reach the same level as the signal-only return (simulator 03/10: walking
+            // to 10 m with Activity Recognition lagging looked like "stand far, then move", and
+            // noise at -85 reopened the car at 10 m after a manual Lock).
             if (nowMs - departureSameLinkFarQualifiedAtMs < SAME_LINK_RETURN_GUARD_MS ||
-                rssi < unlockThreshold + UNLOCK_MARGIN_DB ||
+                rssi < unlockThreshold + MANUAL_DEEP_RETURN_MARGIN_DB ||
                 rssi < manualStillRssi + MANUAL_RETURN_RISE_DB) return false
+            // At that level the return itself is the approach proof (no extra hold: the field
+            // return of 0.1.35 must still open before the door).
+            finishSameLinkReturn()
+            unlockQualifiedAtMs = nowMs
+            return true
         } else {
             val farBoundary = unlockThreshold - FAR_MARGIN_DB
             if (departureSameLinkFarQualifiedAtMs == UNSET_MS) {
@@ -398,6 +443,7 @@ internal class ProximityDecisionPolicy {
         val gap = manualDeepLastReadingAtMs != UNSET_MS && nowMs - manualDeepLastReadingAtMs > MANUAL_DEEP_MAX_GAP_MS
         manualDeepLastReadingAtMs = nowMs
         val deep = rssi <= unlockThreshold - MANUAL_DEEP_FAR_MARGIN_DB
+        if (deepReturnNotBeforeMs != UNSET_MS && nowMs < deepReturnNotBeforeMs) return false
         if (manualDeepFarSeen) {
             // A proven departure is for the walk back, not for standing at the car minutes later.
             if (deep) manualDeepFarLastAtMs = nowMs
@@ -507,6 +553,7 @@ internal class ProximityDecisionPolicy {
         manualDeepReturnReadings = 0
         manualDeepLastReadingAtMs = UNSET_MS
         manualDeepFarLastAtMs = UNSET_MS
+        deepReturnNotBeforeMs = UNSET_MS
     }
 
     /** Reads and clears [deepFarReturnRearmed]. */
@@ -720,6 +767,10 @@ internal class ProximityDecisionPolicy {
         const val MANUAL_DEEP_MAX_GAP_MS = 2_500L
         const val MANUAL_DEEP_PROOF_TTL_MS = 60_000L
         const val DEEP_RETURN_UNLOCK_WINDOW_MS = 30_000L
+        const val DEEP_RETURN_GUARD_MS = 3_000L
+        const val STILL_APPROACH_MARGIN_DB = 4
+        const val STILL_APPROACH_RISE_DB = 10
+        const val STILL_APPROACH_CONFIRM_MS = 3_000L
         const val MANUAL_WEAK_RETURN_RISE_DB = 8
         const val MANUAL_WEAK_RETURN_CONFIRM_MS = 400L
     }

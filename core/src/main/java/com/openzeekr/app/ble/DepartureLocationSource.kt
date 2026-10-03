@@ -89,6 +89,7 @@ internal class DepartureLocationSource(context: Context) : DepartureLocator {
         anchor: DepartureFix,
         steps: () -> Long?,
         enabled: () -> Boolean,
+        bleCorroborated: () -> Boolean,
     ): Boolean {
         if (!enabled()) return false
         if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION) !=
@@ -116,7 +117,8 @@ internal class DepartureLocationSource(context: Context) : DepartureLocator {
                                 val fix = if (!mock && location.hasAccuracy()) DepartureFix(
                                     location.latitude, location.longitude, location.accuracy,
                                     location.elapsedRealtimeNanos / 1_000_000L) else null
-                                val confirmed = window.observe(fix, steps(), android.os.SystemClock.elapsedRealtime())
+                                val confirmed = window.observe(fix, steps(), android.os.SystemClock.elapsedRealtime(),
+                                    bleCorroborated())
                                 val outcome = when {
                                     mock -> "mock_rejected"
                                     !location.hasAccuracy() -> "accuracy_missing"
