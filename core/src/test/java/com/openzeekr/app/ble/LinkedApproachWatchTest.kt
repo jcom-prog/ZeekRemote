@@ -1,5 +1,6 @@
 package com.openzeekr.app.ble
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -31,5 +32,17 @@ class LinkedApproachWatchTest {
         assertFalse(LinkedApproachWatch.applies(sessionReady = false, unlocked = false, wakesOnSteps = false))
         assertFalse(LinkedApproachWatch.applies(sessionReady = true, unlocked = false, wakesOnSteps = true))
         assertFalse(LinkedApproachWatch.holdAwake(true, true, false, -70))
+    }
+
+    @Test fun theWatchClockCountsOnlyWhileLinkedAndLocked() {
+        // 03/10 17:05:56 (0.1.61): STILL at the unlocked car must not start the clock.
+        assertEquals(0L, LinkedApproachWatch.watchStart(0L, 1_000L, sessionReady = true, unlocked = true, moving = false))
+        // Car locked (self-lock 17:07:53): the clock starts now ...
+        assertEquals(5_000L, LinkedApproachWatch.watchStart(0L, 5_000L, true, false, false))
+        assertEquals(5_000L, LinkedApproachWatch.watchStart(5_000L, 9_000L, true, false, false))
+        // ... and stops on MOVING, an unlock or a link that is not READY.
+        assertEquals(0L, LinkedApproachWatch.watchStart(5_000L, 9_000L, true, false, moving = true))
+        assertEquals(0L, LinkedApproachWatch.watchStart(5_000L, 9_000L, true, unlocked = true, moving = false))
+        assertEquals(0L, LinkedApproachWatch.watchStart(5_000L, 9_000L, sessionReady = false, unlocked = false, moving = false))
     }
 }

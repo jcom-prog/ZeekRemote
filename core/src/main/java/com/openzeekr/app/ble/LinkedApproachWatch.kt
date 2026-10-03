@@ -33,6 +33,20 @@ internal object LinkedApproachWatch {
      */
     const val WATCH_MAX_MS = 150_000L
 
+    /**
+     * Start (elapsed ms) of the current watch without MOVING; 0 = not watching. The watch only counts
+     * while the link is READY and the car is locked: field 03/10 17:05–17:09 (0.1.61) it had started
+     * while the car was still unlocked and survived a link loss, so after the car's self-lock and a
+     * walk to ~15 m the [WATCH_MAX_MS] cap was already spent when the link came back, and the walk back
+     * went unobserved for 16 s. The caller also resets it when the link goes down or comes back.
+     */
+    fun watchStart(previousStartMs: Long, nowMs: Long, sessionReady: Boolean, unlocked: Boolean, moving: Boolean): Long =
+        when {
+            !sessionReady || unlocked || moving -> 0L
+            previousStartMs == 0L -> nowMs
+            else -> previousStartMs
+        }
+
     fun applies(sessionReady: Boolean, unlocked: Boolean, wakesOnSteps: Boolean): Boolean =
         sessionReady && !unlocked && !wakesOnSteps
 

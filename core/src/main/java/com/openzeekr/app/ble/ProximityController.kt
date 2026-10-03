@@ -255,6 +255,7 @@ class ProximityController(
                                     "BLE restored · vehicle lock still unverified")
                             }
                             deepFarAtLinkLossMs = 0L
+                            linkedWatchSinceElapsedMs = 0L
                             Logx.d("prox", "link restored; proximity monitoring resumed")
                         }
                         // Unlocked at the car (NEAR): don't burn battery polling — idle until the car
@@ -486,6 +487,7 @@ class ProximityController(
     // ---------------- no live session ----------------
 
     private fun onSessionDown() {
+        linkedWatchSinceElapsedMs = 0L
         if (linkLostAtMs == 0L) {
             decisionPolicy.onLinkEnded()
             linkLostAtMs = System.currentTimeMillis()
@@ -1515,13 +1517,13 @@ class ProximityController(
     // Start of the current linked watch without MOVING (elapsed); 0 = not watching.
     private var linkedWatchSinceElapsedMs = 0L
 
-    /** How long the linked watch has held the CPU without MOVING; resets on MOVING or link loss. */
+    /** How long the linked watch has held the CPU without MOVING; counts only while linked and locked. */
     private fun linkedWatchForMs(): Long {
         val now = android.os.SystemClock.elapsedRealtime()
-        if (ble.state.value != DkBleManager.State.SESSION_READY ||
-            motion.state.value == MotionMonitor.Motion.MOVING) { linkedWatchSinceElapsedMs = 0L; return 0L }
-        if (linkedWatchSinceElapsedMs == 0L) linkedWatchSinceElapsedMs = now
-        return now - linkedWatchSinceElapsedMs
+        linkedWatchSinceElapsedMs = LinkedApproachWatch.watchStart(linkedWatchSinceElapsedMs, now,
+            ble.state.value == DkBleManager.State.SESSION_READY, armedUnlocked,
+            motion.state.value == MotionMonitor.Motion.MOVING)
+        return if (linkedWatchSinceElapsedMs == 0L) 0L else now - linkedWatchSinceElapsedMs
     }
 
     /** True when the motion source itself wakes the CPU per step / on motion (no linked watch needed). */
