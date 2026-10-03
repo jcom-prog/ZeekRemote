@@ -116,21 +116,27 @@ class SessionRenewer(
             store.update { it.copy(reloginLastAttemptAtMs = t, reloginFailures = if (manual) 0 else it.reloginFailures) }
             _state.value = State(inFlight = true)
             Logx.d("session", "re-login start ($reason)")
+            val kickoutsBefore = SessionSignal.kickouts
             val result = login()
             var ok = result.isSuccess
+            var yielded = false
             // Single-car app: a renewal keeps the active car exactly as it was.
             if (ok) store.update { it.copy(vin = cfg.vin.ifBlank { it.vin }, isOwner = if (cfg.vin.isNotBlank()) cfg.isOwner else it.isOwner) }
-            if (ok && SessionSignal.loggedInElsewhere.value) {
-                // The official app took the session while we were renewing: yield to it.
+            if (ok && SessionSignal.kickouts != kickoutsBefore) {
+                // The official app took the session while we were renewing: yield to it (same state as
+                // a normal 079021 kick-out). The UI may already have reset loggedInElsewhere, so the
+                // monotonic counter is checked instead (review 0.1.58).
                 store.update { it.copy(accessToken = "") }
                 ok = false
+                yielded = true
+                Logx.w("session", "re-login yielded: signed in elsewhere during renewal")
             }
             val offline = !ok && ReloginPolicy.isNetworkFailure(result.exceptionOrNull())
             if (ok) {
                 store.update { it.copy(reloginFailures = 0) }
                 Logx.d("session", "re-login OK; valid until ${expiryLabel(store.current().accessTokenExpiresAtMs)}")
-            } else if (offline) {
-                Logx.w("session", "re-login not possible (no connection); not counted")
+            } else if (offline || yielded) {
+                if (offline) Logx.w("session", "re-login not possible (no connection); not counted")
             } else {
                 store.update { it.copy(reloginFailures = it.reloginFailures + 1) }
                 Logx.w("session", "re-login failed (${store.current().reloginFailures} in a row)")
@@ -140,6 +146,7 @@ class SessionRenewer(
                 autoStopped = stopped,
                 message = when {
                     ok -> "Signed in again ✓"
+                    yielded -> "Signed in elsewhere (official app) - sign in again in Settings"
                     offline -> "No connection - sign-in will be refreshed later"
                     stopped -> "Automatic sign-in stopped after ${ReloginPolicy.MAX_AUTO_FAILURES} failures - tap Refresh sign-in"
                     else -> "Sign-in refresh failed - will retry automatically"

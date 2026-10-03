@@ -14,4 +14,7 @@ object SessionSignal {
      * Reset it to false once the notice has been shown.
      */
     val loggedInElsewhere = MutableStateFlow(false)
+
+    /** Count of 079021 kick-outs seen (never reset; the UI resets [loggedInElsewhere] after showing it). */
+    @Volatile var kickouts: Long = 0L
 }
