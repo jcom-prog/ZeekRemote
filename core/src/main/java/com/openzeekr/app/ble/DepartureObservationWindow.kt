@@ -8,6 +8,8 @@ internal class DepartureObservationWindow(
     private val startedAtMs: Long,
 ) {
     private var first: DepartureFix? = null
+    private var lastValid: DepartureFix? = null
+    private var quarantineUntilMs = 0L
     var outcome: String = "waiting_for_pair"
         private set
 
@@ -24,6 +26,20 @@ internal class DepartureObservationWindow(
             return false
         }
         val current = requireNotNull(fix)
+        // A position that jumps faster than anyone walks (multipath) voids the pair and blocks
+        // confirmation for a while, both when the jump starts and when it ends (review 0.1.63,
+        // simulator with GNSS drift: a 10-25 m jump beside the car otherwise "proved" a departure).
+        val before = lastValid
+        lastValid = current
+        if (before != null && DepartureSafetyEvidence.implausibleJump(before, current)) {
+            quarantineUntilMs = nowMs + JUMP_QUARANTINE_MS
+            first = null
+        }
+        if (nowMs < quarantineUntilMs) {
+            outcome = "departure_position_jump"
+            first = null
+            return false
+        }
         if (current.elapsedAtMs < startedAtMs || nowMs - current.elapsedAtMs > 1_500L) {
             outcome = "departure_fix_stale"
             first = null
@@ -62,5 +78,8 @@ internal class DepartureObservationWindow(
         return confirmed
     }
 
-    companion object { const val WINDOW_MS = 25_000L }
+    companion object {
+        const val WINDOW_MS = 25_000L
+        const val JUMP_QUARANTINE_MS = 10_000L
+    }
 }

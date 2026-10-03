@@ -32,7 +32,8 @@ class DepartureObservationWindowTest {
         val window = DepartureObservationWindow(car, 20_000L)
         assertFalse(window.observe(far(20_000L), 26, 20_000L))
         assertFalse(window.observe(near(22_000L), 26, 22_000L))
-        assertEquals("departure_returning", window.outcome)
+        // 33 m back in 2 s is faster than a walk: since 0.1.63 a position jump (quarantined).
+        assertEquals("departure_position_jump", window.outcome)
     }
     @Test fun duplicateFutureCachedAndReversedTimeCannotBuildPair() {
         val window = DepartureObservationWindow(car, 20_000L)

@@ -400,9 +400,16 @@ internal class SimWorld(
 
     // ---------------- GNSS (real NearDepartureAnchor / DepartureObservationWindow) ----------------
     private val locator = object : DepartureLocator {
+        // Correlated drift (urban multipath): a slowly wandering bias plus rare jumps of 10-25 m
+        // that persist for a few fixes while the reported accuracy stays optimistic (review 0.1.63).
+        private var bias = 0.0
+        private var jumpLeft = 0
+        private var jump = 0.0
         private fun fix(): DepartureFix? {
             val acc = gnssAccuracyM ?: return null
-            val noise = acc / 2.0 * rnd.gaussian()
+            bias = 0.9 * bias + 1.5 * rnd.gaussian()
+            if (jumpLeft > 0) jumpLeft-- else if (rnd.chance(0.01)) { jumpLeft = 3 + (rnd.nextDouble() * 5).toInt(); jump = rnd.uniform(10.0, 25.0) }
+            val noise = acc / 2.0 * rnd.gaussian() + bias + if (jumpLeft > 0) jump else 0.0
             val metres = distanceM + noise
             // 1 degree latitude ~ 111 km; the car sits at (52.0, 5.0), the walker moves north.
             return DepartureFix(52.0 + metres / 111_000.0, 5.0, acc, clock.elapsedMs())

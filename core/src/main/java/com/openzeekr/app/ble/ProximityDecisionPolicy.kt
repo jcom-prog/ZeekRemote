@@ -66,6 +66,8 @@ internal class ProximityDecisionPolicy {
     private var manualDeepLastReadingAtMs = UNSET_MS
     private var manualDeepFarLastAtMs = UNSET_MS
     private var deepReturnNotBeforeMs = UNSET_MS
+    // After a pre-armed automatic Lock: the phone must first read beyond the unlock band once.
+    private var deepReturnNeedsRecession = false
     /** After a signal-recognised return the unlock may be re-qualified until this time (no motion needed). */
     private var deepReturnUnlockUntilMs = UNSET_MS
 
@@ -154,7 +156,8 @@ internal class ProximityDecisionPolicy {
             if (sawStrongNearWhileLocked) departureObserved = true
             if (farSinceMs == UNSET_MS) farSinceMs = nowMs
             if (nowMs - farSinceMs >= FAR_BASELINE_MS) farQualified = true
-            farFloorRssi = minOf(farFloorRssi, rssi)
+            // The floor of the latest FAR episode (review 0.1.63: not the lowest reading ever).
+            farFloorRssi = if (farSinceMs == nowMs) rssi else minOf(farFloorRssi, rssi)
             stillApproachSinceMs = UNSET_MS
             nearCandidateSinceMs = UNSET_MS
             unlockQualifiedAtMs = UNSET_MS
@@ -250,6 +253,7 @@ internal class ProximityDecisionPolicy {
         manualDeepFarSeen = true
         manualDeepFarLastAtMs = nowMs
         deepReturnNotBeforeMs = nowMs + DEEP_RETURN_GUARD_MS
+        deepReturnNeedsRecession = true
     }
 
     /** Confirmed manual lock shares the departure latch. */
@@ -444,6 +448,12 @@ internal class ProximityDecisionPolicy {
         manualDeepLastReadingAtMs = nowMs
         val deep = rssi <= unlockThreshold - MANUAL_DEEP_FAR_MARGIN_DB
         if (deepReturnNotBeforeMs != UNSET_MS && nowMs < deepReturnNotBeforeMs) return false
+        if (deepReturnNeedsRecession) {
+            // The Lock fired around the lock threshold; noise at 8-10 m must not reopen at once
+            // (review 0.1.63): first a reading clearly outside the unlock band, then the return.
+            if (rssi <= unlockThreshold - FAR_MARGIN_DB) deepReturnNeedsRecession = false
+            return false
+        }
         if (manualDeepFarSeen) {
             // A proven departure is for the walk back, not for standing at the car minutes later.
             if (deep) manualDeepFarLastAtMs = nowMs
@@ -554,6 +564,7 @@ internal class ProximityDecisionPolicy {
         manualDeepLastReadingAtMs = UNSET_MS
         manualDeepFarLastAtMs = UNSET_MS
         deepReturnNotBeforeMs = UNSET_MS
+        deepReturnNeedsRecession = false
     }
 
     /** Reads and clears [deepFarReturnRearmed]. */

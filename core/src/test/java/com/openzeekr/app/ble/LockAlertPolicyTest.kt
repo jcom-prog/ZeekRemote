@@ -70,4 +70,11 @@ class LockAlertPolicyTest {
             assertTrue(LockAlertPolicy.shouldPost(e, false))
         }
     }
+
+    @Test fun theDepartureAlarmIsHeldOnlyWhileTheStepCounterShowsAShortWalk() {
+        assertTrue(LockAlertPolicy.departureWalkedFarEnough(null, null))     // no step source
+        assertTrue(LockAlertPolicy.departureWalkedFarEnough(0L, 0L))         // counter delivers nothing
+        assertFalse(LockAlertPolicy.departureWalkedFarEnough(6L, 30L))       // loading the boot
+        assertTrue(LockAlertPolicy.departureWalkedFarEnough(20L, 40L))       // walked away
+    }
 }

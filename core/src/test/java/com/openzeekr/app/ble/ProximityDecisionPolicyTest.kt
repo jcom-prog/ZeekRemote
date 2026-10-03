@@ -704,6 +704,35 @@ class ManualLockDeepFarReturnTest {
         assertTrue(p.shouldUnlock(t, -80, true, -86))
     }
 
+    @Test fun afterAProvenAutomaticLockNoiseAtTheLockPointDoesNotReopen() {
+        // Review 0.1.63: locked at ~8-10 m (-85..-88); noise up to -80 without first reading
+        // clearly outside the unlock band must not reopen the car.
+        val p = ProximityDecisionPolicy()
+        p.onUnlockConfirmed(0L)
+        p.onDepartureLockStarted(); p.onAutomaticLockProvenDeparture(10_000L)
+        var t = 13_100L
+        repeat(40) { i -> assertFalse(p.shouldUnlock(t, listOf(-85, -86, -87, -81, -80, -84)[i % 6], false, -86)); t += 500L }
+    }
+
+    @Test fun motionlessApproachNeedsASustainedStrongRiseFromTheLatestFarFloor() {
+        val p = ProximityDecisionPolicy()
+        var t = 0L
+        repeat(6) { assertFalse(p.shouldUnlock(t, -95, false, -86)); t += 1_000L }   // FAR baseline
+        repeat(2) { assertFalse(p.shouldUnlock(t, -81, false, -86)); t += 1_000L }   // 2 s only
+        assertFalse(p.shouldUnlock(t, -86, false, -86)); t += 1_000L
+        repeat(3) { assertFalse(p.shouldUnlock(t, -81, false, -86)); t += 1_000L }
+        assertTrue(p.shouldUnlock(t, -81, false, -86))
+    }
+
+    @Test fun motionlessApproachIgnoresAnOldFarOutlier() {
+        val p = ProximityDecisionPolicy()
+        var t = 0L
+        repeat(6) { assertFalse(p.shouldUnlock(t, -100, false, -86)); t += 1_000L }  // old, very far
+        assertFalse(p.shouldUnlock(t, -85, false, -86)); t += 1_000L                 // leaves FAR
+        repeat(4) { assertFalse(p.shouldUnlock(t, -89, false, -86)); t += 1_000L }   // new FAR floor -89
+        repeat(6) { assertFalse(p.shouldUnlock(t, -82, false, -86)); t += 1_000L }   // only +7 dB
+    }
+
     @Test fun aProvenAutomaticLockDoesNotReopenAMinuteLaterAtTheCar() {
         val p = ProximityDecisionPolicy()
         p.onUnlockConfirmed(0L)

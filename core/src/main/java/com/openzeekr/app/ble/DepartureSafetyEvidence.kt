@@ -23,6 +23,8 @@ internal object DepartureSafetyEvidence {
     private const val MIN_FIX_SEPARATION_MS = 1_500L
     private const val MIN_STEPS = 10L
     private const val REQUIRED_CLEARANCE_M = 4.0
+    /** Without a step count the GNSS pair must clear the car by much more (review 0.1.63). */
+    private const val CORROBORATED_CLEARANCE_M = 12.0
     private const val RETURN_PROGRESS_M = 2.0
 
     /** Categorical reasons only; never include a phone or vehicle position in logs. */
@@ -55,7 +57,9 @@ internal object DepartureSafetyEvidence {
         stepsSinceUnlock: Long?, nowElapsedMs: Long, bleCorroborated: Boolean = false,
     ): Boolean {
         if (anchor == null || first == null || second == null) return false
-        if (!bleCorroborated && (stepsSinceUnlock == null || stepsSinceUnlock < MIN_STEPS)) return false
+        val stepsOk = stepsSinceUnlock != null && stepsSinceUnlock >= MIN_STEPS
+        if (!stepsOk && !bleCorroborated) return false
+        val clearance = if (stepsOk) REQUIRED_CLEARANCE_M else CORROBORATED_CLEARANCE_M
         if (listOf(anchor, first, second).any { !valid(it) }) return false
         if (first.elapsedAtMs <= anchor.elapsedAtMs ||
             second.elapsedAtMs - first.elapsedAtMs < MIN_FIX_SEPARATION_MS ||
@@ -65,13 +69,24 @@ internal object DepartureSafetyEvidence {
             return false // a clearly observed return cancels the command
         return listOf(first, second).all {
             val lowerBoundM = distanceM(anchor, it) - 2.0 * (anchor.accuracyM + it.accuracyM)
-            lowerBoundM >= REQUIRED_CLEARANCE_M
+            lowerBoundM >= clearance
         }
     }
 
     internal fun valid(fix: DepartureFix): Boolean =
         fix.latitude in -90.0..90.0 && fix.longitude in -180.0..180.0 &&
             fix.accuracyM > 0f && fix.accuracyM <= MAX_ACCURACY_M && fix.elapsedAtMs > 0L
+
+    /**
+     * True when [b] is further from [a] than a walker can move in the time between them, beyond
+     * both accuracy radii: a GNSS jump (urban multipath), not a walk.
+     */
+    fun implausibleJump(a: DepartureFix, b: DepartureFix): Boolean {
+        val dtS = (b.elapsedAtMs - a.elapsedAtMs).coerceAtLeast(0L) / 1000.0
+        return distanceM(a, b) > MAX_WALK_SPEED_MPS * dtS + a.accuracyM + b.accuracyM
+    }
+
+    private const val MAX_WALK_SPEED_MPS = 2.5
 
     private fun distanceM(a: DepartureFix, b: DepartureFix): Double {
         val latDiff = Math.toRadians(b.latitude - a.latitude)
