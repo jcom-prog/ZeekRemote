@@ -45,6 +45,13 @@ interface DkSession {
     suspend fun ping(timeoutMs: Long): Boolean
 
     /**
+     * Authenticated, decrypted 0x0121 status pushes of the current session (central lock code).
+     * Read-only; consumers may use it to stop alarms, never to authorize a command.
+     */
+    val vehicleStatus: kotlinx.coroutines.flow.Flow<ObservedVehicleStatus>
+        get() = kotlinx.coroutines.flow.emptyFlow()
+
+    /**
      * DEBUG probe: send a single `0x0110 CMD_A2V_CONTROL` frame carrying an arbitrary sub-opcode
      * [ctrl] and collect every frame the car sends back over [windowMs], decrypted, into a
      * human-readable summary. Diagnostic only — used to see how the car answers an opcode we don't

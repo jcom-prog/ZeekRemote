@@ -76,6 +76,11 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                     message.startsWith("usable departure location anchor unavailable") -> "ANCHOR_UNAVAILABLE"
                     message.startsWith("usable departure location anchor available") -> "ANCHOR_AVAILABLE"
                     message.startsWith("approach-unlock ARM (") -> "UNLOCK_STARTED"
+                    message.startsWith("car locked itself (") -> "CAR_SELF_LOCK"
+                    message.startsWith("phone far from the unlocked car") -> "STATIONARY_FAR_ALARM"
+                    message.startsWith("armed idle far read ") -> "IDLE_FAR_FAST"
+                    message.startsWith("measurement mode on") -> "MEASURE_MODE on"
+                    message == "measurement mode off" -> "MEASURE_MODE off"
                     message.startsWith("independent departure unverified:") -> "DEPARTURE_UNVERIFIED"
                     message == "ble departure confirmed" -> "BLE_DEPARTURE_CONFIRMED"
                     message.startsWith("lock alarm ") -> lockAlarm.matchEntire(message)

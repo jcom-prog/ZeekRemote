@@ -68,6 +68,9 @@ class RealDkSession(
     /** Serializes encrypted 0x0110 commands which share the 0x0111/0x0112 response slots. */
     private val controlMutex = Mutex()
     private val vehicleObservations = VehicleObservationSession()
+    private val _vehicleStatus = kotlinx.coroutines.flow.MutableSharedFlow<ObservedVehicleStatus>(
+        extraBufferCapacity = 8, onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST)
+    override val vehicleStatus: kotlinx.coroutines.flow.Flow<ObservedVehicleStatus> = _vehicleStatus
 
     /** Fire-and-forget scope for the transport ACK (onRawInbound is not a coroutine). */
     private val ackScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -608,10 +611,17 @@ class RealDkSession(
             Logx.w("dk", "decrypt ${hex(cmdId)} failed: ${e.message} rawBody(${rawBody.size}B)=${hexOf(rawBody)}"); return
         }
         // Read-only status transitions. Never decode raw pre-authentication data as CAN status.
-        if (cmdId == DkProtocol.CMD_V2A_VSTATUS_SYNC && isEstablished && cryptoReady &&
-            Logx.isBleEnabled) {
-            vehicleObservations.changedStatus(observationGeneration, body)?.let {
-                Logx.d("dk", it)
+        if (cmdId == DkProtocol.CMD_V2A_VSTATUS_SYNC && isEstablished && cryptoReady) {
+            if (Logx.isBleEnabled) {
+                vehicleObservations.changedStatus(observationGeneration, body)?.let {
+                    Logx.d("dk", it)
+                }
+            }
+            // Same session-generation guard as the diagnostics: a frame captured before a reset is dropped.
+            if (observationGeneration != null && observationGeneration == vehicleObservations.capture()) {
+                VehicleProximityStatus.parse(body)?.let {
+                    _vehicleStatus.tryEmit(ObservedVehicleStatus(observationGeneration, it.centralLockCode))
+                }
             }
         }
         // Diagnostic tap (active only during a probeControl window): see every frame the car returns.

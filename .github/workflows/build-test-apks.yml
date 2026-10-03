@@ -26,6 +26,7 @@ on:
       - zeekremote-0.1.57-upstream-fixes
       - zeekremote-0.1.58-session-renewal
       - zeekremote-0.1.59-key-survives-kickout
+      - zeekremote-0.1.60-self-lock
 
 permissions:
   contents: read
@@ -141,7 +142,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='97' versionName='0.1.59-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='98' versionName='0.1.60-work'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
           sha256sum "$APK"

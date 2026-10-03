@@ -183,6 +183,19 @@ fun SettingsScreen(deps: Deps, modifier: Modifier = Modifier) {
         // -------- region --------
         RegionSection(liveCfg, store) { deps.onEndpointChanged() }
 
+        // -------- measurement mode (calibration walk) --------
+        SettingsCard {
+            CardTitle("Measurement mode")
+            val measuring by deps.proximity.measuring.collectAsState()
+            Text("For a calibration walk: the key signal is read every 0.2 s and logged for 5 minutes. " +
+                "Needs BLE logging on. Uses more battery while active.", color = Brand.muted, fontSize = 12.sp)
+            PrimaryButton(if (measuring) "Measuring… (5 min)" else "Start measurement (5 min)",
+                Modifier.fillMaxWidth(), enabled = !measuring && liveCfg.logBle) {
+                deps.proximity.startMeasurement()
+            }
+            if (!liveCfg.logBle) Text("Turn on BLE logging below first.", color = Brand.energy, fontSize = 12.sp)
+        }
+
         // -------- app --------
         SettingsCard {
             CardTitle("App")

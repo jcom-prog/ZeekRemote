@@ -136,6 +136,27 @@ class ProximityController(
     // it, the user has walked away (LockAlertPolicy.departureSuspected).
     private var lastWalkAwayCandidateAtMs = 0L
     private var departureAlarmJob: Job? = null
+    private val carSelfLock = CarSelfLockDetector()
+    private val stationaryFar = StationaryFarWatch()
+    private var vehicleStatusJob: Job? = null
+    @Volatile private var measureUntilElapsedMs = 0L
+    private val _measuring = kotlinx.coroutines.flow.MutableStateFlow(false)
+    /** True while Measurement mode samples fast for a calibration walk. */
+    val measuring: kotlinx.coroutines.flow.StateFlow<Boolean> = _measuring
+
+    /** Measurement mode: sample every 200 ms and log each reading for [MeasurementMode.DURATION_MS]. */
+    fun startMeasurement() {
+        measureUntilElapsedMs = android.os.SystemClock.elapsedRealtime() + MeasurementMode.DURATION_MS
+        _measuring.value = true
+        Logx.d("prox", "measurement mode on (${MeasurementMode.DURATION_MS / 60_000} min)")
+        activityWake?.complete(Unit); motionWake?.complete(Unit)
+    }
+
+    private fun measuringNow(): Boolean {
+        val on = MeasurementMode.active(measureUntilElapsedMs, android.os.SystemClock.elapsedRealtime())
+        if (!on && _measuring.value) { _measuring.value = false; Logx.d("prox", "measurement mode off") }
+        return on
+    }
     private var shadowRecoveryLogged = false
     private var relockRecoveryPending = false
     private var relockProbeJob: Job? = null
@@ -205,6 +226,8 @@ class ProximityController(
             if (linkLostAtMs != 0L && armedUnlocked) scope.launch { scheduleLinkDepartureCheck() }
         }
         motion.start()
+        vehicleStatusJob?.cancel()
+        vehicleStatusJob = scope.launch { ble.session.vehicleStatus.collect { onVehicleStatus(it) } }
         Logx.d("prox", "monitor start (distance+trend hysteresis; rides keep-alive session)")
         monitorJob = scope.launch {
             while (isActive) {
@@ -251,6 +274,7 @@ class ProximityController(
                     }
                     else -> onSessionDown()
                 }
+                if (measuringNow()) { farAsleep = false; nextIntervalMs = MONITOR_FAST_MS; _wakeLockNeeded.value = true }
                 if (farAsleep) sleepUntilMotion() else delay(
                     (nextIntervalMs - (android.os.SystemClock.elapsedRealtime() - pollCycleAtMs))
                         .coerceAtLeast(0L))
@@ -279,6 +303,7 @@ class ProximityController(
 
     fun stop() {
         monitorJob?.cancel(); monitorJob = null
+        vehicleStatusJob?.cancel(); vehicleStatusJob = null
         departureAnchorJob?.cancel(); departureAnchorJob = null; departureAnchor = null
         linkDepartureJob?.cancel(); linkDepartureJob = null
         departureProofAtMs = 0L
@@ -349,6 +374,8 @@ class ProximityController(
             linkDepartureJob?.cancel(); linkDepartureJob = null
             departureProofAtMs = 0L
             clearBleDeparture()
+            stationaryFar.reset()
+            carSelfLock.onLockedByUs()
             relockRecoveryPending = false; relockProbeJob?.cancel(); relockProbeJob = null
             pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
             if (bleConfirmed) {
@@ -396,6 +423,8 @@ class ProximityController(
         unverifiedLockAlertRaised = false
         UnverifiedLockNotifier.clear(appContext)
         ble.noteUnlockConfirmed()
+        carSelfLock.onUnlockConfirmed(unlockElapsed)
+        stationaryFar.reset()
         armedUnlocked = true
         postUnlockFastUntilElapsedMs = android.os.SystemClock.elapsedRealtime() + POST_UNLOCK_FAST_MONITOR_MS
         decisionPolicy.onUnlockConfirmed(now)
@@ -562,7 +591,38 @@ class ProximityController(
     }
 
     private fun departureSuspected(): Boolean =
-        LockAlertPolicy.departureSuspected(lastWalkAwayCandidateAtMs, lastStrongNearAtMs)
+        LockAlertPolicy.departureSuspected(lastWalkAwayCandidateAtMs, lastStrongNearAtMs) ||
+            stationaryFar.deepFarForMs(System.currentTimeMillis()) >= StationaryFarWatch.LINK_LOSS_FAR_MS
+
+    /** Unlocked and clearly far for a minute without any motion signal: alarm, never a Lock. */
+    private fun observeStationaryFar(rssi: Int, lockThresh: Int) {
+        if (!armedUnlocked || lockJob?.isActive == true) return
+        if (!stationaryFar.observe(System.currentTimeMillis(), rssi, lockThresh)) return
+        val posted = UnverifiedLockNotifier.show(appContext, LockAlertPolicy.Event.DEPARTURE_UNVERIFIED)
+        unverifiedLockAlertRaised = true
+        _state.value = _state.value.copy(lastAction = "Far from the car · car not locked; Lock manually")
+        Logx.w("prox", "phone far from the unlocked car for ${StationaryFarWatch.ALARM_AFTER_MS / 1000}s " +
+            "without a motion signal; NO LOCK SENT; notification posted=$posted")
+    }
+
+    /** The car's own status push: a fresh unlocked -> locked transition means the car locked itself. */
+    private fun onVehicleStatus(status: ObservedVehicleStatus) {
+        if (!carSelfLock.observe(status, android.os.SystemClock.elapsedRealtime())) return
+        scope.launch {
+            // A manual Lock's own "3" precedes its receipt by ~20 ms: let that receipt win first.
+            delay(SELF_LOCK_SETTLE_MS)
+            if (!armedUnlocked || lockJob?.isActive == true || !_state.value.running) return@launch
+            handleCarSelfLock(status)
+        }
+    }
+
+    private fun handleCarSelfLock(status: ObservedVehicleStatus) {
+        departureAlarmJob?.cancel(); departureAlarmJob = null
+        UnverifiedLockNotifier.silenceAlarm(appContext)
+        com.openzeekr.app.remote.LocalLockEvidence.onKeyConfirmed(locked = true)
+        Logx.w("prox", "car locked itself (key status central=${status.centralLockCode}) -> treated as Lock")
+        onExternalLockConfirmed("car self-lock")
+    }
 
     /**
      * After a moving walk-away candidate the car must be locked soon, by the BLE route, GNSS or a
@@ -643,7 +703,7 @@ class ProximityController(
         val quietMs = System.currentTimeMillis() - ble.lastInboundMs
         if (quietMs >= ARMED_ACTIVE_MS &&
             android.os.SystemClock.elapsedRealtime() >= postUnlockFastUntilElapsedMs &&
-            motion.state.value != MotionMonitor.Motion.MOVING) {
+            motion.state.value != MotionMonitor.Motion.MOVING && !measuringNow()) {
             if (postUnlockFastUntilElapsedMs != 0L) {
                 postUnlockFastUntilElapsedMs = 0L
                 Logx.d("prox", "post-unlock fast RSSI window ended; armed idle checks resumed")
@@ -658,6 +718,18 @@ class ProximityController(
             // Sparse idle reads must never build BLE departure evidence (a raw spike would also
             // become the "at the car" reference), but they must REVOKE a held proof on return.
             if (rssi != null) { revokeBleDeparture(rssi); noteFreshReading(rssi) }
+            if (rssi != null) {
+                val lockThresh = store.current().sensitivityLockRssi
+                Logx.d("prox", "armed idle read rssi=$rssi motion=${motion.state.value}")
+                observeStationaryFar(rssi, lockThresh)
+                // Beyond the lock threshold while the motion signal says STILL: look closer. A slow
+                // walk-away with stops kept Activity Recognition at STILL for 1.5 min (03/10).
+                if (rssi <= lockThresh) {
+                    postUnlockFastUntilElapsedMs =
+                        android.os.SystemClock.elapsedRealtime() + StationaryFarWatch.IDLE_FAR_FAST_MS
+                    Logx.d("prox", "armed idle far read -> fast sampling ${StationaryFarWatch.IDLE_FAR_FAST_MS / 1000}s")
+                }
+            }
             val idleDecision = if (rssi == null) ProximityDecisionPolicy.ArmedDecision.NONE else
                 decisionPolicy.onUnlockedSample(
                     System.currentTimeMillis(), rssi,
@@ -918,6 +990,7 @@ class ProximityController(
                 }
             }
         }
+        if (armedUnlocked) observeStationaryFar(rssi, lockThresh)
         val armedDecision = if (armedUnlocked) decisionPolicy.onUnlockedSample(
             now, smoothed, motion.state.value == MotionMonitor.Motion.MOVING, lockThresh,
         ) else ProximityDecisionPolicy.ArmedDecision.NONE
@@ -1518,6 +1591,7 @@ class ProximityController(
         // battery cost is one RSSI read/~3s while you sit in the car unlocked - negligible; reliable
         // walk-away lock is worth more (per the user). Was 30s, which missed the connected window.
         private const val ARMED_IDLE_MAX_MS = 3_000L
+        private const val SELF_LOCK_SETTLE_MS = 1_500L
         private const val MAX_UNLOCK_ATTEMPTS = 5          // bound so a walked-away/absent car can't spin
         private const val UNLOCK_SESSION_WAIT_MS = 8_000L  // wait for SESSION_READY before an attempt
         private const val UNLOCK_ACK_TIMEOUT_MS = 1_500L   // wait for the car's 0x0111 receipt
