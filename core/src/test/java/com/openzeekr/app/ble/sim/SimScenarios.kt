@@ -60,6 +60,14 @@ internal object SimScenarios {
             listOf(Walk(12.0), Mark("expect-stay-locked"), Shuffle(180_000, -6.0), Stand(5_000, Facing.TOWARD))),
         Scenario("F14 waiting at 8 m", "car locked; the user waits 2 min at 8 m facing the car, then leaves", 30.0,
             listOf(Walk(8.0), Mark("-"), Stand(120_000, Facing.TOWARD), Walk(30.0), Stand(30_000))),
+        // Rain (user 03/10): the approach is brisk, ~2 m/s, straight to the door.
+        Scenario("F15 fast approach (rain)", "approach at 2.0 m/s, open the door, later walk away", 30.0,
+            approachAndOpen(2.0) + listOf(Mark("expect-lock"), Walk(30.0), Stand(150_000))),
+        Scenario("F16 fast return after self-lock", "car relocks; away 25 m, back at 2.0 m/s", 30.0,
+            listOf(Mark("expect-unlock"), Walk(1.0), Mark("-"), Stand(150_000), Walk(25.0), Stand(10_000),
+                Mark("expect-unlock"), Walk(1.0, 2.0), Stand(10_000))),
+        Scenario("F17 fast approach after long still", "phone still 7 min at 25 m (security sleep), then 2.0 m/s", 25.0,
+            listOf(Stand(420_000)) + approachAndOpen(2.0)),
     )
 
     /** families x carry x motion profile x seeds. */
