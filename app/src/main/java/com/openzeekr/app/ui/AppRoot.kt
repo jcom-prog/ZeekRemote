@@ -130,7 +130,11 @@ fun AppRoot(deps: Deps) {
 
     val bleState by deps.ble.state.collectAsState()
     val bleReady = bleState == DkBleManager.State.SESSION_READY || bleState == DkBleManager.State.CONNECTED
-    val carName = cfg.carNickname.ifBlank { "My Zeekr" }
+    val carName = com.openzeekr.app.util.HeaderTitle.baseName(cfg.carNickname)
+    val installedVersion = remember {
+        runCatching { pushCtx.packageManager.getPackageInfo(pushCtx.packageName, 0).versionName }.getOrNull()
+    }
+    val headerTitle = com.openzeekr.app.util.HeaderTitle.title(cfg.carNickname, installedVersion)
     var renaming by remember { mutableStateOf(false) }
     var draftName by remember { mutableStateOf("") }
 
@@ -179,7 +183,7 @@ fun AppRoot(deps: Deps) {
                 Spacer(Modifier.width(11.dp))
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(carName, fontWeight = FontWeight.Bold, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(headerTitle, fontWeight = FontWeight.Bold, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Icon(Icons.Filled.Edit, "Rename car", tint = Brand.faint,
                             modifier = Modifier.size(15.dp).clickable { draftName = carName; renaming = true })
                     }
