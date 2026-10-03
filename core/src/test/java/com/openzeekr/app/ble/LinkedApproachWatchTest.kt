@@ -45,4 +45,13 @@ class LinkedApproachWatchTest {
         assertEquals(0L, LinkedApproachWatch.watchStart(5_000L, 9_000L, true, unlocked = true, moving = false))
         assertEquals(0L, LinkedApproachWatch.watchStart(5_000L, 9_000L, sessionReady = false, unlocked = false, moving = false))
     }
+
+    @Test fun onlyARealLinkAbsenceRefillsTheWindowAndOnlyAFewTimes() {
+        // 03/10 17:08:50-17:09:13: security sleep, ~23 s without a link, then the walk back.
+        assertTrue(LinkedApproachWatch.refillAllowed(linkDownForMs = 23_000L, refillsUsed = 0))
+        // A 1 s flap (forced reconnect) never refills.
+        assertFalse(LinkedApproachWatch.refillAllowed(1_000L, 0))
+        // A link flapping all night at the edge of range: bounded per lock period.
+        assertFalse(LinkedApproachWatch.refillAllowed(60_000L, LinkedApproachWatch.MAX_REFILLS))
+    }
 }

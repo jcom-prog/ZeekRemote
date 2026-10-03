@@ -20,4 +20,13 @@ class HeaderTitleTest {
         assertEquals("Zeekr 001", HeaderTitle.title("Zeekr 001", null))
         assertEquals("ZeekRemote", HeaderTitle.baseName("ZeekRemote 1.1.60"))
     }
+
+    @Test fun onlyRealVersionTokensAreStripped() {
+        assertEquals("Model3.1", HeaderTitle.baseName("Model3.1"))
+        assertEquals("Car 2024.10", HeaderTitle.baseName("Car 2024.10"))
+        assertEquals("Zeekr 7X 2.0", HeaderTitle.baseName("Zeekr 7X 2.0"))
+        assertEquals("Zeekr-1.0", HeaderTitle.baseName("Zeekr-1.0"))
+        assertEquals("X", HeaderTitle.baseName("X 1.1.60 1.1.61"))
+        assertEquals("ZR", HeaderTitle.baseName("ZR 0.1.62_work"))
+    }
 }

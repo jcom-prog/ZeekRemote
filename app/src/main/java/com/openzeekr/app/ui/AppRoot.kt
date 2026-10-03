@@ -131,10 +131,7 @@ fun AppRoot(deps: Deps) {
     val bleState by deps.ble.state.collectAsState()
     val bleReady = bleState == DkBleManager.State.SESSION_READY || bleState == DkBleManager.State.CONNECTED
     val carName = com.openzeekr.app.util.HeaderTitle.baseName(cfg.carNickname)
-    val installedVersion = remember {
-        runCatching { pushCtx.packageManager.getPackageInfo(pushCtx.packageName, 0).versionName }.getOrNull()
-    }
-    val headerTitle = com.openzeekr.app.util.HeaderTitle.title(cfg.carNickname, installedVersion)
+    val headerTitle = com.openzeekr.app.util.HeaderTitle.title(cfg.carNickname, deps.appVersion)
     var renaming by remember { mutableStateOf(false) }
     var draftName by remember { mutableStateOf("") }
 

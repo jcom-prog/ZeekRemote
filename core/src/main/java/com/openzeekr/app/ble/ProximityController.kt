@@ -216,6 +216,7 @@ class ProximityController(
         // Keep armedUnlocked as-is across start/stop toggles within a session isn't meaningful;
         // reset so a fresh monitor starts from a known state.
         armedUnlocked = false
+        resetLinkedWatch()
         postUnlockFastUntilElapsedMs = 0L
         decisionPolicy.resetLocked()
         needToUnlock = false; unlockJob?.cancel(); unlockJob = null
@@ -247,6 +248,12 @@ class ProximityController(
                             relockProbeStartedAtElapsedMs = 0L
                             relockProbeLastAtElapsedMs = 0L
                             relockApproachEvidence.clear()
+                            // A real absence (not a flap) gives the linked watch a fresh window, a
+                            // bounded number of times per lock period (review 0.1.62: battery).
+                            if (LinkedApproachWatch.refillAllowed(System.currentTimeMillis() - linkLostAtMs, linkedWatchRefills)) {
+                                linkedWatchSinceElapsedMs = 0L
+                                linkedWatchRefills++
+                            }
                             linkLostAtMs = 0L
                             pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
                             UnverifiedLockNotifier.silenceAlarm(appContext)
@@ -255,7 +262,6 @@ class ProximityController(
                                     "BLE restored · vehicle lock still unverified")
                             }
                             deepFarAtLinkLossMs = 0L
-                            linkedWatchSinceElapsedMs = 0L
                             Logx.d("prox", "link restored; proximity monitoring resumed")
                         }
                         // Unlocked at the car (NEAR): don't burn battery polling — idle until the car
@@ -401,6 +407,7 @@ class ProximityController(
                 unlockJob?.cancel()
                 unlockJob = null
                 armedUnlocked = false
+                resetLinkedWatch()
                 decisionPolicy.onManualLockConfirmed()
                 lastTriggerMs = System.currentTimeMillis()
                 _wakeLockNeeded.value = false
@@ -413,6 +420,7 @@ class ProximityController(
     }
 
     private fun recordUnlockConfirmed(source: String) {
+        resetLinkedWatch()
         val now = System.currentTimeMillis()
         val unlockElapsed = android.os.SystemClock.elapsedRealtime()
         lockConfirmationJob?.cancel(); lockConfirmationJob = null
@@ -487,7 +495,6 @@ class ProximityController(
     // ---------------- no live session ----------------
 
     private fun onSessionDown() {
-        linkedWatchSinceElapsedMs = 0L
         if (linkLostAtMs == 0L) {
             decisionPolicy.onLinkEnded()
             linkLostAtMs = System.currentTimeMillis()
@@ -982,6 +989,7 @@ class ProximityController(
                         (_state.value.smoothedRssi ?: Int.MIN_VALUE) >= unlockThresh + 3) {
                         relockRecoveryPending = false
                         armedUnlocked = false
+                        resetLinkedWatch()
                         relockApproachEvidence.restoreAfterVerifiedRelock(
                             decisionPolicy, System.currentTimeMillis(), unlockThresh)
                         Logx.d("prox", "vehicle reports a newer confirmed Lock; rearming guarded approach unlock")
@@ -1356,6 +1364,7 @@ class ProximityController(
                     "$reason · ${if (cloudStatusLocked) "cloud reports LOCKED (2×); physical lock unverified" else "LOCK NOT VERIFIED ✗"}; check car")
             } else {
                 armedUnlocked = false
+                resetLinkedWatch()
                 pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
                 if (verifyFreshLockStatus(lockStartedAtMs)) {
                     unverifiedLockAlertRaised = false
@@ -1516,6 +1525,11 @@ class ProximityController(
      *  returns false → the caller treats it as still and sleeps. */
     // Start of the current linked watch without MOVING (elapsed); 0 = not watching.
     private var linkedWatchSinceElapsedMs = 0L
+    // Fresh windows granted after a real link absence in the current lock period.
+    private var linkedWatchRefills = 0
+
+    /** A new lock period (or an unlock) starts the linked watch from scratch. */
+    private fun resetLinkedWatch() { linkedWatchSinceElapsedMs = 0L; linkedWatchRefills = 0 }
 
     /** How long the linked watch has held the CPU without MOVING; counts only while linked and locked. */
     private fun linkedWatchForMs(): Long {

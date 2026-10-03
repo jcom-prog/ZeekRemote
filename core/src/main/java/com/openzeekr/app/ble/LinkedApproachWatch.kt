@@ -38,7 +38,8 @@ internal object LinkedApproachWatch {
      * while the link is READY and the car is locked: field 03/10 17:05–17:09 (0.1.61) it had started
      * while the car was still unlocked and survived a link loss, so after the car's self-lock and a
      * walk to ~15 m the [WATCH_MAX_MS] cap was already spent when the link came back, and the walk back
-     * went unobserved for 16 s. The caller also resets it when the link goes down or comes back.
+     * went unobserved for 16 s. The caller restarts it at every unlock and lock, and after a real
+     * link absence ([refillAllowed]).
      */
     fun watchStart(previousStartMs: Long, nowMs: Long, sessionReady: Boolean, unlocked: Boolean, moving: Boolean): Long =
         when {
@@ -46,6 +47,14 @@ internal object LinkedApproachWatch {
             previousStartMs == 0L -> nowMs
             else -> previousStartMs
         }
+
+    /** Link absence after which a restored link may start a fresh watch window (a flap may not). */
+    const val REFILL_AFTER_DOWN_MS = 10_000L
+    /** Fresh windows per lock period: a flapping link at the edge of range must not hold the CPU all night. */
+    const val MAX_REFILLS = 3
+
+    fun refillAllowed(linkDownForMs: Long, refillsUsed: Int): Boolean =
+        linkDownForMs >= REFILL_AFTER_DOWN_MS && refillsUsed < MAX_REFILLS
 
     fun applies(sessionReady: Boolean, unlocked: Boolean, wakesOnSteps: Boolean): Boolean =
         sessionReady && !unlocked && !wakesOnSteps
