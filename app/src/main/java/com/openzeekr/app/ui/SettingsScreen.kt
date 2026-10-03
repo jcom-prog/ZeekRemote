@@ -155,6 +155,11 @@ fun SettingsScreen(deps: Deps, modifier: Modifier = Modifier) {
                             else deps.session.state.value.message ?: "Sign-in refresh failed"
                     }
                 }
+                // Expiry DATE of the cloud sign-in (from the bearer's own expiry; never the token itself).
+                if (liveCfg.accessTokenExpiresAtMs > 0L) Text(
+                    "Cloud sign-in valid until " + java.text.SimpleDateFormat("dd-MM-yyyy HH:mm", java.util.Locale.ROOT)
+                        .format(java.util.Date(liveCfg.accessTokenExpiresAtMs)) + " (renewed automatically)",
+                    color = Brand.muted, fontSize = 12.sp)
                 // Automatic renewal outcome only; a manual tap reports through [status] below (no duplicate line).
                 renewal.message?.let { if (status.isBlank()) Text(it, color = if (renewal.autoStopped) Brand.crit else Brand.muted, fontSize = 12.5.sp) }
                 OutlinedButton(
