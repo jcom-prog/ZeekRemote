@@ -155,7 +155,8 @@ fun SettingsScreen(deps: Deps, modifier: Modifier = Modifier) {
                             else deps.session.state.value.message ?: "Sign-in refresh failed"
                     }
                 }
-                renewal.message?.let { if (it != status) Text(it, color = if (renewal.autoStopped) Brand.crit else Brand.muted, fontSize = 12.5.sp) }
+                // Automatic renewal outcome only; a manual tap reports through [status] below (no duplicate line).
+                renewal.message?.let { if (status.isBlank()) Text(it, color = if (renewal.autoStopped) Brand.crit else Brand.muted, fontSize = 12.5.sp) }
                 OutlinedButton(
                     onClick = { confirmSignOut = true },
                     modifier = Modifier.fillMaxWidth(),
