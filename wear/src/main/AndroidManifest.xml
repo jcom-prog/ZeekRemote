@@ -59,5 +59,6 @@
         <service android:name="com.openzeekr.app.ble.ProximityService" tools:node="remove" />
         <!-- No offloaded presence scan on the watch (nothing arms it); drop the receiver too. -->
         <receiver android:name="com.openzeekr.app.ble.BleScanReceiver" tools:node="remove" />
+        <receiver android:name="com.openzeekr.app.ble.NotificationLockReceiver" tools:node="remove" />
     </application>
 </manifest>

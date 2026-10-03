@@ -12,7 +12,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * The "Lock" button on a lock warning (user choice 03/10: alarm + Lock button, usable from the lock
@@ -26,35 +25,62 @@ class NotificationLockReceiver : BroadcastReceiver() {
         if (intent.action != ACTION_LOCK) return
         val app = context.applicationContext
         val deps = (app as? DepsHolder)?.deps ?: return
-        if (!inFlight.compareAndSet(false, true)) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (!NotificationLockGuard.tryStart(now)) {
             Logx.d("prox", "notification Lock tapped again while sending; ignored")
             return
         }
         Logx.w("prox", "notification Lock tapped -> sending Lock")
-        // The user has acted on the alarm: stop the sound, keep the record until the Lock is confirmed.
-        UnverifiedLockNotifier.silenceAlarm(app)
-        UnverifiedLockNotifier.showLockSending(app)
+        // The user has acted on the alarm: stop the sound (audible warnings stay quiet while the Lock
+        // is on its way), keep the record until the Lock is confirmed.
+        UnverifiedLockNotifier.onUserLockStarted(app)
         val pending = goAsync()
-        scope.launch {
-            try {
-                val result = withTimeoutOrNull(SEND_TIMEOUT_MS) { deps.vehicleControl.send(Command.LOCK) }
-                val outcome = NotificationLockOutcome.of(result)
-                Logx.w("prox", "notification Lock -> $outcome")
-                if (outcome == NotificationLockOutcome.FAILED) UnverifiedLockNotifier.showLockFailed(app)
+        val send = scope.launch {
+            // The send is not cancelled by the broadcast deadline: the cloud path can take longer than a
+            // receiver may live, and a cancelled request could already have reached the car.
+            val result = try {
+                runCatching { deps.vehicleControl.send(Command.LOCK) }.getOrNull()
             } finally {
-                inFlight.set(false)
-                pending.finish()
+                NotificationLockGuard.finish()
+                UnverifiedLockNotifier.onUserLockFinished()
             }
+            val outcome = NotificationLockOutcome.of(result)
+            Logx.w("prox", "notification Lock -> $outcome")
+            if (outcome == NotificationLockOutcome.FAILED) UnverifiedLockNotifier.showLockFailed(app)
+        }
+        scope.launch {
+            // Hand the broadcast back well within its limit; the running service keeps the process.
+            withTimeoutOrNull(RECEIVER_HOLD_MS) { send.join() }
+            pending.finish()
         }
     }
 
     companion object {
         const val ACTION_LOCK = "com.openzeekr.app.NOTIFICATION_LOCK"
-        /** Below the background-broadcast limit; BLE needs ~1.5 s, the cloud a few seconds. */
-        private const val SEND_TIMEOUT_MS = 30_000L
-        private val inFlight = AtomicBoolean(false)
+        /** Well below the background-broadcast limit; BLE needs ~1.5 s, the cloud a few seconds. */
+        private const val RECEIVER_HOLD_MS = 20_000L
         private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     }
+}
+
+/**
+ * One notification Lock at a time. A send that never returns (process trouble) releases the guard
+ * after [MAX_IN_FLIGHT_MS], so the button is never dead for good.
+ */
+internal object NotificationLockGuard {
+    const val MAX_IN_FLIGHT_MS = 90_000L
+    private var startedAtMs = 0L
+
+    @Synchronized fun tryStart(nowElapsedMs: Long): Boolean {
+        if (startedAtMs != 0L && nowElapsedMs - startedAtMs in 0 until MAX_IN_FLIGHT_MS) return false
+        startedAtMs = nowElapsedMs
+        return true
+    }
+
+    @Synchronized fun finish() { startedAtMs = 0L }
+
+    @Synchronized fun active(nowElapsedMs: Long): Boolean =
+        startedAtMs != 0L && nowElapsedMs - startedAtMs in 0 until MAX_IN_FLIGHT_MS
 }
 
 /** What the notification Lock achieved, as far as the phone can tell. */

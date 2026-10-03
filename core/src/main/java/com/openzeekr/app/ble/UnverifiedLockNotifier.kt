@@ -60,6 +60,11 @@ internal object UnverifiedLockNotifier {
         val posted = post(context, CHANNEL_ID, NOTIFICATION_ID, title, message, alarm = false, lockButton = lockButton)
         if (LockAlertPolicy.audible(event)) {
             val now = android.os.SystemClock.elapsedRealtime()
+            if (NotificationLockGuard.active(now)) {
+                // The user just tapped Lock; its outcome (confirmed, cloud, or "Lock failed") decides.
+                com.openzeekr.app.util.Logx.w("prox", "lock alarm held: notification Lock in flight (${event.name})")
+                return posted
+            }
             if (!LockAlertPolicy.alarmShouldSound(alarmRaisedAtElapsedMs, now, alarmShowing(context))) {
                 com.openzeekr.app.util.Logx.w("prox", "lock alarm suppressed (${event.name})")
                 return posted
@@ -75,17 +80,26 @@ internal object UnverifiedLockNotifier {
         return posted
     }
 
-    /** The notification Lock button was tapped: the record shows that a Lock is on its way. */
-    fun showLockSending(context: Context) {
-        post(context, CHANNEL_ID, NOTIFICATION_ID, LOCK_SENDING_TITLE, LOCK_SENDING_TEXT, alarm = false, lockButton = false)
+    /**
+     * The notification Lock button was tapped: the sound stops and the record shows that a Lock is on
+     * its way (with the button, so a lost outcome never leaves a dead record). Audible warnings are
+     * held until the outcome ([NotificationLockGuard]).
+     */
+    fun onUserLockStarted(context: Context) {
+        runCatching { NotificationManagerCompat.from(context).cancel(ALARM_NOTIFICATION_ID) }
+        post(context, CHANNEL_ID, NOTIFICATION_ID, LOCK_SENDING_TITLE, LOCK_SENDING_TEXT, alarm = false, lockButton = true)
     }
 
-    /** Neither the key link nor the cloud locked the car: one audible (not repeating) warning, Lock button again. */
+    /** The outcome is in: a later audible warning is a new episode and sounds again. */
+    fun onUserLockFinished() { alarmRaisedAtElapsedMs = 0L }
+
+    /** Neither the key link nor the cloud locked the car: the full alarm again, with the Lock button. */
     fun showLockFailed(context: Context) {
         post(context, CHANNEL_ID, NOTIFICATION_ID, LOCK_FAILED_TITLE, LOCK_FAILED_TEXT, alarm = false, lockButton = true)
         val sounded = post(context, ALARM_CHANNEL_ID, ALARM_NOTIFICATION_ID, LOCK_FAILED_TITLE, LOCK_FAILED_TEXT,
-            alarm = true, lockButton = true, insistent = false)
+            alarm = true, lockButton = true)
         if (sounded) alarmRaisedAtElapsedMs = android.os.SystemClock.elapsedRealtime()
+        com.openzeekr.app.util.Logx.w("prox", "lock alarm ${if (sounded) "raised" else "unavailable"} (notification Lock failed)")
     }
 
     private fun ensureChannels(system: NotificationManager) {
@@ -111,7 +125,7 @@ internal object UnverifiedLockNotifier {
 
     private fun post(
         context: Context, channel: String, id: Int, title: String, message: String, alarm: Boolean,
-        lockButton: Boolean, insistent: Boolean = alarm,
+        lockButton: Boolean,
     ): Boolean = runCatching {
         val manager = NotificationManagerCompat.from(context)
         if (!manager.areNotificationsEnabled()) return false
@@ -145,7 +159,7 @@ internal object UnverifiedLockNotifier {
             builder.setSilent(true).setAutoCancel(false).setOngoing(true)
         }
         val notification = builder.build()
-        if (insistent) notification.flags = notification.flags or Notification.FLAG_INSISTENT
+        if (alarm) notification.flags = notification.flags or Notification.FLAG_INSISTENT
         manager.notify(id, notification)
         true
     }.getOrDefault(false)

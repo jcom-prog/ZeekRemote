@@ -30,3 +30,19 @@ class NotificationLockTest {
         assertFalse(NotificationLockOutcome.of(null) == NotificationLockOutcome.ACCEPTED_BY_CLOUD)
     }
 }
+
+class NotificationLockGuardTest {
+    @Test fun oneAtATimeAndNeverDeadForGood() {
+        NotificationLockGuard.finish()
+        assertTrue(NotificationLockGuard.tryStart(1_000L))
+        assertFalse(NotificationLockGuard.tryStart(2_000L))
+        assertTrue(NotificationLockGuard.active(2_000L))
+        // A send that never reports back releases the button after the cap.
+        assertFalse(NotificationLockGuard.active(1_000L + NotificationLockGuard.MAX_IN_FLIGHT_MS))
+        assertTrue(NotificationLockGuard.tryStart(1_000L + NotificationLockGuard.MAX_IN_FLIGHT_MS))
+        NotificationLockGuard.finish()
+        assertFalse(NotificationLockGuard.active(5_000L))
+        assertTrue(NotificationLockGuard.tryStart(5_000L))
+        NotificationLockGuard.finish()
+    }
+}
