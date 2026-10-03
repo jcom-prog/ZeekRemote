@@ -85,6 +85,7 @@ object Logx {
     /** Verbose. Fully gated on the area's category - nothing (not even logcat) unless that
      *  category is ON. An unknown/general area logs if EITHER category is on. */
     fun d(area: String, msg: String) {
+        testSink?.invoke('D', area, msg)
         val on = when {
             area in HTTP_TAGS -> httpOn
             area in BLE_TAGS -> bleOn
@@ -94,7 +95,10 @@ object Logx {
         emit('D', area, msg); Log.d(TAG, "[$area] $msg")
     }
     /** Warning - always to logcat (low-volume, no HTTP bodies); buffered only when a category is ON. */
-    fun w(area: String, msg: String) = emit('W', area, msg).also { Log.w(TAG, "[$area] $msg") }
+    fun w(area: String, msg: String) {
+        testSink?.invoke('W', area, msg)
+        emit('W', area, msg); Log.w(TAG, "[$area] $msg")
+    }
     /** Error - always to logcat; buffered only when a category is ON. */
     fun e(area: String, msg: String, t: Throwable? = null) {
         emit('E', area, msg + (t?.let { " :: ${it.javaClass.simpleName}: ${it.message}" } ?: ""))
@@ -102,6 +106,9 @@ object Logx {
     }
 
     fun clear() { _lines.value = emptyList() }
+
+    /** Unit tests only (the whole-app simulator): receives every line, whatever the gates. */
+    @Volatile internal var testSink: ((level: Char, area: String, msg: String) -> Unit)? = null
 
     /** Full log as a single copy-pasteable string. */
     fun dump(): String = _lines.value.joinToString("\n")

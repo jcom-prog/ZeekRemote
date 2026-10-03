@@ -17,14 +17,14 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
 /** Bounded live position requests; coordinates remain in memory and listeners are removed. */
-internal class DepartureLocationSource(context: Context) {
+internal class DepartureLocationSource(context: Context) : DepartureLocator {
     private val appContext = context.applicationContext
     private val client = LocationServices.getFusedLocationProviderClient(appContext)
 
     /** Bounded live acquisition: a poor first fix does not terminate the opportunity to get an
      * anchor while the phone is still near the car. The controller cancels this on every epoch end.
      */
-    suspend fun nearAnchor(policy: NearDepartureAnchor, enabled: () -> Boolean): DepartureFix? {
+    override suspend fun nearAnchor(policy: NearDepartureAnchor, enabled: () -> Boolean): DepartureFix? {
         if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION) !=
             PackageManager.PERMISSION_GRANTED) {
             Logx.d("prox", "departure location outcome=fine_permission_missing")
@@ -85,7 +85,7 @@ internal class DepartureLocationSource(context: Context) {
     }
 
     /** Keep one request alive while evaluating a fresh pair, including after poor early fixes. */
-    suspend fun confirmsDeparture(
+    override suspend fun confirmsDeparture(
         anchor: DepartureFix,
         steps: () -> Long?,
         enabled: () -> Boolean,

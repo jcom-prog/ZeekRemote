@@ -122,4 +122,5 @@ dependencies {
 
     // Offline crypto unit tests (RPA CMAC / ECIES key unwrap)
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
 }

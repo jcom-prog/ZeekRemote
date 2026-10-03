@@ -42,7 +42,7 @@ import java.util.UUID
  * Implements [DkTransport]: writes are GATT-fragmented (see [DkFragmenter]) and
  * notifications are reassembled + CRC-checked ([DkReassembler]) into DK frames.
  */
-class DkBleManager(base: Context) : DkTransport {
+class DkBleManager(base: Context) : DkTransport, ProximityLink {
 
     // Attributed context (API 30+) so BLE scan/GATT ops carry the manifest-declared "proximity" tag and
     // AppOps stops logging "attributionTag not declared". Below R it's the plain context (no attribution).
@@ -52,7 +52,7 @@ class DkBleManager(base: Context) : DkTransport {
     enum class State { IDLE, SCANNING, CONNECTING, CONNECTED, SESSION_READY, ERROR }
 
     private val _state = MutableStateFlow(State.IDLE)
-    val state: StateFlow<State> = _state
+    override val state: StateFlow<State> = _state
     @Volatile var lastError: String? = null; private set
     /** Service-owned recovery hook: status 133 must return to the screen-off-safe offloaded route. */
     @Volatile var onStatus133Recovery: (() -> Unit)? = null
@@ -63,7 +63,7 @@ class DkBleManager(base: Context) : DkTransport {
     @Volatile var driveAuthorizationUntilMs: Long = 0L
         private set
 
-    fun noteUnlockConfirmed() {
+    override fun noteUnlockConfirmed() {
         driveAuthorizationUntilMs = System.currentTimeMillis() + DRIVE_AUTHORIZATION_WINDOW_MS
         Logx.d("ble", "unlock confirmed - keeping DK presence ready for drive authorization")
     }
@@ -147,7 +147,7 @@ class DkBleManager(base: Context) : DkTransport {
     }
 
     /** Single stable session so Deps/controllers capture it once; needs a credential to establish(). */
-    val session: DkSession by lazy { RealDkSession(this, { credential }, certPins = certPins) }
+    override val session: DkSession by lazy { RealDkSession(this, { credential }, certPins = certPins) }
 
     /** Provide provisioned key material (from cloud provisioning / import). */
     fun setCredential(cred: DkCredential) { credential = cred }
@@ -162,18 +162,18 @@ class DkBleManager(base: Context) : DkTransport {
     /** Epoch-ms of the last inbound DK frame from the car. The car pushes status (0x121 VSTATUS_SYNC
      *  etc.) when the vehicle state CHANGES (movement/doors) — bursts with long silent gaps while
      *  parked-still — so a fresh frame after silence means "activity" (e.g. you're getting out). */
-    @Volatile var lastInboundMs: Long = 0L
+    @Volatile override var lastInboundMs: Long = 0L
         private set
 
     /** Fired on EVERY inbound frame from the car, on the BLE callback thread. The proximity
      *  controller uses it to wake instantly from its unlocked idle-wait the moment the car speaks. */
-    @Volatile var onInboundActivity: (() -> Unit)? = null
+    @Volatile override var onInboundActivity: (() -> Unit)? = null
 
     /** Await this request's callback, never a scan result or the previous request's RSSI.
      * A timeout leaves the request pending until its late callback drains or GATT resets.
      */
     @SuppressLint("MissingPermission")
-    suspend fun pollRemoteRssi(): Int? = rssiPollLock.withLock {
+    override suspend fun pollRemoteRssi(): Int? = rssiPollLock.withLock {
         val current = gatt
         if (!bluetoothAvailable || current == null) {
             rssiReads.clear()
@@ -251,7 +251,7 @@ class DkBleManager(base: Context) : DkTransport {
     fun resetHandshakeBackoff() { handshakeFailStreak = 0; handshakeBackoffUntilMs = 0L }
 
     @SuppressLint("MissingPermission")
-    fun connect(deviceMac: String?) {
+    override fun connect(deviceMac: String?) {
         if (inHandshakeBackoff()) return
         // Idempotent: a second connect() while we're already scanning/connecting/connected
         // would start a *new* scan on the shared scanner — which resets state to SCANNING and
@@ -300,7 +300,7 @@ class DkBleManager(base: Context) : DkTransport {
      * error -> keep-alive scan path recovers.
      */
     @SuppressLint("MissingPermission")
-    fun reconnectLast(): Boolean {
+    override fun reconnectLast(): Boolean {
         if (inHandshakeBackoff()) return false
         val dev = lastDevice ?: return false
         when (_state.value) {
@@ -624,7 +624,7 @@ class DkBleManager(base: Context) : DkTransport {
     }
 
     @SuppressLint("MissingPermission")
-    fun disconnect() {
+    override fun disconnect() {
         deliberate = true // WE tore it down — the DISCONNECTED callback must not auto-retry
         adapter?.bluetoothLeScanner?.let { runCatching { stopScanInternal(it) } }
         abortSetup()

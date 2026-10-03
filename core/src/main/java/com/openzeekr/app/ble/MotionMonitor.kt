@@ -44,7 +44,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * [source]/[hasSource] tell the caller which (if any) is active. [onMovingEdge] fires on a STILL→MOVING
  * transition so the caller can break a long idle sleep / re-acquire its wakelock the instant you move.
  */
-class MotionMonitor(context: Context) {
+class MotionMonitor(context: Context) : ProximityMotion {
     enum class Motion { UNKNOWN, STILL, MOVING }
     enum class Source { NONE, SENSORS, STEP, ACTIVITY }
 
@@ -72,27 +72,27 @@ class MotionMonitor(context: Context) {
         sensors?.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)?.takeUnless { it.isWakeUpSensor }
 
     private val _state = MutableStateFlow(Motion.UNKNOWN)
-    val state: StateFlow<Motion> = _state.asStateFlow()
+    override val state: StateFlow<Motion> = _state.asStateFlow()
 
     /** True while a moving-vehicle activity is detected (IN_VEHICLE), from Activity Recognition. */
     private val _inVehicle = MutableStateFlow(false)
     val inVehicle: StateFlow<Boolean> = _inVehicle.asStateFlow()
 
     /** Which motion source is live. [hasSource] = "a real source can wake us on movement". */
-    @Volatile var source: Source = Source.NONE
+    @Volatile override var source: Source = Source.NONE
         private set
-    val hasSource: Boolean get() = source != Source.NONE
+    override val hasSource: Boolean get() = source != Source.NONE
     /** A (non-wake-up) step detector exists that can report MOVING while the CPU is held awake. */
-    val hasStepAssist: Boolean get() = nonWakeStepDetector != null
+    override val hasStepAssist: Boolean get() = nonWakeStepDetector != null
 
     /** Diagnostic only: counted step-detector events, when the sensor is available. */
     @Volatile private var countedSteps = 0L
     @Volatile private var diagnosticStepListenerActive = false
-    val observedSteps: Long? get() = if (diagnosticStepListenerActive || source == Source.STEP ||
+    override val observedSteps: Long? get() = if (diagnosticStepListenerActive || source == Source.STEP ||
         (source == Source.ACTIVITY && nonWakeStepDetector != null)) countedSteps else null
 
     /** Invoked once on each STILL→MOVING edge (any source). Lets the caller cancel a long idle sleep. */
-    @Volatile var onMovingEdge: (() -> Unit)? = null
+    @Volatile override var onMovingEdge: (() -> Unit)? = null
 
     /** Lets the service bridge the 1.5 s security debounce with a short, bounded CPU wake. */
     @Volatile var onHardwareWake: (() -> Unit)? = null
@@ -143,7 +143,7 @@ class MotionMonitor(context: Context) {
         override fun onSensorChanged(event: SensorEvent) { if (running) countedSteps++ }
     }
 
-    fun start() {
+    override fun start() {
         if (running) return
         running = true
         // 1) Hardware trigger sensors (preferred: Doze-proof, zero standing power).
@@ -187,7 +187,7 @@ class MotionMonitor(context: Context) {
         Logx.w("motion", "no motion source at all — RSSI-steadiness only")
     }
 
-    fun stop() {
+    override fun stop() {
         if (!running) return
         running = false
         runCatching { motionDetect?.let { sensors?.cancelTriggerSensor(onMotion, it) } }
