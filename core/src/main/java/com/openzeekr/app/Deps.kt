@@ -126,15 +126,20 @@ class Deps(context: Context) {
     val proximity: ProximityController = ProximityController(
         appCtx, config, lock, ble, motion, appScope,
         // Cloud lock fallback for the walk-away lock when BLE won't confirm — never leave the car open.
-        cloudLock = { control.send(com.openzeekr.app.remote.Command.LOCK) is com.openzeekr.app.remote.CallResult.Ok },
+        // Without a cloud sign-in (e.g. the official app holds the session) these answer "not verified"
+        // at once instead of sending requests that can only fail; the BLE key keeps working.
+        cloudLock = { config.current().accessToken.isNotBlank() &&
+            control.send(com.openzeekr.app.remote.Command.LOCK) is com.openzeekr.app.remote.CallResult.Ok },
         // Cloud lock-state probe for the out-of-range backstop: centralLockingStatus "1"=locked, "0"=unlocked.
         cloudIsLocked = {
-            (control.status() as? com.openzeekr.app.remote.CallResult.Ok)?.value
+            if (config.current().accessToken.isBlank()) null
+            else (control.status() as? com.openzeekr.app.remote.CallResult.Ok)?.value
                 ?.additionalVehicleStatus?.drivingSafetyStatus?.centralLockingStatus
                 ?.let { it == "1" }
         },
         cloudLockSnapshot = {
-            (control.status() as? com.openzeekr.app.remote.CallResult.Ok)?.value?.let { status ->
+            if (config.current().accessToken.isBlank()) null
+            else (control.status() as? com.openzeekr.app.remote.CallResult.Ok)?.value?.let { status ->
                 val state = status.additionalVehicleStatus?.drivingSafetyStatus?.centralLockingStatus
                 if (state != "1" && state != "0") null
                 else com.openzeekr.app.ble.CloudLockSnapshot(

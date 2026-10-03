@@ -27,7 +27,8 @@ import com.openzeekr.app.ble.ProximityService
  * the stock app: on open it requests the location (incl. background) + Bluetooth +
  * notification permissions needed to range the car (RSSI/MAC) and hold the key
  * connection, prompts to lift battery optimization, and starts/stops the
- * foreground key service to follow the logged-in + provisioned state.
+ * foreground key service to follow the provisioned-key state (a provisioned key and a VIN; it does
+ * not depend on the cloud sign-in, see AppRoot).
  */
 @Composable
 fun AppBootstrap(deps: Deps, serviceEnabled: Boolean) {
@@ -62,7 +63,7 @@ fun AppBootstrap(deps: Deps, serviceEnabled: Boolean) {
         deps.push.registerIfLoggedIn()
     }
 
-    // Keep the foreground key service running exactly while logged-in + provisioned,
+    // Keep the foreground key service running exactly while a key is provisioned (with a VIN),
     // but only once the connectedDevice FGS is actually allowed to start.
     LaunchedEffect(serviceEnabled, foregroundReady) {
         if (serviceEnabled && canStartKeyService(context)) ProximityService.start(context)

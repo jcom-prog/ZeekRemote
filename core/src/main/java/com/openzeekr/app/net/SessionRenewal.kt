@@ -126,7 +126,7 @@ class SessionRenewer(
                 // The official app took the session while we were renewing: yield to it (same state as
                 // a normal 079021 kick-out). The UI may already have reset loggedInElsewhere, so the
                 // monotonic counter is checked instead (review 0.1.58).
-                store.update { it.copy(accessToken = "") }
+                store.update { it.copy(accessToken = "", cloudSignedInElsewhere = true) }
                 ok = false
                 yielded = true
                 Logx.w("session", "re-login yielded: signed in elsewhere during renewal")
