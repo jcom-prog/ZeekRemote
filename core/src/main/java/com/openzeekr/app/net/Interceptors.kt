@@ -56,14 +56,23 @@ class HeaderInterceptor(private val store: ConfigStore) : Interceptor {
         ZeekrConst.loggedInHeaders(cfg.projectId, cfg.appInstanceId).forEach { (k, v) ->
             if (chain.request().header(k) == null) b.header(k, v)
         }
-        if (cfg.accessToken.isNotBlank()) b.header("authorization", cfg.accessToken)
+        // bearer_login during a sign-in renewal must look exactly like a first sign-in: no stale
+        // (expired) bearer and no x-vin, as after Sign out (review 0.1.58).
+        val freshLogin = chain.request().header(FRESH_LOGIN_HEADER) != null
+        b.removeHeader(FRESH_LOGIN_HEADER)
+        if (cfg.accessToken.isNotBlank() && !freshLogin) b.header("authorization", cfg.accessToken)
         // X-VIN is AES-CBC(vin_key/vin_iv)-encrypted; only send it when we can encrypt
         // it correctly (blank key -> omit rather than send a bad raw value).
-        val sendVin = cfg.vin.isNotBlank() && cfg.vinKey.isNotBlank() && cfg.vinIv.isNotBlank()
+        val sendVin = !freshLogin && cfg.vin.isNotBlank() && cfg.vinKey.isNotBlank() && cfg.vinIv.isNotBlank()
         if (sendVin) b.header("x-vin", VinCrypto.encryptVin(cfg.vin, cfg.vinKey, cfg.vinIv))
         Logx.d("tsp", "${chain.request().method} ${chain.request().url.encodedPath} " +
-            "auth=${if (cfg.accessToken.isNotBlank()) "yes" else "no"} x-vin=${if (sendVin) "yes" else "no"}")
+            "auth=${if (cfg.accessToken.isNotBlank() && !freshLogin) "yes" else "no"} x-vin=${if (sendVin) "yes" else "no"}")
         return chain.proceed(b.build())
+    }
+
+    companion object {
+        /** Internal marker (never sent): build this TSP request as an unauthenticated first sign-in. */
+        const val FRESH_LOGIN_HEADER = "X-OZ-Fresh-Login"
     }
 }
 

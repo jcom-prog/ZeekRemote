@@ -38,7 +38,14 @@ internal object ReloginPolicy {
     fun expiresSoon(nowMs: Long, expiresAtMs: Long): Boolean =
         expiresAtMs > 0L && expiresAtMs - nowMs <= RENEW_BEFORE_EXPIRY_MS
 
-    fun isTokenExpired(body: String?): Boolean = body?.contains(TOKEN_EXPIRED_CODE) == true
+    private val expiredCode = Regex("\"code\"\\s*:\\s*\"?$TOKEN_EXPIRED_CODE\"?(?![0-9])")
+
+    /** True only for a response whose `code` field is 079012 (not any digits elsewhere in the body). */
+    fun isTokenExpired(body: String?): Boolean = body != null && expiredCode.containsMatchIn(body)
+
+    /** A failure that never reached a server verdict (offline, timeout): not counted toward the stop. */
+    fun isNetworkFailure(t: Throwable?): Boolean =
+        generateSequence(t) { it.cause }.take(8).any { it is java.io.IOException }
 
     /** JWT `exp` (epoch seconds) to epoch ms; null when absent or implausible. */
     fun expiryMs(expClaim: String?): Long? =
@@ -89,21 +96,41 @@ class SessionRenewer(
     suspend fun refreshNow(): Boolean = renew(manual = true, reason = "manual")
 
     private suspend fun renew(manual: Boolean, reason: String): Boolean {
-        if (!mutex.tryLock()) return false
+        if (!mutex.tryLock()) {
+            if (manual) _state.value = _state.value.copy(message = "A sign-in refresh is already running")
+            return false
+        }
         try {
             val cfg = store.current()
-            // Signed out (or kicked out by 079021): nothing to renew; the user signs in again.
-            if (cfg.accessToken.isBlank() || cfg.email.isBlank() || cfg.password.isBlank()) return false
+            // Signed out, or kicked out by 079021 (the official app holds the session): never fight it.
+            if (SessionSignal.loggedInElsewhere.value || cfg.accessToken.isBlank() ||
+                cfg.email.isBlank() || cfg.password.isBlank()) {
+                if (manual) _state.value = State(autoStopped = autoStopped(), message =
+                    if (SessionSignal.loggedInElsewhere.value) "Signed in elsewhere - sign in again in Settings"
+                    else "No saved sign-in to refresh")
+                return false
+            }
             val t = now()
             if (!manual && !ReloginPolicy.autoAllowed(t, cfg.reloginLastAttemptAtMs, cfg.reloginFailures)) return false
             if (!manual && reason == "expires soon" && !ReloginPolicy.expiresSoon(t, cfg.accessTokenExpiresAtMs)) return false
             store.update { it.copy(reloginLastAttemptAtMs = t, reloginFailures = if (manual) 0 else it.reloginFailures) }
             _state.value = State(inFlight = true)
             Logx.d("session", "re-login start ($reason)")
-            val ok = login().isSuccess
+            val result = login()
+            var ok = result.isSuccess
+            // Single-car app: a renewal keeps the active car exactly as it was.
+            if (ok) store.update { it.copy(vin = cfg.vin.ifBlank { it.vin }, isOwner = if (cfg.vin.isNotBlank()) cfg.isOwner else it.isOwner) }
+            if (ok && SessionSignal.loggedInElsewhere.value) {
+                // The official app took the session while we were renewing: yield to it.
+                store.update { it.copy(accessToken = "") }
+                ok = false
+            }
+            val offline = !ok && ReloginPolicy.isNetworkFailure(result.exceptionOrNull())
             if (ok) {
                 store.update { it.copy(reloginFailures = 0) }
                 Logx.d("session", "re-login OK; valid until ${expiryLabel(store.current().accessTokenExpiresAtMs)}")
+            } else if (offline) {
+                Logx.w("session", "re-login not possible (no connection); not counted")
             } else {
                 store.update { it.copy(reloginFailures = it.reloginFailures + 1) }
                 Logx.w("session", "re-login failed (${store.current().reloginFailures} in a row)")
@@ -113,6 +140,7 @@ class SessionRenewer(
                 autoStopped = stopped,
                 message = when {
                     ok -> "Signed in again ✓"
+                    offline -> "No connection - sign-in will be refreshed later"
                     stopped -> "Automatic sign-in stopped after ${ReloginPolicy.MAX_AUTO_FAILURES} failures - tap Refresh sign-in"
                     else -> "Sign-in refresh failed - will retry automatically"
                 },

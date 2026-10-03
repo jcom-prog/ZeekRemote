@@ -282,7 +282,7 @@ class AccountLogin(private val store: ConfigStore) {
             // claims the active-device slot nor logs other devices out). We present as the same
             // Pixel 6a identity we already spoof to xchanger, so the whole login is one device.
             val loginDeviceId = "${ZeekrConst.XCHANGER_DEVICE_MANUFACTURE}-${ZeekrConst.XCHANGER_DEVICE_MODEL}-30-${ZeekrConst.XCHANGER_AGENT_VERSION}"
-            val bearerData = tspPost("$tsp${ZeekrConst.BEARERLOGIN_URL}", buildJsonObject {
+            val bearerData = tspPost("$tsp${ZeekrConst.BEARERLOGIN_URL}", freshLogin = true, body = buildJsonObject {
                 put("identifier", tspCode); put("identityType", 10)
                 put("loginDeviceId", loginDeviceId)
                 put("loginDeviceJgId", ""); put("loginDeviceType", 1)
@@ -293,7 +293,7 @@ class AccountLogin(private val store: ConfigStore) {
             Logx.d("login", "step 5/6 bearer_login loginDeviceId=$loginDeviceId")
             val bearer = bearerData?.get("accessToken")?.jsonPrimitive?.contentOrNull
                 ?: error("no bearer token")
-            Logx.d("login", "step 5/6 bearer OK=${Logx.preview(bearer)}")
+            Logx.d("login", "step 5/6 bearer OK")
 
             // The numeric userId (needed for DK signing = userId+deviceId+vin) is NOT
             // in user/info (that returns only the uuid) — it's a claim in the TSP
@@ -376,8 +376,9 @@ class AccountLogin(private val store: ConfigStore) {
         exec(ucClient, Request.Builder().url(url).post((body?.toString() ?: "{}").toRequestBody(jsonMedia)).build())
     private fun ucGet(url: String): JsonObject? =
         exec(ucClient, Request.Builder().url(url).get().build())
-    private fun tspPost(url: String, body: JsonObject): JsonObject? =
-        exec(tspClient, Request.Builder().url(url).post(body.toString().toRequestBody(jsonMedia)).build())
+    private fun tspPost(url: String, body: JsonObject, freshLogin: Boolean = false): JsonObject? =
+        exec(tspClient, Request.Builder().url(url).post(body.toString().toRequestBody(jsonMedia))
+            .apply { if (freshLogin) header(HeaderInterceptor.FRESH_LOGIN_HEADER, "1") }.build())
     private fun tspGetArray(url: String): List<JsonElement>? {
         val root = execRoot(tspClient, Request.Builder().url(url).get().build()) ?: return null
         requireSuccess(root, url)

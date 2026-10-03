@@ -45,4 +45,17 @@ class ReloginPolicyTest {
         assertNull(ReloginPolicy.expiryMs("abc"))
         assertNull(ReloginPolicy.expiryMs(null))
     }
+
+    @Test fun onlyTheCodeFieldCountsNotDigitsElsewhere() {
+        assertTrue(ReloginPolicy.isTokenExpired("""{"success":false, "code" : "079012"}"""))
+        assertFalse(ReloginPolicy.isTokenExpired("""{"code":"000000","data":{"id":"10790123","ts":1079012}}"""))
+        assertFalse(ReloginPolicy.isTokenExpired("""{"code":"0790123"}"""))
+    }
+
+    @Test fun offlineFailuresAreNotCountedTowardTheStop() {
+        assertTrue(ReloginPolicy.isNetworkFailure(java.net.UnknownHostException("no dns")))
+        assertTrue(ReloginPolicy.isNetworkFailure(IllegalStateException("wrap", java.net.SocketTimeoutException())))
+        assertFalse(ReloginPolicy.isNetworkFailure(IllegalStateException("request failed (9300 ) @ login")))
+        assertFalse(ReloginPolicy.isNetworkFailure(null))
+    }
 }
