@@ -106,13 +106,13 @@ jobs:
           grep -Fq 'Auto Lock needs verified departure: Bluetooth signal plus walking (sensitivity Far) or phone location. If an expected Lock is not confirmed, an alarm sounds: Lock manually and check the car.' app/src/main/java/com/openzeekr/app/ui/SetupScreen.kt
           grep -Fq 'Auto Lock needs verified departure: Bluetooth signal plus walking (sensitivity Far) or phone location. If an expected Lock is not confirmed, an alarm sounds: Lock manually and check the car.' app/src/main/java/com/openzeekr/app/ui/ControlsScreen.kt
           grep -Fq 'AutomaticLockGate(AutomaticLockGate.Mode.ACTUATE)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
-          grep -Fq 'DepartureSafetyEvidence.confirmsDeparture(anchor, previous, current, steps, nowMs)' core/src/main/java/com/openzeekr/app/ble/DepartureObservationWindow.kt
+          grep -Fq 'DepartureSafetyEvidence.confirmsDeparture(anchor, previous, current, steps, nowMs, bleCorroborated)' core/src/main/java/com/openzeekr/app/ble/DepartureObservationWindow.kt
           grep -Fq 'departureLocationSource.nearAnchor(nearAnchor)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq '.setDurationMillis(NearDepartureAnchor.WINDOW_MS)' core/src/main/java/com/openzeekr/app/ble/DepartureLocationSource.kt
           grep -Fq '.setDurationMillis(DepartureObservationWindow.WINDOW_MS)' core/src/main/java/com/openzeekr/app/ble/DepartureLocationSource.kt
           grep -Fq 'departureLocationSource.confirmsDeparture(anchor, steps = {' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq '"Automatic Lock unavailable"' core/src/main/java/com/openzeekr/app/ble/UnverifiedLockNotifier.kt
-          grep -Fq 'bleRoute = BleDepartureRoute.forLockThreshold(store.current().sensitivityLockRssi)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'bleRoute = BleDepartureRoute.forLockThreshold(config().sensitivityLockRssi)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'if ((reason == "ble-departure" || lastStrongNearAtMs > departureProofAtMs ||' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'departure = { confirmPhysicalDeparture() },' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'const val CALIBRATED_LOCK_RSSI = -82' core/src/main/java/com/openzeekr/app/ble/BleDepartureRoute.kt
