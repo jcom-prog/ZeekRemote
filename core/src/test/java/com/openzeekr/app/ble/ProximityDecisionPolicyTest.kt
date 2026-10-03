@@ -619,3 +619,56 @@ class ProximityDecisionPolicyTest {
         assertTrue("a genuinely abandoned approach must eventually cancel", cancelled)
     }
 }
+
+class ManualLockDeepFarReturnTest {
+    private fun locked() = ProximityDecisionPolicy().apply { onManualLockConfirmed() }
+
+    @Test fun walkToFifteenMetresAndBackUnlocksWhileTheMotionSensorSaysStill() {
+        // Field shape 0.1.60 (03/10 16:22, car self-lock): away to ~15 m and back, Activity
+        // Recognition STILL nearly the whole way; the motion-edge route voided itself at ~10 m.
+        val p = locked()
+        var t = 0L
+        listOf(-70, -70, -71, -81, -84, -84, -85, -89, -90, -90, -91, -92, -93, -94, -95)
+            .forEach { assertFalse(p.shouldUnlock(t, it, false, -86)); t += 1_000L }
+        t += 5_000L // far-sleep gap
+        listOf(-97, -95, -93, -94, -90, -88, -84, -84).forEach { assertFalse(p.shouldUnlock(t, it, false, -86)); t += 1_000L }
+        assertFalse(p.shouldUnlock(t, -81, false, -86)); t += 500L
+        assertFalse(p.shouldUnlock(t, -82, false, -86)); t += 500L
+        assertTrue(p.shouldUnlock(t, -81, false, -86))
+        assertTrue(p.consumeDeepFarReturnRearm())
+    }
+
+    @Test fun standingAtTenMetresWithShortDeepDipsStaysLocked() {
+        val p = locked()
+        var t = 0L
+        repeat(10) { assertFalse(p.shouldUnlock(t, -68, false, -86)); t += 1_000L }
+        // ~10 m, standing and shuffling: -84..-89, single body-shadow dips to -93.
+        val tenMetres = listOf(-86, -88, -93, -87, -89, -85, -93, -88, -84, -86, -94, -87, -88, -85)
+        repeat(4) { tenMetres.forEachIndexed { i, r -> assertFalse(p.shouldUnlock(t, r, i % 3 == 0, -86)); t += 1_000L } }
+        assertFalse(p.consumeDeepFarReturnRearm())
+    }
+
+    @Test fun shortDeepDipThenTheCarDoesNotUnlock() {
+        val p = locked()
+        var t = 0L
+        listOf(-93, -95, -94).forEach { assertFalse(p.shouldUnlock(t, it, false, -86)); t += 1_000L } // 2 s only
+        repeat(10) { assertFalse(p.shouldUnlock(t, -70, false, -86)); t += 500L }
+    }
+
+    @Test fun clearlyFarThenBackOnlyToTenMetresStaysLocked() {
+        val p = locked()
+        var t = 0L
+        repeat(8) { assertFalse(p.shouldUnlock(t, -96, false, -86)); t += 1_000L }
+        repeat(20) { assertFalse(p.shouldUnlock(t, if (it % 2 == 0) -84 else -85, false, -86)); t += 500L }
+    }
+
+    @Test fun oneStrongReadingIsNotAReturn() {
+        val p = locked()
+        var t = 0L
+        repeat(8) { assertFalse(p.shouldUnlock(t, -96, false, -86)); t += 1_000L }
+        assertFalse(p.shouldUnlock(t, -78, false, -86)); t += 1_000L
+        assertFalse(p.shouldUnlock(t, -90, false, -86)); t += 1_000L
+        assertFalse(p.shouldUnlock(t, -79, false, -86)); t += 500L
+        assertFalse(p.shouldUnlock(t, -88, false, -86))
+    }
+}

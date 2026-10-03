@@ -1025,6 +1025,10 @@ class ProximityController(
         val unlockQualified = !armedUnlocked && !needToUnlock && decisionPolicy.shouldUnlock(
             now, smoothed, motion.state.value == MotionMonitor.Motion.MOVING, unlockThresh,
         )
+        if (decisionPolicy.consumeDeepFarReturnRearm()) {
+            Logx.d("prox", "return after Lock recognised from signal (clearly far, now near rssi=$smoothed) " +
+                "-> approach unlock rearmed")
+        }
         if (armedDecision == ProximityDecisionPolicy.ArmedDecision.ARRIVAL_CONFIRMED) {
             Logx.d("prox", "arrival confirmed (rssi=$smoothed) — sustained-near guard passed")
         }

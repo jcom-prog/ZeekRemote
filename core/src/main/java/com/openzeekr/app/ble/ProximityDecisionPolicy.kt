@@ -55,6 +55,15 @@ internal class ProximityDecisionPolicy {
     private var manualWeakReturnMoving = false
     private var manualWeakNearSinceMs = UNSET_MS
     private var pendingUnlockFarSinceMs = UNSET_MS
+    private var manualDeepFarSinceMs = UNSET_MS
+    private var manualDeepFarReadings = 0
+    private var manualDeepFarSeen = false
+    private var manualDeepReturnSinceMs = UNSET_MS
+    private var manualDeepReturnReadings = 0
+
+    /** Set once when a return after a Lock was recognised from the signal alone (for the log). */
+    var deepFarReturnRearmed = false
+        private set
 
     internal fun isStrongNear(rssi: Int): Boolean = rssi >= STRONG_NEAR_RSSI
 
@@ -241,6 +250,13 @@ internal class ProximityDecisionPolicy {
 
         if (manualDeparture) {
             manualNearPeakRssi = maxOf(manualNearPeakRssi, rssi)
+            if (tryRearmManualDeepFarReturn(nowMs, rssi, unlockThreshold)) {
+                finishSameLinkReturn()
+                // The sustained strong return is itself the approach proof: no motion edge needed.
+                unlockQualifiedAtMs = nowMs
+                deepFarReturnRearmed = true
+                return true
+            }
             // A motion sensor can report STILL during departure and allow far-sleep before the
             // ordinary FAR threshold is sampled. Admit that route only after a large drop from
             // the manual-lock near signal, a long stationary interval, a new motion edge, and a
@@ -347,6 +363,42 @@ internal class ProximityDecisionPolicy {
         return true
     }
 
+    /**
+     * A return after a Lock (own or the car's self-lock), recognised from the signal alone. Field
+     * 03/10 16:22 (0.1.60): after the car locked itself the user walked to ~15 m (-92..-98 dBm) and
+     * back; Activity Recognition said STILL for most of the walk both ways, the stand-still/motion-edge
+     * route below voided itself at ~10 m and the car stayed locked at the door.
+     * Departure: consistently clearly far, at least [MANUAL_DEEP_FAR_MARGIN_DB] beyond the unlock
+     * threshold for [MANUAL_DEEP_FAR_CONFIRM_MS] ([MANUAL_DEEP_FAR_MIN_READINGS] readings or more;
+     * any weaker-than-deep reading restarts it). In a pocket at the door the field showed -78..-86,
+     * at ~10 m about -84..-89, so standing near the car or at 10 m never qualifies.
+     * Return: then [MANUAL_DEEP_RETURN_CONFIRM_MS] of readings at least [MANUAL_DEEP_RETURN_MARGIN_DB]
+     * stronger than the unlock threshold (an ordinary approach unlocks around the threshold).
+     */
+    private fun tryRearmManualDeepFarReturn(nowMs: Long, rssi: Int, unlockThreshold: Int): Boolean {
+        if (!manualDeepFarSeen) {
+            if (rssi <= unlockThreshold - MANUAL_DEEP_FAR_MARGIN_DB) {
+                if (manualDeepFarSinceMs == UNSET_MS) manualDeepFarSinceMs = nowMs
+                manualDeepFarReadings++
+                if (manualDeepFarReadings >= MANUAL_DEEP_FAR_MIN_READINGS &&
+                    nowMs - manualDeepFarSinceMs >= MANUAL_DEEP_FAR_CONFIRM_MS) manualDeepFarSeen = true
+            } else {
+                manualDeepFarSinceMs = UNSET_MS
+                manualDeepFarReadings = 0
+            }
+            return false
+        }
+        if (rssi < unlockThreshold + MANUAL_DEEP_RETURN_MARGIN_DB) {
+            manualDeepReturnSinceMs = UNSET_MS
+            manualDeepReturnReadings = 0
+            return false
+        }
+        if (manualDeepReturnSinceMs == UNSET_MS) manualDeepReturnSinceMs = nowMs
+        manualDeepReturnReadings++
+        return manualDeepReturnReadings >= MANUAL_DEEP_FAR_MIN_READINGS &&
+            nowMs - manualDeepReturnSinceMs >= MANUAL_DEEP_RETURN_CONFIRM_MS
+    }
+
     private fun tryRearmManualWeakSleep(
         nowMs: Long, rssi: Int, moving: Boolean, unlockThreshold: Int,
     ): Boolean {
@@ -414,7 +466,15 @@ internal class ProximityDecisionPolicy {
         manualWeakestRssi = 0
         manualWeakReturnMoving = false
         manualWeakNearSinceMs = UNSET_MS
+        manualDeepFarSinceMs = UNSET_MS
+        manualDeepFarReadings = 0
+        manualDeepFarSeen = false
+        manualDeepReturnSinceMs = UNSET_MS
+        manualDeepReturnReadings = 0
     }
+
+    /** Reads and clears [deepFarReturnRearmed]. */
+    fun consumeDeepFarReturnRearm(): Boolean = deepFarReturnRearmed.also { deepFarReturnRearmed = false }
 
     /** Starts a bounded departure guard for an unlock command that is already in flight. */
     fun onPendingUnlockStarted() {
@@ -614,6 +674,11 @@ internal class ProximityDecisionPolicy {
         const val MANUAL_WEAK_DROP_DB = 15
         const val MANUAL_WEAK_SLEEP_MS = 10_000L
         const val MANUAL_WEAK_RETURN_RSSI = -70
+        const val MANUAL_DEEP_FAR_MARGIN_DB = 6
+        const val MANUAL_DEEP_FAR_MIN_READINGS = 2
+        const val MANUAL_DEEP_FAR_CONFIRM_MS = 4_000L
+        const val MANUAL_DEEP_RETURN_MARGIN_DB = 4
+        const val MANUAL_DEEP_RETURN_CONFIRM_MS = 1_000L
         const val MANUAL_WEAK_RETURN_RISE_DB = 8
         const val MANUAL_WEAK_RETURN_CONFIRM_MS = 400L
     }
