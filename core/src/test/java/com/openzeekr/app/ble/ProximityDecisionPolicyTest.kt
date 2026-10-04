@@ -722,6 +722,17 @@ class ManualLockDeepFarReturnTest {
         assertTrue("back at the door after a manual Lock must open", openedAt in 0..2)
     }
 
+    @Test fun manualLockBackAtTheCarWhileTheSensorSaysStillOpensAfterALongerRun() {
+        // Activity Recognition can miss the short walk back: STILL all the way to the door.
+        val p = locked()
+        var t = 0L
+        repeat(20) { assertFalse(p.shouldUnlock(t, -66, false, -86)); t += 1_000L }
+        listOf(-90, -93, -96, -98, -97, -95, -92, -90, -88, -87, -89, -88)
+            .forEach { assertFalse(p.shouldUnlock(t, it, false, -86)); t += 1_000L }
+        listOf(-84, -80, -76, -71, -70, -70).forEach { assertFalse(p.shouldUnlock(t, it, false, -86)); t += 200L }
+        assertTrue(p.shouldUnlock(t, -69, false, -86))
+    }
+
     @Test fun manualLockStandingAtTheCarWithAShortBodyShadowStaysLocked() {
         // At the car the pocketed phone can read -84..-88 for a moment; no clear walk away: stays locked.
         val p = locked()

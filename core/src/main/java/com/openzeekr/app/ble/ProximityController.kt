@@ -1189,6 +1189,10 @@ class ProximityController internal constructor(
                     // Linked, locked, signal not far, but the motion source cannot wake us on steps:
                     // keep the CPU so the step assist can report MOVING, and keep sampling.
                     _wakeLockNeeded.value = true; farAsleep = false
+                    // A stop ends the previous walk: the next MOVING starts a fresh walk-time backstop.
+                    // Field 04/10 12:02 (0.1.66): the backstop of the walk out to 10 m expired during
+                    // the 40 s stop, the walk back went to far-sleep and the car opened 5 s late.
+                    farApproachDeadline = 0L; farApproachRefDist = Double.MAX_VALUE
                     nextIntervalMs = LinkedApproachWatch.WATCH_POLL_MS
                 }
                 motion.state.value == MotionMonitor.Motion.MOVING && withinApproachBackstop(now, dist) -> {

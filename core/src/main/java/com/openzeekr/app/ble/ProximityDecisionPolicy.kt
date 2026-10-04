@@ -362,10 +362,13 @@ internal class ProximityDecisionPolicy {
             // (field 04/10 10:25, 0.1.65: Lock, walk to 10 m (-98), turning round there gave only
             // 0.3 s STILL, back at the door at -62 and the car stayed locked). The level is the
             // strong-near boundary: turning round at 10 m peaked at -78..-81, never near it.
-            if (moving && manualLowestRssi <= unlockThreshold - MANUAL_AT_CAR_DIP_DB &&
+            // Activity Recognition can miss the short walk back entirely (STILL all the way): then
+            // a longer run at the car is required instead of the motion.
+            if (manualLowestRssi <= unlockThreshold - MANUAL_AT_CAR_DIP_DB &&
                 nowMs - departureSameLinkFarQualifiedAtMs >= SAME_LINK_RETURN_GUARD_MS) {
                 if (rssi >= STRONG_NEAR_RSSI) manualAtCarReadings++ else manualAtCarReadings = 0
-                if (manualAtCarReadings >= MANUAL_AT_CAR_MIN_READINGS) {
+                val needed = if (moving) MANUAL_AT_CAR_MIN_READINGS else MANUAL_AT_CAR_STILL_MIN_READINGS
+                if (manualAtCarReadings >= needed) {
                     finishSameLinkReturn()
                     unlockQualifiedAtMs = nowMs
                     return true
@@ -835,6 +838,7 @@ internal class ProximityDecisionPolicy {
         /** The walk away must have dipped to the deep-far level (field: -98 at ~10 m; at the car -55..-81). */
         const val MANUAL_AT_CAR_DIP_DB = 6
         const val MANUAL_AT_CAR_MIN_READINGS = 2
+        const val MANUAL_AT_CAR_STILL_MIN_READINGS = 4
         /** Linked-watch samples every 1 s; a longer silence is a far-sleep gap. */
         const val MANUAL_DEEP_MAX_GAP_MS = 2_500L
         const val MANUAL_DEEP_PROOF_TTL_MS = 60_000L
