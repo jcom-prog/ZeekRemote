@@ -48,6 +48,8 @@ internal class ProximityDecisionPolicy {
     private var manualStillReady = false
     private var manualReturnMoving = false
     private var manualReturnStrongReadings = 0
+    private var manualLowestRssi = 0
+    private var manualAtCarReadings = 0
     private var manualStillRssi = 0
     private var manualStillRebound = false
     private var manualNearPeakRssi = Int.MIN_VALUE
@@ -333,6 +335,7 @@ internal class ProximityDecisionPolicy {
         }
         if (manualDeparture) {
             manualNearPeakRssi = maxOf(manualNearPeakRssi, rssi)
+            manualLowestRssi = minOf(manualLowestRssi, rssi)
             // A motion sensor can report STILL during departure and allow far-sleep before the
             // ordinary FAR threshold is sampled. Admit that route only after a large drop from
             // the manual-lock near signal, a long stationary interval, a new motion edge, and a
@@ -355,6 +358,19 @@ internal class ProximityDecisionPolicy {
                 if (nowMs - departureSameLinkFarSinceMs < SAME_LINK_FAR_CONFIRM_MS) return false
                 departureSameLinkFarQualifiedAtMs = nowMs
             }
+            // Back AT the car after a clear walk away, while moving: the stop below can be missed
+            // (field 04/10 10:25, 0.1.65: Lock, walk to 10 m (-98), turning round there gave only
+            // 0.3 s STILL, back at the door at -62 and the car stayed locked). The level is the
+            // strong-near boundary: turning round at 10 m peaked at -78..-81, never near it.
+            if (moving && manualLowestRssi <= unlockThreshold - MANUAL_AT_CAR_DIP_DB &&
+                nowMs - departureSameLinkFarQualifiedAtMs >= SAME_LINK_RETURN_GUARD_MS) {
+                if (rssi >= STRONG_NEAR_RSSI) manualAtCarReadings++ else manualAtCarReadings = 0
+                if (manualAtCarReadings >= MANUAL_AT_CAR_MIN_READINGS) {
+                    finishSameLinkReturn()
+                    unlockQualifiedAtMs = nowMs
+                    return true
+                }
+            } else manualAtCarReadings = 0
             if (!moving) {
                 manualReturnMoving = false
                 manualReturnStrongReadings = 0
@@ -582,6 +598,8 @@ internal class ProximityDecisionPolicy {
         manualStillReady = false
         manualReturnMoving = false
         manualReturnStrongReadings = 0
+        manualLowestRssi = 0
+        manualAtCarReadings = 0
         manualStillRssi = 0
         manualStillRebound = false
         manualNearPeakRssi = Int.MIN_VALUE
@@ -814,6 +832,9 @@ internal class ProximityDecisionPolicy {
         /** Motion-gated return after a manual Lock / self-lock: past the 10 m turn-round plateau (-81). */
         const val MANUAL_MOTION_RETURN_MARGIN_DB = 6
         const val MANUAL_MOTION_RETURN_MIN_READINGS = 2
+        /** The walk away must have dipped to the deep-far level (field: -98 at ~10 m; at the car -55..-81). */
+        const val MANUAL_AT_CAR_DIP_DB = 6
+        const val MANUAL_AT_CAR_MIN_READINGS = 2
         /** Linked-watch samples every 1 s; a longer silence is a far-sleep gap. */
         const val MANUAL_DEEP_MAX_GAP_MS = 2_500L
         const val MANUAL_DEEP_PROOF_TTL_MS = 60_000L

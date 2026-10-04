@@ -68,6 +68,11 @@ internal object SimScenarios {
                 Mark("expect-unlock"), Walk(1.0, 2.0), Stand(10_000))),
         Scenario("F17 fast approach after long still", "phone still 7 min at 25 m (security sleep), then 2.0 m/s", 25.0,
             listOf(Stand(420_000)) + approachAndOpen(2.0)),
+        // User 04/10: manual Lock, 10 m and turning round (stay locked), then back to the car (open).
+        Scenario("F18 manual lock, 10 m and back", "manual Lock, 30 s at the car, 10 m turning round 30 s, back to the door", 30.0,
+            approachAndOpen() + listOf(ManualLock, Mark("expect-stay-locked"), Stand(30_000), Walk(10.0, 1.0),
+                Shuffle(30_000, -6.0), Stand(3_000, Facing.TOWARD), Mark("-"), Walk(1.0),
+                Mark("expect-unlocked-by-end"), Stand(10_000))),
     )
 
     /** families x carry x motion profile x seeds. */

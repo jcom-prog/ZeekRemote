@@ -703,6 +703,35 @@ class ManualLockDeepFarReturnTest {
             .forEach { assertFalse(p.shouldUnlock(t, it, true, -86)); t += 200L }               // turning at 10 m
     }
 
+    @Test fun manualLockWalkToTenMetresAndBackToTheDoorOpensAtTheCar() {
+        // Field shape 0.1.65 (04/10 10:24-10:25): Lock, 50 s at the car, walk to ~10 m (-98 behind
+        // the body), turning round there (Activity Recognition: 0.3 s STILL), back to the door.
+        val p = locked()
+        var t = 0L
+        listOf(-62, -66, -70, -75, -80, -78, -64, -68, -72, -76, -81, -79, -70, -66, -82, -84, -88, -90)
+            .forEach { assertFalse(p.shouldUnlock(t, it, false, -86)); t += 1_000L }      // at the car, STILL
+        listOf(-98, -98, -96, -97, -97, -97, -97, -96, -96, -92, -90, -88, -88, -89, -86, -85, -85, -83, -84,
+            -85, -86, -84, -85, -86, -86, -84, -86, -86, -86, -88, -88, -87, -85, -87, -87, -86, -85, -86, -86)
+            .forEach { assertFalse(p.shouldUnlock(t, it, true, -86)); t += 200L }          // to 10 m, turning
+        assertFalse(p.shouldUnlock(t, -86, false, -86)); t += 300L                          // 0.3 s STILL
+        listOf(-80, -80, -78, -83, -84, -83, -87, -89, -88, -89, -86, -82, -84, -80, -81, -84, -81, -79,
+            -75, -74, -77, -76, -78, -81, -79)
+            .forEach { assertFalse(p.shouldUnlock(t, it, true, -86)); t += 200L }          // walking back
+        var openedAt = -1
+        listOf(-72, -67, -63, -62, -62).forEachIndexed { i, r -> if (p.shouldUnlock(t, r, true, -86) && openedAt < 0) openedAt = i; t += 200L }
+        assertTrue("back at the door after a manual Lock must open", openedAt in 0..2)
+    }
+
+    @Test fun manualLockStandingAtTheCarWithAShortBodyShadowStaysLocked() {
+        // At the car the pocketed phone can read -84..-88 for a moment; no clear walk away: stays locked.
+        val p = locked()
+        var t = 0L
+        repeat(3) {
+            listOf(-62, -70, -84, -86, -87, -88, -87, -86, -86, -87, -88, -86, -86, -70, -64, -62, -61)
+                .forEach { r -> assertFalse(p.shouldUnlock(t, r, true, -86)); t += 200L }
+        }
+    }
+
     @Test fun manualLockShortWalkThenBackToTheCarStillOpens() {
         // The motion-gated route still opens once the user is clearly back at the car.
         val p = locked()
