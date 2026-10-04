@@ -706,7 +706,7 @@ class ProximityController internal constructor(
                 // Our own Unlock's "1" also precedes its receipt: only an Unlock we did not send counts.
                 delay(SELF_LOCK_SETTLE_MS)
                 if (armedUnlocked || !_state.value.running) return@launch
-                Logx.w("prox", "car reopened after its self-lock (key status central=${status.centralLockCode}) " +
+                Logx.w("prox", "car reported unlocked without our Unlock (key status central=${status.centralLockCode}) " +
                     "-> departure watch re-armed")
                 onExternalUnlockConfirmed("car reopened")
             }

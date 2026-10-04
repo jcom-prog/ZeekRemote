@@ -75,6 +75,11 @@ class VehicleControl(
             if (cmd == Command.LOCK && result is CallResult.Ok) {
                 onCloudLockAccepted()
             }
+            // Field 04/10 19:08 (0.2.0): in a parking garage the key link was down and a Lock from
+            // the app failed without any trace. Category only, no response body.
+            if ((cmd == Command.LOCK || cmd == Command.UNLOCK) && result is CallResult.Err) {
+                Logx.w("ctl", "${cmd.name}: cloud request failed (key link ${ble.state.value})")
+            }
         }
     }
 

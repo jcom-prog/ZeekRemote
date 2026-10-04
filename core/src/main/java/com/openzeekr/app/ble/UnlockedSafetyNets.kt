@@ -22,31 +22,37 @@ internal class CarSelfLockDetector {
     private var generation = -1L
     private var lastCode = -1
     private var unlockAtMs = -1L
-    private var selfLocked = false
+    /** The app believes the car is locked: its own Lock or the car's self-lock (also a speed lock). */
+    private var believedLocked = false
 
-    fun onUnlockConfirmed(nowMs: Long) { unlockAtMs = nowMs; selfLocked = false }
+    fun onUnlockConfirmed(nowMs: Long) { unlockAtMs = nowMs; believedLocked = false }
 
-    fun onLockedByUs() { unlockAtMs = -1L; selfLocked = false }
+    fun onLockedByUs() { unlockAtMs = -1L; believedLocked = true }
 
     /**
      * [Event.SELF_LOCK] for a fresh unlocked -> locked transition after our Unlock; [Event.REOPENED]
-     * when, after such a self-lock, the car reports unlocked again in the same session without our
-     * own Unlock (passive entry at the handle, the fob or the inside handle; review 0.1.60).
+     * when, while the app believes the car is locked, the car reports unlocked without our own Unlock
+     * (passive entry at the handle, the fob, the inside handle, the car unlocking on parking).
+     * Field 04/10 18:36-19:07 (0.2.0): Unlock by approach, drive; the car locked while driving (3),
+     * unlocked when parked in a garage (2, then 1); the user walked away and nothing watched the
+     * open car: the self-lock handling itself had cleared the "self-locked" state, and the "2" in
+     * between was not seen as unlocked.
      */
     fun observe(status: ObservedVehicleStatus, nowMs: Long): Event {
         if (status.sessionGeneration != generation) { generation = status.sessionGeneration; lastCode = -1 }
         val previous = lastCode
         lastCode = status.centralLockCode
-        // After a self-lock, "unlocked" as the first status of a new session also counts: the user may
-        // have opened the car at the handle while the link was down (re-review 0.1.60).
-        if (selfLocked && (previous == LOCKED || previous == -1) && status.centralLockCode == UNLOCKED) {
-            selfLocked = false
+        val unlockedNow = isUnlocked(status.centralLockCode)
+        // The first status of a new session also counts: the car may have been opened while the
+        // link was down (re-review 0.1.60).
+        if (believedLocked && unlockedNow && !isUnlocked(previous)) {
+            believedLocked = false
             return Event.REOPENED
         }
         if (unlockAtMs < 0L || nowMs - unlockAtMs < MIN_AFTER_UNLOCK_MS) return Event.NONE
-        if (previous == UNLOCKED && status.centralLockCode == LOCKED) {
+        if (isUnlocked(previous) && status.centralLockCode == LOCKED) {
             unlockAtMs = -1L
-            selfLocked = true
+            believedLocked = true
             return Event.SELF_LOCK
         }
         return Event.NONE
@@ -54,8 +60,11 @@ internal class CarSelfLockDetector {
 
     companion object {
         const val UNLOCKED = 1
+        /** Seen 04/10 18:59:53 between 3 and 1 when the car unlocked on parking (driver door first). */
+        const val PARTLY_UNLOCKED = 2
         const val LOCKED = 3
         const val MIN_AFTER_UNLOCK_MS = 2_000L
+        fun isUnlocked(code: Int) = code == UNLOCKED || code == PARTLY_UNLOCKED
     }
 }
 

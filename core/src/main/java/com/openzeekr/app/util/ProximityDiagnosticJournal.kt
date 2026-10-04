@@ -77,6 +77,7 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                     message.startsWith("usable departure location anchor available") -> "ANCHOR_AVAILABLE"
                     message.startsWith("approach-unlock ARM (") -> "UNLOCK_STARTED"
                     message.startsWith("car locked itself (") -> "CAR_SELF_LOCK"
+                    message.startsWith("car reported unlocked without our Unlock (") -> "CAR_REOPENED"
                     message.startsWith("phone far from the unlocked car") -> "STATIONARY_FAR_ALARM"
                     message.startsWith("armed idle far read ") -> "IDLE_FAR_FAST"
                     message.startsWith("measurement mode on") -> "MEASURE_MODE on"
@@ -109,6 +110,8 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                 message.startsWith("onConnectionStateChange status=133 ") -> "BLE_STATUS_133"
                 else -> null
             }
+            if (area == "ctl") return Regex("(LOCK|UNLOCK): cloud request failed \\(key link ([A-Z_]{1,20})\\)")
+                .matchEntire(message)?.let { "CLOUD_${it.groupValues[1]}_FAILED ${it.groupValues[2]}" }
             if (area == "svc") return when (message) {
                 "departure location foreground=enabled" -> "LOCATION_FOREGROUND_ENABLED"
                 "departure location foreground=unavailable" -> "LOCATION_FOREGROUND_UNAVAILABLE"

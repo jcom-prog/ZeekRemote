@@ -112,4 +112,12 @@ class ProximityDiagnosticJournalTest {
             "12:02 BLE_STATUS_133"), file.readLines())
         assertFalse(file.readText().contains("PRIVATE_DEVICE_ADDRESS"))
     }
+
+    @Test fun cloudLockFailureAndReopenAreJournaledAsCategoriesOnly() {
+        assertEquals("CLOUD_LOCK_FAILED IDLE",
+            ProximityDiagnosticJournal.event("ctl", "LOCK: cloud request failed (key link IDLE)"))
+        assertNull(ProximityDiagnosticJournal.event("ctl", "LOCK: cloud request failed (token=abc)"))
+        assertEquals("CAR_REOPENED", ProximityDiagnosticJournal.event("prox",
+            "car reported unlocked without our Unlock (key status central=2) -> departure watch re-armed"))
+    }
 }

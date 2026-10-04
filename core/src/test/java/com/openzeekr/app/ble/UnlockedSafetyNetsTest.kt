@@ -60,6 +60,35 @@ class UnlockedSafetyNetsTest {
         assertEquals(CarSelfLockDetector.Event.REOPENED, d.observe(s(2, 1), 300_000L))
     }
 
+    @Test fun fieldShapeDriveSpeedLockThenUnlockOnParkingReArms() {
+        // 04/10 (0.2.0): Unlock by approach 18:32:40, the car locked while driving 18:36:47 (3),
+        // parked 18:59:53: 2, then 1. The self-lock handling calls onLockedByUs() as well.
+        val d = CarSelfLockDetector()
+        d.observe(s(8, 3), 0L)
+        assertEquals(CarSelfLockDetector.Event.NONE, d.observe(s(8, 1), 400L))
+        d.onUnlockConfirmed(200L)
+        assertEquals(CarSelfLockDetector.Event.SELF_LOCK, d.observe(s(8, 3), 247_000L))
+        d.onLockedByUs()                                   // handleCarSelfLock -> onExternalLockConfirmed
+        assertEquals(CarSelfLockDetector.Event.REOPENED, d.observe(s(8, 2), 1_633_000L))
+        assertEquals("once", CarSelfLockDetector.Event.NONE, d.observe(s(8, 1), 1_634_000L))
+    }
+
+    @Test fun carOpenedAtTheHandleAfterOurOwnLockReArms() {
+        val d = CarSelfLockDetector()
+        d.observe(s(1, 1), 0L); d.onUnlockConfirmed(10L)
+        d.onLockedByUs()
+        assertEquals(CarSelfLockDetector.Event.NONE, d.observe(s(1, 3), 5_000L))
+        assertEquals(CarSelfLockDetector.Event.REOPENED, d.observe(s(1, 1), 90_000L))
+    }
+
+    @Test fun ourOwnUnlockIsNotAReopenOnceConfirmed() {
+        val d = CarSelfLockDetector()
+        d.observe(s(1, 3), 0L)
+        d.onLockedByUs()
+        d.onUnlockConfirmed(60_000L)
+        assertEquals(CarSelfLockDetector.Event.NONE, d.observe(s(1, 1), 60_020L))
+    }
+
     @Test fun noReopenEventWithoutAPriorSelfLock() {
         val d = CarSelfLockDetector()
         d.observe(s(1, 3), 0L)
