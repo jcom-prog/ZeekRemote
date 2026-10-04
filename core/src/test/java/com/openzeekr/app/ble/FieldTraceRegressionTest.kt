@@ -143,7 +143,9 @@ class FieldTraceRegressionTest {
             }
         }
         assertTrue("real return after a 20s FAR/STILL sleep gap must unlock", firstReturn != null)
-        assertTrue("captured return must unlock before door range", firstReturn!! <= 55_284L)
+        // 0.1.65: one sample later (-77 instead of -80): the motion-gated return must rise past
+        // the 10 m turn-round plateau (field 04/10 09:38). The trace still rises further.
+        assertTrue("captured return must unlock before door range", firstReturn!! <= 55_499L)
     }
 
     @Test

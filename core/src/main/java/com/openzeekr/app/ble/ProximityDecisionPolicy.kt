@@ -47,6 +47,7 @@ internal class ProximityDecisionPolicy {
     private var manualStillSinceMs = UNSET_MS
     private var manualStillReady = false
     private var manualReturnMoving = false
+    private var manualReturnStrongReadings = 0
     private var manualStillRssi = 0
     private var manualStillRebound = false
     private var manualNearPeakRssi = Int.MIN_VALUE
@@ -356,6 +357,7 @@ internal class ProximityDecisionPolicy {
             }
             if (!moving) {
                 manualReturnMoving = false
+                manualReturnStrongReadings = 0
                 // Preserve a FAR separation even if body orientation makes the signal rebound
                 // slightly while stopped. It must remain outside the arrival crossing.
                 if (rssi <= unlockThreshold + UNLOCK_MARGIN_DB) {
@@ -412,11 +414,20 @@ internal class ProximityDecisionPolicy {
                 manualReturnMoving = true
                 manualStillRssi = minOf(manualStillRssi, rssi)
             }
-            // The return must reach the same level as the signal-only return (simulator 03/10: walking
-            // to 10 m with Activity Recognition lagging looked like "stand far, then move", and
-            // noise at -85 reopened the car at 10 m after a manual Lock).
+            // This route proves no real departure (a pause at <= the unlock level can be 10 m with
+            // the body between phone and car), so the return must keep rising past where turning
+            // round at 10 m plateaus. Field 04/10 09:38 (0.1.64): manual Lock, walk to 10 m (-97
+            // behind the body), stand, turn round: -82/-81 and no higher reopened the car at 10 m.
+            // The 0.1.35 field return rose on through -80 to -77. After a proven clear departure
+            // (>= 4 s at <= -92, see [tryRearmManualDeepFarReturn]) the 0.1.64 level stays: one
+            // reading at -82 (field 04/10 09:20: open at ~6 m).
+            val provenFar = manualDeepFarSeen
+            val margin = if (provenFar) MANUAL_DEEP_RETURN_MARGIN_DB else MANUAL_MOTION_RETURN_MARGIN_DB
+            val needed = if (provenFar) 1 else MANUAL_MOTION_RETURN_MIN_READINGS
+            if (rssi >= unlockThreshold + margin) manualReturnStrongReadings++
+            else manualReturnStrongReadings = 0
             if (nowMs - departureSameLinkFarQualifiedAtMs < SAME_LINK_RETURN_GUARD_MS ||
-                rssi < unlockThreshold + MANUAL_DEEP_RETURN_MARGIN_DB ||
+                manualReturnStrongReadings < needed ||
                 rssi < manualStillRssi + MANUAL_RETURN_RISE_DB) return false
             // At that level the return itself is the approach proof (no extra hold: the field
             // return of 0.1.35 must still open before the door).
@@ -570,6 +581,7 @@ internal class ProximityDecisionPolicy {
         manualStillSinceMs = UNSET_MS
         manualStillReady = false
         manualReturnMoving = false
+        manualReturnStrongReadings = 0
         manualStillRssi = 0
         manualStillRebound = false
         manualNearPeakRssi = Int.MIN_VALUE
@@ -799,6 +811,9 @@ internal class ProximityDecisionPolicy {
         const val SAMPLE_JITTER_MS = 150L
         /** After an automatic Lock with no clear recession: back at the car (pocket ~4-5 m); 8-10 m noise peaks at -80. */
         const val AUTO_LOCK_NEAR_RETURN_MARGIN_DB = 10
+        /** Motion-gated return after a manual Lock / self-lock: past the 10 m turn-round plateau (-81). */
+        const val MANUAL_MOTION_RETURN_MARGIN_DB = 6
+        const val MANUAL_MOTION_RETURN_MIN_READINGS = 2
         /** Linked-watch samples every 1 s; a longer silence is a far-sleep gap. */
         const val MANUAL_DEEP_MAX_GAP_MS = 2_500L
         const val MANUAL_DEEP_PROOF_TTL_MS = 60_000L

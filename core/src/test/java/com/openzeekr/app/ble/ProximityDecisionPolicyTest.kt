@@ -33,6 +33,7 @@ class ProximityDecisionPolicyTest {
         }
         assertFalse(policy.shouldUnlock(7_200L, -86, true, -86))
         // 0.1.63: the return must reach -82 (simulator: -85 noise at 10 m reopened the car).
+        // The 4 s at -98 above is a proven clear departure, so one -82 reading still suffices.
         assertFalse(policy.shouldUnlock(7_400L, -83, true, -86))
         assertTrue(policy.shouldUnlock(7_600L, -81, true, -86))
     }
@@ -47,7 +48,9 @@ class ProximityDecisionPolicyTest {
         assertFalse(policy.shouldUnlock(2_800L, -89, false, -86))
         assertFalse(policy.shouldUnlock(23_500L, -89, true, -86))
         assertFalse(policy.shouldUnlock(23_700L, -83, true, -86))
-        assertTrue(policy.shouldUnlock(23_900L, -81, true, -86))
+        assertFalse(policy.shouldUnlock(23_900L, -81, true, -86))
+        assertFalse(policy.shouldUnlock(24_100L, -79, true, -86))
+        assertTrue(policy.shouldUnlock(24_300L, -77, true, -86))
     }
 
     @Test
@@ -67,7 +70,8 @@ class ProximityDecisionPolicyTest {
         assertFalse(policy.shouldUnlock(35_600L, -88, true, -86))
         assertFalse(policy.shouldUnlock(35_800L, -89, true, -86))
         assertFalse(policy.shouldUnlock(37_200L, -86, true, -86))
-        assertTrue(policy.shouldUnlock(37_400L, -80, true, -86))
+        assertFalse(policy.shouldUnlock(37_400L, -80, true, -86))
+        assertTrue(policy.shouldUnlock(37_600L, -78, true, -86))
     }
 
     @Test
@@ -117,7 +121,8 @@ class ProximityDecisionPolicyTest {
         assertFalse(policy.shouldUnlock(8_000L, -87, false, -86))
         assertFalse(policy.shouldUnlock(8_200L, -87, true, -86))
         assertFalse(policy.shouldUnlock(8_400L, -84, true, -86))
-        assertTrue(policy.shouldUnlock(8_600L, -78, true, -86))
+        assertFalse(policy.shouldUnlock(8_600L, -78, true, -86))
+        assertTrue(policy.shouldUnlock(8_800L, -76, true, -86))
     }
 
     @Test
@@ -681,6 +686,32 @@ class ManualLockDeepFarReturnTest {
         repeat(40) { assertFalse(p.shouldUnlock(t, -88, false, -86)); t += 1_000L }   // epoch lapses at ~10 m
         // No clear departure (>= 4 s at <= -92) was ever seen: 10 m noise must not open the car.
         repeat(60) { assertFalse(p.shouldUnlock(t, listOf(-86, -88, -84, -89, -87, -85)[it % 6], it % 2 == 0, -86)); t += 1_000L }
+    }
+
+    @Test fun manualLockThenTurningRoundAtTenMetresStaysLocked() {
+        // Field shape 0.1.64 (04/10 09:37-09:38): manual Lock at the door, walk to ~10 m with the
+        // body between phone and car (down to -97 for ~2 s), stand (STILL), turn round: -82/-81.
+        val p = locked()
+        var t = 0L
+        repeat(60) { assertFalse(p.shouldUnlock(t, -60 - it % 15, true, -86)); t += 200L }      // at the car
+        listOf(-81, -85, -87, -83, -84, -88, -88, -87, -88, -86, -89, -90, -92, -93, -93, -96, -96, -96, -97,
+            -97, -97, -97, -96, -91, -88, -87, -88, -87, -86, -84, -84, -87, -85, -85, -86, -84, -87, -86, -86,
+            -83, -83, -85, -88, -89, -90, -91, -91, -91, -91, -90, -91)
+            .forEach { assertFalse(p.shouldUnlock(t, it, true, -86)); t += 200L }
+        listOf(-93, -90, -90).forEach { assertFalse(p.shouldUnlock(t, it, false, -86)); t += 1_000L } // STILL
+        listOf(-86, -82, -81, -81, -81, -83, -82, -84, -83, -82, -81)
+            .forEach { assertFalse(p.shouldUnlock(t, it, true, -86)); t += 200L }               // turning at 10 m
+    }
+
+    @Test fun manualLockShortWalkThenBackToTheCarStillOpens() {
+        // The motion-gated route still opens once the user is clearly back at the car.
+        val p = locked()
+        var t = 0L
+        repeat(15) { assertFalse(p.shouldUnlock(t, -88 - it % 3, true, -86)); t += 200L }
+        repeat(3) { assertFalse(p.shouldUnlock(t, -90, false, -86)); t += 1_000L }
+        var opened = false
+        listOf(-86, -84, -82, -80, -78, -76, -74, -72, -70).forEach { if (p.shouldUnlock(t, it, true, -86)) opened = true; t += 300L }
+        assertTrue(opened)
     }
 
     @Test fun standingAtTenMetresWithShortDeepDipsStaysLocked() {
