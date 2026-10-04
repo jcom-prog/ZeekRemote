@@ -908,4 +908,67 @@ class ManualLockDeepFarReturnTest {
         assertFalse(p.shouldUnlock(t, -90, false, -86)); t += 6_000L // evidence gone (FAR + TTL)
         assertTrue(p.shouldUnlock(t, -79, false, -86))
     }
+
+    /**
+     * Field shape 04/10 22:06 (0.2.1), parked at home: BLE departure Lock confirmed at t=800 ms,
+     * walking on indoors (-92..-97 for ~9 s, then about -89), a ~1.5 s peak while moving (smoothed
+     * -86..-81 from ~15 m) crossed the old arrival edge and reopened the car behind the user.
+     * Smoothed readings, 200 ms apart, as (rssi, moving); a far-sleep gap and a 1 s STILL as in the field.
+     */
+    private fun home2206AfterAutoLock(): List<Triple<Long, Int, Boolean>> {
+        val out = mutableListOf<Triple<Long, Int, Boolean>>()
+        var t = 800L
+        fun add(vararg rssi: Int, moving: Boolean = true) = rssi.forEach { out += Triple(t, it, moving); t += 200L }
+        add(-92, -90, -89, -88, -88, -88, -87, -88, -89, -89, -91, -91, -90, -89, -88, -86, -85, -85)
+        t += 5_000L                                                       // far-sleep
+        add(-90, -92, -92, -92, -92, -93, -94, -94, -93, -93, -94, -94, -94, -93, -94)
+        repeat(30) { add(listOf(-96, -97, -97, -96, -95)[it % 5]) }
+        add(-93, -91, -89, -89, -90, -90, -91, -91, -89, -89, -89, -89, -89, -88, -89)
+        add(-89, moving = false); t += 800L                               // a 1 s STILL
+        add(-89, -89, -89, -88, -88, -88, -89, -90, -90, -90, -90, -88)
+        add(-86, -85, -84, -83, -84, -81, -81, -82, -83, -85, -88)        // the peak
+        add(-89, -92, -94, -92, -90, -90, -92, -93, -93, -94, -95, -96, -96, -96, -97, -97, -98, -98, -99)
+        return out
+    }
+
+    @Test fun field2206APeakWhileWalkingAwayAfterAnAutomaticLockDoesNotReopen() {
+        val p = ProximityDecisionPolicy()
+        p.onUnlockConfirmed(-450_000L)          // 21:58 "car reopened" -> departure watch
+        p.onDepartureLockStarted(); p.onAutomaticLockProvenDeparture(800L)
+        home2206AfterAutoLock().forEach { (t, rssi, moving) ->
+            assertFalse("reopened at $t ms ($rssi)", p.shouldUnlock(t, rssi, moving, -86))
+        }
+    }
+
+    @Test fun field2206AfterTheAutomaticLockARealWalkBackStillReopensBeforeTheDoor() {
+        val p = ProximityDecisionPolicy()
+        p.onUnlockConfirmed(-450_000L)
+        p.onDepartureLockStarted(); p.onAutomaticLockProvenDeparture(800L)
+        home2206AfterAutoLock().forEach { (t, rssi, moving) -> p.shouldUnlock(t, rssi, moving, -86) }
+        var t = home2206AfterAutoLock().last().first + 200L
+        var openedAt = Int.MIN_VALUE
+        // Walking back outdoors: about 1.5 dB per 200 ms reading, to the door at -62.
+        listOf(-97, -95, -93, -91, -89, -87, -85, -83, -82, -81, -80, -79, -77, -75, -72, -68, -65, -62).forEach {
+            if (openedAt == Int.MIN_VALUE && p.shouldUnlock(t, it, true, -86)) openedAt = it
+            t += 200L
+        }
+        // The deep-far return: about a second at >= -82, i.e. well before the door (-62).
+        assertTrue("opened only at $openedAt", openedAt in -82..-73)
+    }
+
+    @Test fun afterAnAutomaticLockAPeakFromTenMetresNeverReopensButTheCarItselfDoes() {
+        val p = ProximityDecisionPolicy()
+        p.onUnlockConfirmed(0L)
+        p.onDepartureLockStarted(); p.onAutomaticLockProvenDeparture(1_000L)
+        var t = 1_200L
+        // Walking away clearly out of the unlock band.
+        repeat(20) { assertFalse(p.shouldUnlock(t, -93, true, -86)); t += 200L }
+        // Repeated short peaks to -80 while moving (indoors, a door or window, ~10-15 m).
+        repeat(5) {
+            listOf(-86, -84, -81, -80, -83, -88, -90, -90, -90, -90).forEach { assertFalse(p.shouldUnlock(t, it, true, -86)); t += 200L }
+        }
+        // Two readings at the car reopen.
+        assertFalse(p.shouldUnlock(t, -70, true, -86)); t += 200L
+        assertTrue(p.shouldUnlock(t, -69, true, -86))
+    }
 }

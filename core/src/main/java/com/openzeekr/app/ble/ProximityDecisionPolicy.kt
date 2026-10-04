@@ -364,16 +364,7 @@ internal class ProximityDecisionPolicy {
             // strong-near boundary: turning round at 10 m peaked at -78..-81, never near it.
             // Activity Recognition can miss the short walk back entirely (STILL all the way): then
             // a longer run at the car is required instead of the motion.
-            if (manualLowestRssi <= unlockThreshold - MANUAL_AT_CAR_DIP_DB &&
-                nowMs - departureSameLinkFarQualifiedAtMs >= SAME_LINK_RETURN_GUARD_MS) {
-                if (rssi >= STRONG_NEAR_RSSI) manualAtCarReadings++ else manualAtCarReadings = 0
-                val needed = if (moving) MANUAL_AT_CAR_MIN_READINGS else MANUAL_AT_CAR_STILL_MIN_READINGS
-                if (manualAtCarReadings >= needed) {
-                    finishSameLinkReturn()
-                    unlockQualifiedAtMs = nowMs
-                    return true
-                }
-            } else manualAtCarReadings = 0
+            if (tryRearmAtCarReturn(nowMs, rssi, moving, unlockThreshold)) return true
             if (!moving) {
                 manualReturnMoving = false
                 manualReturnStrongReadings = 0
@@ -454,25 +445,40 @@ internal class ProximityDecisionPolicy {
             unlockQualifiedAtMs = nowMs
             return true
         } else {
-            val farBoundary = unlockThreshold - FAR_MARGIN_DB
+            // After an automatic Lock only the strict routes reopen: the deep-far return above or
+            // the car itself. Field 04/10 22:06 (0.2.1): auto Lock at home, walking away indoors
+            // (-93..-99), a 1.5 s peak to -80 from ~15 m crossed the old arrival edge (-85, moving)
+            // and reopened the car behind the user. The same at-car level as after a manual Lock.
+            manualLowestRssi = minOf(manualLowestRssi, rssi)
             if (departureSameLinkFarQualifiedAtMs == UNSET_MS) {
-                if (!moving || rssi > farBoundary) {
+                if (rssi > unlockThreshold) {
                     departureSameLinkFarSinceMs = UNSET_MS
                     return false
                 }
                 if (departureSameLinkFarSinceMs == UNSET_MS) departureSameLinkFarSinceMs = nowMs
                 if (nowMs - departureSameLinkFarSinceMs < SAME_LINK_FAR_CONFIRM_MS) return false
                 departureSameLinkFarQualifiedAtMs = nowMs
-                return false
             }
-
-            val separatedLongEnough =
-                nowMs - departureSameLinkFarQualifiedAtMs >= SAME_LINK_RETURN_GUARD_MS
-            val crossedArrivalEdge = rssi >= unlockThreshold + UNLOCK_MARGIN_DB
-            if (!moving || !separatedLongEnough || !crossedArrivalEdge) return false
+            return tryRearmAtCarReturn(nowMs, rssi, moving, unlockThreshold)
         }
+    }
 
+    /**
+     * Back AT the car after a clear walk away (a FAR pause and a dip of [MANUAL_AT_CAR_DIP_DB]
+     * below the unlock threshold): [MANUAL_AT_CAR_MIN_READINGS] readings at the strong-near level
+     * while moving, [MANUAL_AT_CAR_STILL_MIN_READINGS] when Activity Recognition says STILL.
+     */
+    private fun tryRearmAtCarReturn(nowMs: Long, rssi: Int, moving: Boolean, unlockThreshold: Int): Boolean {
+        if (manualLowestRssi > unlockThreshold - MANUAL_AT_CAR_DIP_DB ||
+            nowMs - departureSameLinkFarQualifiedAtMs < SAME_LINK_RETURN_GUARD_MS) {
+            manualAtCarReadings = 0
+            return false
+        }
+        if (rssi >= STRONG_NEAR_RSSI) manualAtCarReadings++ else manualAtCarReadings = 0
+        val needed = if (moving) MANUAL_AT_CAR_MIN_READINGS else MANUAL_AT_CAR_STILL_MIN_READINGS
+        if (manualAtCarReadings < needed) return false
         finishSameLinkReturn()
+        unlockQualifiedAtMs = nowMs
         return true
     }
 

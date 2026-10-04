@@ -6,6 +6,7 @@ import com.openzeekr.app.ble.sim.Leg.OpenDoor
 import com.openzeekr.app.ble.sim.Leg.Shuffle
 import com.openzeekr.app.ble.sim.Leg.Stand
 import com.openzeekr.app.ble.sim.Leg.Walk
+import com.openzeekr.app.ble.sim.Leg.WalkPeak
 
 /*
  * The user's requirements (02/10-03/10), as expectations placed between Marks:
@@ -21,6 +22,7 @@ internal data class Scenario(val family: String, val description: String, val st
                     val gnssAccuracyM: Float? = 4f)
 
 internal object SimScenarios {
+    private val F20_PEAK_DB = System.getenv("SIM_F20_PEAK_DB")?.toDouble() ?: 15.0
     private fun approachAndOpen(speed: Double = 1.3) = listOf(
         Mark("expect-unlock"), Walk(1.0, speed), Stand(4_000), OpenDoor, Stand(20_000, shadowDb = -6.0))
 
@@ -77,6 +79,12 @@ internal object SimScenarios {
         Scenario("F19 manual lock, 10 m still, back", "manual Lock, 10 m standing still 40 s, back to the door", 30.0,
             approachAndOpen() + listOf(ManualLock, Mark("expect-stay-locked"), Stand(20_000), Walk(10.0, 1.2),
                 Stand(40_000, Facing.AWAY), Mark("expect-unlock"), Walk(1.0), Stand(10_000))),
+        // Field 04/10 22:06 (0.2.1): auto Lock at home, walking on indoors a 1.5 s peak (to about
+        // -80) reopened the car behind the user. Then a real return must still open.
+        Scenario("F20 peak while walking away", "auto Lock, 30 m, walking on a 1.5 s signal peak (+${'$'}{F20_PEAK_DB} dB), later back", 30.0,
+            approachAndOpen() + listOf(Mark("expect-lock"), Walk(30.0), Stand(40_000, Facing.AWAY), Mark("expect-stay-locked"),
+                Walk(32.0), WalkPeak(1_500, F20_PEAK_DB), Walk(36.0), Stand(20_000), Mark("expect-unlock"), Walk(1.0),
+                Stand(10_000))),
     )
 
     /** families x carry x motion profile x seeds. */
