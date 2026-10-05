@@ -39,6 +39,7 @@ on:
       - zeekremote-0.2.2-auto-lock-return
       - zeekremote-0.2.3-lock-verify
       - zeekremote-0.2.4-deep-far-departure
+      - zeekremote-0.2.5-short-stops-cloud
 
 permissions:
   contents: read
@@ -123,7 +124,8 @@ jobs:
           grep -Fq '"Automatic Lock unavailable"' core/src/main/java/com/openzeekr/app/ble/UnverifiedLockNotifier.kt
           grep -Fq 'bleRoute = BleDepartureRoute.forLockThreshold(config().sensitivityLockRssi)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'if ((reason == "ble-departure" || lastStrongNearAtMs > departureProofAtMs ||' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
-          grep -Fq 'departure = { confirmPhysicalDeparture() },' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'bleProofFresh || confirmPhysicalDeparture()' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'private const val BLE_PROOF_CLOUD_MS = 30_000L' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'const val CALIBRATED_LOCK_RSSI = -82' core/src/main/java/com/openzeekr/app/ble/BleDepartureRoute.kt
           grep -Fq 'USAGE_ALARM' core/src/main/java/com/openzeekr/app/ble/UnverifiedLockNotifier.kt
           grep -Fq 'Event.DEPARTURE_UNVERIFIED -> true' core/src/main/java/com/openzeekr/app/ble/LockAlertPolicy.kt
@@ -154,7 +156,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='110' versionName='0.2.4-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='111' versionName='0.2.5-work'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
           sha256sum "$APK"
