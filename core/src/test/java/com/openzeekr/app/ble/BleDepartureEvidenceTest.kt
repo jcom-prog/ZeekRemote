@@ -238,4 +238,64 @@ class BleDepartureEvidenceTest {
         second.run(10_000, { -90 })
         assertNull(second.firstConfirmAt)
     }
+
+    // ---- very deep far alone (0.2.4): no steps, no observed arrival, no GNSS needed ----
+
+    @Test fun walkingVeryDeepFarConfirmsWithoutStepsAfterTwelveSeconds() {
+        // Field 05/10 16:07 shape: S24+ screen off, the step detector delivered 2 steps.
+        val f = Feed(BleDepartureEvidence(lock))
+        f.run(11_800L, raw = { -98 }, stepsAvailable = false)
+        assertNull("not before 12 s", f.firstConfirmAt)
+        f.run(1_000L, raw = { -98 }, stepsAvailable = false)
+        assertTrue(f.firstConfirmAt!! in 12_000L..12_400L)
+    }
+
+    @Test fun standingStillVeryDeepAtTheBootNeverConfirms() {
+        // Simulator F06: back pocket, body and car between, standing at the boot read ~-97.
+        val f = Feed(BleDepartureEvidence(lock))
+        f.run(60_000L, raw = { -97 }, moving = false, stepsAvailable = false)
+        assertNull(f.firstConfirmAt)
+    }
+
+    @Test fun aStopRestartsTheVeryDeepWindow() {
+        val f = Feed(BleDepartureEvidence(lock))
+        repeat(5) {
+            f.run(8_000L, raw = { -98 }, stepsAvailable = false)
+            f.run(600L, raw = { -98 }, moving = false, stepsAvailable = false)
+        }
+        assertNull(f.firstConfirmAt)
+    }
+
+    @Test fun walkingJustAboveTheVeryDeepLevelWithoutStepsNeverConfirms() {
+        val f = Feed(BleDepartureEvidence(lock))
+        f.run(60_000L, raw = { -94 }, stepsAvailable = false)
+        assertNull(f.firstConfirmAt)
+    }
+
+    @Test fun sparseVeryDeepReadingsNeverConfirm() {
+        // Unobserved time is no evidence: far-sleep reads 5 s apart, or a 1.2 s cadence.
+        val f = Feed(BleDepartureEvidence(lock))
+        f.run(60_000L, raw = { -100 }, stepsAvailable = false, stepMs = 1_200L)
+        assertNull(f.firstConfirmAt)
+    }
+
+    @Test fun oneShallowerReadingRestartsTheVeryDeepWindow() {
+        val f = Feed(BleDepartureEvidence(lock))
+        var n = 0
+        f.run(60_000L, raw = { if (++n % 50 == 0) -90 else -98 }, stepsAvailable = false)  // every 10 s
+        assertNull(f.firstConfirmAt)
+    }
+
+    @Test fun field1607ShapeConfirmsAboutFortySecondsAfterLeavingTheCar() {
+        // 05/10 16:07 (0.2.2): in the car, out at 16:07:08, a stop at the car, walking away from
+        // 16:07:20 (-86..-90), a stop, then -98..-100 walking; 2 steps counted in total.
+        val f = Feed(BleDepartureEvidence(lock))
+        f.run(8_000L, raw = { -58 }, stepsPerSecond = 0.0)
+        f.run(12_000L, raw = { -64 }, stepsPerSecond = 0.0)
+        f.run(19_000L, raw = { -88 }, stepsPerSecond = 0.0)
+        f.run(1_000L, raw = { -95 }, moving = false, stepsPerSecond = 0.0)
+        f.run(20_000L, raw = { -99 }, stepsPerSecond = 0.0)
+        val walkStart = 40_000L
+        assertTrue("confirmed ${f.firstConfirmAt}", f.firstConfirmAt!! in walkStart + 12_000L..walkStart + 12_400L)
+    }
 }

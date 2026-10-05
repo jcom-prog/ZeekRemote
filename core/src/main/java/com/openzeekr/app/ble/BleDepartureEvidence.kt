@@ -35,6 +35,8 @@ internal class BleDepartureEvidence(
     private val maxGapMs: Long = MAX_GAP_MS,
     private val minRecessionDb: Int = MIN_RECESSION_DB,
     private val deepFarMarginDb: Int = DEEP_FAR_MARGIN_DB,
+    private val veryDeepMarginDb: Int = VERY_DEEP_MARGIN_DB,
+    private val veryDeepMs: Long = VERY_DEEP_MS,
 ) {
     private val strongNearRssi: Int = maxOf(strongNearRssi, lockThreshold + MIN_STRONG_GAP_DB)
     enum class Decision { NONE, CONFIRMED }
@@ -48,6 +50,7 @@ internal class BleDepartureEvidence(
     // Unlike the time windows, a not-moving restart or sampling gap does not erase it.
     private var strongRefSmoothed: Int? = null
     private var weakSinceMs = UNSET
+    private var veryDeepSinceMs = UNSET
     private var confirmedAtMs = UNSET
 
     /** Categorical reason for the latest decision; never contains a position. */
@@ -72,11 +75,31 @@ internal class BleDepartureEvidence(
         if (previous != UNSET && nowMs <= previous) {
             // Duplicate or backward time cannot extend any window; keep the old sample time so a
             // replayed callback cannot shift the continuity boundary forward either.
+            veryDeepSinceMs = UNSET
             restartObservation()
             return decide("time_not_advancing")
         }
         lastSampleAtMs = nowMs
         val gap = previous != UNSET && nowMs - previous > maxGapMs
+
+        // Very deep far alone, without steps or an observed arrival (field 05/10, 0.2.2/0.2.3):
+        // with the screen off the S24+ step detector reported 2 steps for a whole walk away
+        // (16:07), and a pass-by unlock at ~10 m never saw the car up close (17:18); GNSS could
+        // not confirm either, so the car stayed open. At the car, even in a back pocket behind the
+        // body, the field never read below about -86; a continuously observed run at
+        // [veryDeepMarginDb] below the lock threshold for [veryDeepMs] is not standing at the car.
+        // Only while walking: standing at the boot behind the car body with the phone in a back
+        // pocket can read this deep for a while (simulator F06), walking that long cannot.
+        val veryDeep = moving && rawRssi < strongNearRssi && smoothedRssi <= lockThreshold - veryDeepMarginDb
+        veryDeepSinceMs = when {
+            !veryDeep -> UNSET
+            gap || veryDeepSinceMs == UNSET -> nowMs   // unobserved time is not evidence
+            else -> veryDeepSinceMs
+        }
+        if (veryDeepSinceMs != UNSET && nowMs - veryDeepSinceMs >= veryDeepMs) {
+            if (confirmedAtMs == UNSET) confirmedAtMs = nowMs
+            return decide("confirmed")
+        }
 
         if (rawRssi >= strongNearRssi) {
             sawStrongInEpoch = true
@@ -146,6 +169,7 @@ internal class BleDepartureEvidence(
      * held proof was revoked elsewhere: the next sample must not simply re-issue it.
      */
     fun restart() {
+        veryDeepSinceMs = UNSET
         restartObservation()
         reason = "restarted"
     }
@@ -177,5 +201,7 @@ internal class BleDepartureEvidence(
         const val MAX_GAP_MS = 1_000L
         const val MIN_RECESSION_DB = 6
         const val DEEP_FAR_MARGIN_DB = 3
+        const val VERY_DEEP_MARGIN_DB = 13
+        const val VERY_DEEP_MS = 12_000L
     }
 }
