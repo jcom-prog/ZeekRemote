@@ -45,6 +45,11 @@ class ProximityDiagnosticJournalTest {
             "control 0x02: received, but no locked status within 3000 ms -> NOT_EXECUTED"))
         assertEquals("MANUAL_LOCK_NOT_EXECUTED", ProximityDiagnosticJournal.event("prox",
             "manual Lock not executed: no fresh locked report; alarm posted=true"))
+        assertEquals("AUTO_LOCK_CLOUD_VERIFIED", ProximityDiagnosticJournal.event("prox",
+            "ble-departure: locked via cloud; a newer cloud report confirms it"))
+        assertEquals("CLOUD_LOCK_BLE_BACKED", ProximityDiagnosticJournal.event("prox",
+            "ble-departure: cloud Lock backed by a fresh BLE departure proof"))
+        assertNull(ProximityDiagnosticJournal.event("prox", "rssi=-98 ema=-97 (verifying departure) motion=MOVING"))
         assertEquals("CAR_LOCKED_CHIME", ProximityDiagnosticJournal.event("prox",
             "car reported locked -> 'Auto gesloten' notification"))
         assertEquals("BLE_DEPARTURE_REVOKED strong_near",

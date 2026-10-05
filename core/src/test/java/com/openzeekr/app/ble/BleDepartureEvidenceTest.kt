@@ -257,13 +257,35 @@ class BleDepartureEvidenceTest {
         assertNull(f.firstConfirmAt)
     }
 
-    @Test fun aStopRestartsTheVeryDeepWindow() {
+    @Test fun aStopOfMoreThanFiveSecondsRestartsTheVeryDeepWindow() {
         val f = Feed(BleDepartureEvidence(lock))
         repeat(5) {
             f.run(8_000L, raw = { -98 }, stepsAvailable = false)
-            f.run(600L, raw = { -98 }, moving = false, stepsAvailable = false)
+            f.run(6_000L, raw = { -98 }, moving = false, stepsAvailable = false)
         }
         assertNull(f.firstConfirmAt)
+    }
+
+    @Test fun field2043ShortStopsAtTheGateAndTheDoorKeepTheVeryDeepWindow() {
+        // 05/10 20:43 (0.2.4): locking the garden gate (~4.5 s) and opening the back door (~1 s)
+        // restarted the window; the proof came 12 s after the last stop, too late for the Lock.
+        val f = Feed(BleDepartureEvidence(lock))
+        f.run(3_000L, raw = { -98 }, stepsAvailable = false)
+        f.run(4_600L, raw = { -99 }, moving = false, stepsAvailable = false)   // the gate
+        f.run(3_000L, raw = { -100 }, stepsAvailable = false)
+        f.run(1_200L, raw = { -101 }, moving = false, stepsAvailable = false)  // the back door
+        assertNull("never while stopped", f.firstConfirmAt)
+        f.run(2_000L, raw = { -102 }, stepsAvailable = false)
+        assertTrue("confirmed ${f.firstConfirmAt}", f.firstConfirmAt!! in 12_000L..12_400L)
+    }
+
+    @Test fun neverConfirmedDuringAStopEvenAfterTwelveSeconds() {
+        val f = Feed(BleDepartureEvidence(lock))
+        f.run(10_000L, raw = { -98 }, stepsAvailable = false)
+        f.run(4_000L, raw = { -98 }, moving = false, stepsAvailable = false)
+        assertNull(f.firstConfirmAt)
+        f.run(400L, raw = { -98 }, stepsAvailable = false)
+        assertTrue(f.firstConfirmAt != null)
     }
 
     @Test fun walkingJustAboveTheVeryDeepLevelWithoutStepsNeverConfirms() {
@@ -295,7 +317,8 @@ class BleDepartureEvidenceTest {
         f.run(19_000L, raw = { -88 }, stepsPerSecond = 0.0)
         f.run(1_000L, raw = { -95 }, moving = false, stepsPerSecond = 0.0)
         f.run(20_000L, raw = { -99 }, stepsPerSecond = 0.0)
-        val walkStart = 40_000L
-        assertTrue("confirmed ${f.firstConfirmAt}", f.firstConfirmAt!! in walkStart + 12_000L..walkStart + 12_400L)
+        // The deep run starts in the 1 s stop (-95), which no longer restarts it.
+        val deepStart = 39_000L
+        assertTrue("confirmed ${f.firstConfirmAt}", f.firstConfirmAt!! in deepStart + 12_000L..deepStart + 12_400L)
     }
 }

@@ -160,9 +160,12 @@ internal class SimWorld(
     inner class SimCar {
         var locked = true; private set
         var unlockedAtMs = -1L; private set
+        /** Wall time of the last lock-state change, as the cloud status reports it. */
+        var changedAtWallMs = 0L; private set
         var doorOpenedSinceUnlock = false; private set
         fun actuate(lock: Boolean, by: String) {
             locked = lock
+            changedAtWallMs = clock.wallMs()
             if (!lock) { unlockedAtMs = now(); doorOpenedSinceUnlock = false } else unlockedAtMs = -1L
             record(if (lock) "CAR_LOCKED" else "CAR_UNLOCKED", by)
             link.pushStatus()
@@ -460,8 +463,13 @@ internal class SimWorld(
 
     // ---------------- the real controller ----------------
     val config = SecretsConfig(proximityEnabled = true, proximitySensitivity = "far")
+    // The cloud Lock works whether or not the key link does (field 05/10 16:19: the stock app's cloud
+    // Lock locked a car that had ignored two key Locks); it takes ~2 s and reports its status.
     val controller = ProximityController(
         config = { config }, ble = link, motion = motion, scope = scope,
+        cloudLock = { delay(2_000L); record("CLOUD_LOCK_CMD"); if (car.locked) Unit else car.actuate(true, "cloud"); true },
+        cloudIsLocked = { car.locked },
+        cloudLockSnapshot = { com.openzeekr.app.ble.CloudLockSnapshot(car.locked, car.changedAtWallMs) },
         clock = clock, alerts = alerts, departureLocationSource = locator, wakeLocks = wakeLocks,
     )
 

@@ -164,6 +164,7 @@ class ProximityController internal constructor(
     /** The car's previous status push (for the "Auto gesloten" chime on open -> locked). */
     private var lastVehicleStatus: ObservedVehicleStatus? = null
     private var manualCloudLockCheck: Job? = null
+    private var verifyLogAtMs = 0L
     @Volatile private var measureUntilElapsedMs = 0L
     private val _measuring = kotlinx.coroutines.flow.MutableStateFlow(false)
     /** True while Measurement mode samples fast for a calibration walk. */
@@ -837,6 +838,11 @@ class ProximityController internal constructor(
                 val cooling = lastTriggerMs != 0L &&
                     clock.wallMs() - lastTriggerMs < ACTION_COOLDOWN_MS
                 rssi?.let(::noteFreshReading)
+                // Diagnostics (field 05/10 20:43): these readings were invisible in the log.
+                if (rssi != null && clock.elapsedMs() - verifyLogAtMs >= 1_000L) {
+                    verifyLogAtMs = clock.elapsedMs()
+                    Logx.d("prox", "rssi=$rssi ema=$smoothed (verifying departure) motion=${motion.state.value}")
+                }
                 // Keep the far watch continuous during a verification (review 0.1.63): its clock is
                 // the corroboration for a step-free GNSS proof and must see a walk back.
                 rssi?.let { observeStationaryFar(it, config().sensitivityLockRssi) }
@@ -1482,7 +1488,11 @@ class ProximityController internal constructor(
                 // One full failed actuation per epoch for the BLE route: without this, evidence
                 // that keeps holding restarts the loop every cooldown, repeating resets, cloud
                 // requests and notifications on the same proof.
-                val cloudStatusLocked = verifyCloudLock(reason)
+                // A fresh BLE departure proof backs the cloud Lock when the key link failed right
+                // after it (field 05/10 20:44: proof at -104, the Lock write failed and the link
+                // dropped; GNSS could not confirm, so nothing locked the car).
+                val cloudStatusLocked = verifyCloudLock(reason,
+                    bleProofAtMs = if (reason == "ble-departure") departureProofAtMs else 0L)
                 if (reason == "ble-departure") {
                     clearBleDeparture()
                     Logx.w("prox", "ble departure route suspended for this epoch after unconfirmed Lock")
@@ -1494,13 +1504,28 @@ class ProximityController internal constructor(
                 // override it (it would sound after a cloud-confirmed Lock, or sound twice).
                 pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
                 departureAlarmJob?.cancel(); departureAlarmJob = null
-                val posted = alerts.show(
-                    if (freshCloudLocked) LockAlertPolicy.Event.AUTO_LOCK_CLOUD_CONFIRMED
-                    else LockAlertPolicy.Event.AUTO_LOCK_UNCONFIRMED)
-                unverifiedLockAlertRaised = true
-                Logx.w("prox", "$reason: BLE lock unconfirmed; cloud status locked=$cloudStatusLocked; notification posted=$posted")
-                _state.value = _state.value.copy(lastAction =
-                    "$reason · ${if (cloudStatusLocked) "cloud reports LOCKED (2×); physical lock unverified" else "LOCK NOT VERIFIED ✗"}; check car")
+                if (freshCloudLocked) {
+                    // The car reports locked after this Lock: it IS locked. Without this the app kept
+                    // believing "unlocked", retried and then sounded a false alarm (simulator 05/10).
+                    if (armedUnlocked) {
+                        armedUnlocked = false
+                        resetLinkedWatch()
+                        carSelfLock.onLockedByUs()
+                        decisionPolicy.onAutomaticLockProvenDeparture(clock.wallMs())
+                    }
+                    com.openzeekr.app.remote.LocalLockEvidence.onKeyConfirmed(locked = true)
+                    unverifiedLockAlertRaised = false
+                    alerts.clear()
+                    alerts.carLocked()
+                    Logx.w("prox", "$reason: locked via cloud; a newer cloud report confirms it")
+                    _state.value = _state.value.copy(lastAction = "$reason · locked via cloud ✓")
+                } else {
+                    val posted = alerts.show(LockAlertPolicy.Event.AUTO_LOCK_UNCONFIRMED)
+                    unverifiedLockAlertRaised = true
+                    Logx.w("prox", "$reason: BLE lock unconfirmed; cloud status locked=$cloudStatusLocked; notification posted=$posted")
+                    _state.value = _state.value.copy(lastAction =
+                        "$reason · ${if (cloudStatusLocked) "cloud reports LOCKED (2×); physical lock unverified" else "LOCK NOT VERIFIED ✗"}; check car")
+                }
             } else {
                 armedUnlocked = false
                 resetLinkedWatch()
@@ -1530,16 +1555,22 @@ class ProximityController internal constructor(
     }
 
     /** A successful HTTP response acknowledges the request, not a physical door lock. */
-    private suspend fun verifyCloudLock(reason: String): Boolean {
+    private suspend fun verifyCloudLock(reason: String, bleProofAtMs: Long = 0L): Boolean {
         val wl = acquireSafetyWakelock()
         try {
             repeat(CLOUD_LOCK_MAX_REQUESTS) { requestIndex ->
                 val accepted = DepartureCheckedLockAttempt.send(
                     enabled = { armedUnlocked && _state.value.running &&
                         config().proximityEnabled },
-                    // Cloud Lock always needs fresh GNSS departure: a BLE proof cannot be
-                    // revoked by a return while the radio is down (third review F2/F4).
-                    departure = { confirmPhysicalDeparture() },
+                    // Cloud Lock needs fresh GNSS departure: a BLE proof cannot be revoked by a
+                    // return while the radio is down (third review F2/F4). Exception: a BLE proof
+                    // of at most [BLE_PROOF_CLOUD_MS] (walking, very deep far) - too short a time
+                    // to be back at the car from where the link gave out.
+                    departure = {
+                        val bleProofFresh = bleProofAtMs != 0L && clock.wallMs() - bleProofAtMs <= BLE_PROOF_CLOUD_MS
+                        if (bleProofFresh) Logx.d("prox", "$reason: cloud Lock backed by a fresh BLE departure proof")
+                        bleProofFresh || confirmPhysicalDeparture()
+                    },
                     command = {
                         try { cloudLock() }
                         catch (cancelled: CancellationException) { throw cancelled }
@@ -1774,6 +1805,8 @@ class ProximityController internal constructor(
         private const val MAX_LOCK_ATTEMPTS = 5
         /** Key Locks the car received but did not execute before the cloud is tried (field 05/10). */
         private const val MAX_NOT_EXECUTED_LOCKS = 2
+        /** How long a BLE departure proof may back a cloud Lock after the key link failed. */
+        private const val BLE_PROOF_CLOUD_MS = 30_000L
         private const val LOCK_SESSION_WAIT_MS = 3_000L    // brief wait for SESSION_READY per attempt
         private const val LOCK_ACK_TIMEOUT_MS = 1_500L     // wait for the car's lock receipt
 

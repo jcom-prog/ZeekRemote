@@ -87,6 +87,16 @@ internal object SimScenarios {
                 Stand(10_000))),
         // Field 05/10 16:08/16:18 (0.2.2): the car received the key Lock (0x0111) but stayed open,
         // while the app showed "Locked". The departure must end in an alarm, never in silence.
+        // User 05/10 20:44: home, out of the car, a short stop to lock the gate (~4.5 s), on, a
+        // short stop at the back door (~1.5 s), then inside (walls). The car must lock.
+        Scenario("F22 home: stops at gate and door", "walk 14 m, gate 4.5 s, 18 m, door 1.5 s, inside", 30.0,
+            approachAndOpen() + listOf(Mark("expect-lock"), Walk(14.0), Stand(4_500, Facing.AWAY), Walk(18.0),
+                Stand(1_500, Facing.AWAY), Walk(22.0), Stand(150_000, Facing.AWAY, -10.0))),
+        // Point 3 of 0.2.5: the key Lock fails and there is no GNSS (garage, indoors): only the cloud
+        // Lock backed by a fresh BLE departure proof can lock the car.
+        Scenario("F23 key Lock fails, no GNSS", "normal departure, car ignores key Locks, no GNSS", 30.0,
+            approachAndOpen() + listOf(Mark("expect-lock"), Walk(30.0), Stand(150_000)), gnssAccuracyM = null,
+            carRefusesKeyLock = true),
         Scenario("F21 car ignores key Lock", "normal departure; the car acknowledges but never executes a key Lock", 30.0,
             approachAndOpen() + listOf(Mark("-"), Walk(30.0), Stand(150_000)), carRefusesKeyLock = true),
     )
@@ -110,7 +120,8 @@ internal object SimOracle {
         // Which key Locks were the user's own (manual)?
         val manualLockAt = ev.filter { it.kind == "USER_MANUAL_LOCK" }.map { it.atMs }
         for (e in ev) {
-            if (e.kind == "KEY_LOCK_CMD" && manualLockAt.none { e.atMs - it in 0..2_000 } && e.distanceM <= 3.0)
+            if ((e.kind == "KEY_LOCK_CMD" || e.kind == "CLOUD_LOCK_CMD") && manualLockAt.none { e.atMs - it in 0..2_000 } &&
+                e.distanceM <= 3.0)
                 out += f("LOCK_WHILE_NEAR", e, "automatic Lock at %.1f m".format(e.distanceM))
             if (e.kind == "KEY_UNLOCK_CMD" && e.distanceM > 15.0)
                 out += f("UNLOCK_WHILE_FAR", e, "unlock at %.1f m".format(e.distanceM))
@@ -166,7 +177,7 @@ internal object SimOracle {
                         l.distanceM > 30.0 -> out += f("DEPARTURE_LOCK_LATE", l, "locked at %.1f m".format(l.distanceM))
                     }
                 }
-                "expect-stay-unlocked" -> seg.firstOrNull { it.kind == "KEY_LOCK_CMD" }?.let {
+                "expect-stay-unlocked" -> seg.firstOrNull { it.kind == "KEY_LOCK_CMD" || it.kind == "CLOUD_LOCK_CMD" }?.let {
                     out += f("UNWANTED_LOCK_NEAR", it, "Lock at %.1f m while staying near".format(it.distanceM)) }
                 "expect-stay-locked" -> seg.firstOrNull { it.kind == "KEY_UNLOCK_CMD" }?.let {
                     out += f("UNWANTED_UNLOCK", it, "unlock at %.1f m where the car should stay locked".format(it.distanceM)) }

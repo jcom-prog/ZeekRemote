@@ -80,6 +80,10 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                     message.startsWith("approach-unlock ARM (") -> "UNLOCK_STARTED"
                     message.startsWith("car locked itself (") -> "CAR_SELF_LOCK"
                     message.startsWith("manual Lock not executed:") -> "MANUAL_LOCK_NOT_EXECUTED"
+                    Regex("(ble-departure|verified-link-departure|walk-away-lock|idle-far-lock|far-no-motion): " +
+                        "locked via cloud; a newer cloud report confirms it").matches(message) -> "AUTO_LOCK_CLOUD_VERIFIED"
+                    Regex("(ble-departure): cloud Lock backed by a fresh BLE departure proof").matches(message) ->
+                        "CLOUD_LOCK_BLE_BACKED"
                     message.startsWith("manual cloud Lock verified (") -> "MANUAL_CLOUD_LOCK_VERIFIED"
                     message == "car reported locked -> 'Auto gesloten' notification" -> "CAR_LOCKED_CHIME"
                     message.startsWith("car reported unlocked without our Unlock (") -> "CAR_REOPENED"

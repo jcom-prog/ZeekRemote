@@ -37,6 +37,7 @@ internal class BleDepartureEvidence(
     private val deepFarMarginDb: Int = DEEP_FAR_MARGIN_DB,
     private val veryDeepMarginDb: Int = VERY_DEEP_MARGIN_DB,
     private val veryDeepMs: Long = VERY_DEEP_MS,
+    private val veryDeepStillToleranceMs: Long = VERY_DEEP_STILL_TOLERANCE_MS,
 ) {
     private val strongNearRssi: Int = maxOf(strongNearRssi, lockThreshold + MIN_STRONG_GAP_DB)
     enum class Decision { NONE, CONFIRMED }
@@ -51,6 +52,7 @@ internal class BleDepartureEvidence(
     private var strongRefSmoothed: Int? = null
     private var weakSinceMs = UNSET
     private var veryDeepSinceMs = UNSET
+    private var veryDeepStillSinceMs = UNSET
     private var confirmedAtMs = UNSET
 
     /** Categorical reason for the latest decision; never contains a position. */
@@ -89,14 +91,21 @@ internal class BleDepartureEvidence(
         // body, the field never read below about -86; a continuously observed run at
         // [veryDeepMarginDb] below the lock threshold for [veryDeepMs] is not standing at the car.
         // Only while walking: standing at the boot behind the car body with the phone in a back
-        // pocket can read this deep for a while (simulator F06), walking that long cannot.
-        val veryDeep = moving && rawRssi < strongNearRssi && smoothedRssi <= lockThreshold - veryDeepMarginDb
+        // pocket can read this deep for a while (simulator F06), walking that long cannot. A short
+        // stop on the way does not restart the window (field 05/10 20:43: locking the garden gate
+        // ~4.5 s, opening the back door ~1 s, 0.2.4 confirmed only 12 s after the last stop, when
+        // the link was too weak for the Lock); a stop of more than [veryDeepStillToleranceMs] does.
+        val deepNow = rawRssi < strongNearRssi && smoothedRssi <= lockThreshold - veryDeepMarginDb
+        if (moving) veryDeepStillSinceMs = UNSET
+        else if (veryDeepStillSinceMs == UNSET) veryDeepStillSinceMs = nowMs
+        val stoppedTooLong = !moving && nowMs - veryDeepStillSinceMs > veryDeepStillToleranceMs
         veryDeepSinceMs = when {
-            !veryDeep -> UNSET
+            !deepNow || stoppedTooLong -> UNSET
             gap || veryDeepSinceMs == UNSET -> nowMs   // unobserved time is not evidence
             else -> veryDeepSinceMs
         }
-        if (veryDeepSinceMs != UNSET && nowMs - veryDeepSinceMs >= veryDeepMs) {
+        // Confirmed only while walking again, never during a stop.
+        if (moving && veryDeepSinceMs != UNSET && nowMs - veryDeepSinceMs >= veryDeepMs) {
             if (confirmedAtMs == UNSET) confirmedAtMs = nowMs
             return decide("confirmed")
         }
@@ -170,6 +179,7 @@ internal class BleDepartureEvidence(
      */
     fun restart() {
         veryDeepSinceMs = UNSET
+        veryDeepStillSinceMs = UNSET
         restartObservation()
         reason = "restarted"
     }
@@ -203,5 +213,6 @@ internal class BleDepartureEvidence(
         const val DEEP_FAR_MARGIN_DB = 3
         const val VERY_DEEP_MARGIN_DB = 13
         const val VERY_DEEP_MS = 12_000L
+        const val VERY_DEEP_STILL_TOLERANCE_MS = 5_000L
     }
 }
