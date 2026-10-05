@@ -226,7 +226,20 @@ fun VehicleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = M
     // BLE-first (confirmed) then cloud fallback, via the shared dispatcher.
     fun door(lockIt: Boolean) {
         val n = if (lockIt) "Lock" else "Unlock"
-        fire(n) { deps.vehicleControl.send(if (lockIt) Command.LOCK else Command.UNLOCK) }
+        if (!lockIt) { fire(n) { deps.vehicleControl.send(Command.UNLOCK) }; return }
+        // A Lock is only "✓" when the car itself reported locked over the key; a cloud Lock is
+        // checked afterwards (field 05/10 16:08: the tile said "Locked", the car stayed open).
+        snackbar("$n…")
+        scope.launch {
+            when (val r = deps.vehicleControl.send(Command.LOCK)) {
+                is CallResult.Ok -> {
+                    snackbar(if (r.value.status == com.openzeekr.app.remote.VehicleControl.BLE_OK_STATUS)
+                        "$n ✓ car reports locked" else "$n sent via cloud · checking the car…")
+                    deps.vehicleState.refreshAfterCommand()
+                }
+                is CallResult.Err -> snackbar("$n ✗ ${r.message}")
+            }
+        }
     }
 
     Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {

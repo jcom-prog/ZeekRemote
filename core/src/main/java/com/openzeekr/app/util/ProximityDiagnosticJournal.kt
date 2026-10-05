@@ -25,7 +25,7 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
         private val nearAnchor = Regex("departure near anchor outcome=([a-z_]+)")
         // Whitelisted categorical values only; anything else is not journaled.
         private val autoLockConfirmed = Regex(
-            "auto lock confirmed \\((ble-departure|verified-link-departure|walk-away-lock|idle-far-lock)\\) by BLE receipt")
+            "auto lock confirmed \\((ble-departure|verified-link-departure|walk-away-lock|idle-far-lock)\\): the car reports locked")
         private val lockAlarm = Regex("lock alarm (raised|unavailable|suppressed) \\(([A-Z_]{1,40})\\)")
         private val bleDepartureRevoked = Regex(
             "ble departure revoked \\((strong_near|signal_recovered|time_not_advancing)\\)")
@@ -51,6 +51,8 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                         return "VEHICLE_CAPABILITIES $value"
                     return null
                 }
+                if (Regex("control 0x02: received, but no locked status within [0-9]{1,5} ms -> NOT_EXECUTED").matches(message))
+                    return "LOCK_NOT_EXECUTED"
                 vehicleStatus.matchEntire(message)?.let {
                         return "VEHICLE_STATUS " + it.groupValues.drop(1).joinToString(" ")
                     }
@@ -77,6 +79,9 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                     message.startsWith("usable departure location anchor available") -> "ANCHOR_AVAILABLE"
                     message.startsWith("approach-unlock ARM (") -> "UNLOCK_STARTED"
                     message.startsWith("car locked itself (") -> "CAR_SELF_LOCK"
+                    message.startsWith("manual Lock not executed:") -> "MANUAL_LOCK_NOT_EXECUTED"
+                    message.startsWith("manual cloud Lock verified (") -> "MANUAL_CLOUD_LOCK_VERIFIED"
+                    message == "car reported locked -> 'Auto gesloten' notification" -> "CAR_LOCKED_CHIME"
                     message.startsWith("car reported unlocked without our Unlock (") -> "CAR_REOPENED"
                     message.startsWith("phone far from the unlocked car") -> "STATIONARY_FAR_ALARM"
                     message.startsWith("armed idle far read ") -> "IDLE_FAR_FAST"

@@ -20,9 +20,17 @@ import com.openzeekr.core.R
  * while walking away, so a silent notification alone is not a warning.
  */
 internal object UnverifiedLockNotifier {
-    private const val CHANNEL_ID = "unverified_lock"
+    /**
+     * The visible record. Field 05/10 16:08 (0.2.2): posted as a silent notification it never showed
+     * on the Samsung lock screen (One UI hides silent notifications there). Its own high-importance
+     * channel without sound keeps it in the alerting section; the alarm channel makes the sound.
+     */
+    private const val CHANNEL_ID = "car_not_locked_v2"
+    private const val LEGACY_CHANNEL_ID = "unverified_lock"
     private const val ALARM_CHANNEL_ID = "lock_alarm_v1"
     private const val NOTIFICATION_ID = 43
+    private const val RECORD_GROUP = "zeekremote_lock_state"
+    private const val ALARM_GROUP = "zeekremote_lock_alarm"
     private const val ALARM_NOTIFICATION_ID = 44
     /** The alarm repeats until the user opens it, the Lock is confirmed, or this time passes. */
     private const val ALARM_TIMEOUT_MS = LockAlertPolicy.ALARM_EPISODE_MS
@@ -55,6 +63,8 @@ internal object UnverifiedLockNotifier {
                 "The Bluetooth Lock was not confirmed; a newer cloud report says the car is locked. Check the car if in doubt."
             Event.LOCATION_REFERENCE_UNAVAILABLE -> "Automatic Lock unavailable" to
                 "No accurate location reference is available. Lock manually and check the car before leaving."
+            Event.LOCK_NOT_EXECUTED -> "Car NOT locked" to
+                "The car received the Lock but did not lock. Check doors, boot, bonnet and windows, then lock again."
         }
         val lockButton = LockAlertPolicy.offersLock(event)
         val posted = post(context, CHANNEL_ID, NOTIFICATION_ID, title, message, alarm = false, lockButton = lockButton)
@@ -105,7 +115,14 @@ internal object UnverifiedLockNotifier {
     private fun ensureChannels(system: NotificationManager) {
         if (system.getNotificationChannel(CHANNEL_ID) == null)
             system.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Unverified vehicle lock", NotificationManager.IMPORTANCE_HIGH))
+                NotificationChannel(CHANNEL_ID, "Car not locked", NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = "Stays visible, also on the lock screen, until the car is locked."
+                    setSound(null, null)
+                    enableVibration(false)
+                    lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                })
+        if (system.getNotificationChannel(LEGACY_CHANNEL_ID) != null)
+            runCatching { system.deleteNotificationChannel(LEGACY_CHANNEL_ID) }
         if (system.getNotificationChannel(ALARM_CHANNEL_ID) == null) {
             system.createNotificationChannel(
                 NotificationChannel(ALARM_CHANNEL_ID, "Car not locked alarm", NotificationManager.IMPORTANCE_HIGH).apply {
@@ -153,10 +170,11 @@ internal object UnverifiedLockNotifier {
             .apply { if (lockButton) addAction(lockAction(context)) }
         if (alarm) {
             // Sound and vibration come from the alarm channel (minSdk 26).
-            builder.setAutoCancel(true).setTimeoutAfter(ALARM_TIMEOUT_MS)
+            builder.setAutoCancel(true).setTimeoutAfter(ALARM_TIMEOUT_MS).setGroup(ALARM_GROUP)
         } else {
-            // The visible record stays until Lock is confirmed; it never makes sound itself.
-            builder.setSilent(true).setAutoCancel(false).setOngoing(true)
+            // The visible record stays until Lock is confirmed. Its channel has no sound; it is NOT
+            // flagged silent, so the lock screen shows it, and it is not folded into an app group.
+            builder.setOnlyAlertOnce(true).setAutoCancel(false).setOngoing(true).setGroup(RECORD_GROUP)
         }
         val notification = builder.build()
         if (alarm) notification.flags = notification.flags or Notification.FLAG_INSISTENT

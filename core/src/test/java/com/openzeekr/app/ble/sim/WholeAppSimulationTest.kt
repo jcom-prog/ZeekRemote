@@ -19,7 +19,7 @@ class WholeAppSimulationTest {
                           val findings: List<SimOracle.Finding>, val world: SimWorld)
         val results = runs.map { (sc, carry, mp) ->
             val (profile, seed) = mp
-            val w = SimWorld(seed, profile, carry, sc.startM, sc.gnssAccuracyM)
+            val w = SimWorld(seed, profile, carry, sc.startM, sc.gnssAccuracyM, carRefusesKeyLock = sc.carRefusesKeyLock)
             w.play(sc.legs)
             Result(sc, carry, profile, seed, SimOracle.check(w), w)
         }

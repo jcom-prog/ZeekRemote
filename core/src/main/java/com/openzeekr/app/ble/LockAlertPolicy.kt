@@ -31,6 +31,12 @@ internal object LockAlertPolicy {
         MANUAL_CLOUD_LOCK_UNVERIFIED,
         /** No GNSS reference after unlock (matters only when GNSS is the sole departure route). */
         LOCATION_REFERENCE_UNAVAILABLE,
+        /**
+         * The user's Lock reached the car but the car did not lock (no "locked" status from the car
+         * and no fresh cloud report): field 05/10 16:08 and 16:18, the tile said "Locked", the car
+         * stayed open.
+         */
+        LOCK_NOT_EXECUTED,
     }
 
     /**
@@ -45,6 +51,7 @@ internal object LockAlertPolicy {
     fun audible(event: Event): Boolean = when (event) {
         Event.AUTO_LOCK_UNCONFIRMED,
         Event.LINK_LOST_WHILE_UNLOCKED,
+        Event.LOCK_NOT_EXECUTED,
         Event.DEPARTURE_UNVERIFIED -> true
         // The car acknowledged the Lock; the cloud often lags by minutes (review 0.1.53).
         Event.AUTO_LOCK_STATE_UNVERIFIED,

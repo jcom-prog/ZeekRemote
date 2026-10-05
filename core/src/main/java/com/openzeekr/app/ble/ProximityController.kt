@@ -161,6 +161,9 @@ class ProximityController internal constructor(
     private var deepFarAtLinkLossMs = 0L
     private var idleFastWindows = 0
     private var vehicleStatusJob: Job? = null
+    /** The car's previous status push (for the "Auto gesloten" chime on open -> locked). */
+    private var lastVehicleStatus: ObservedVehicleStatus? = null
+    private var manualCloudLockCheck: Job? = null
     @Volatile private var measureUntilElapsedMs = 0L
     private val _measuring = kotlinx.coroutines.flow.MutableStateFlow(false)
     /** True while Measurement mode samples fast for a calibration walk. */
@@ -334,6 +337,7 @@ class ProximityController internal constructor(
     fun stop() {
         monitorJob?.cancel(); monitorJob = null
         vehicleStatusJob?.cancel(); vehicleStatusJob = null
+        manualCloudLockCheck?.cancel(); manualCloudLockCheck = null
         measureUntilElapsedMs = 0L; _measuring.value = false
         departureAnchorJob?.cancel(); departureAnchorJob = null; departureAnchor = null
         linkDepartureJob?.cancel(); linkDepartureJob = null
@@ -376,6 +380,7 @@ class ProximityController internal constructor(
     fun onExternalUnlockConfirmed(source: String) {
         scope.launch {
             // A newly confirmed unlock starts a new episode, even if monitoring was toggled off.
+            manualCloudLockCheck?.cancel(); manualCloudLockCheck = null
             pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
             unverifiedLockAlertRaised = false
             alerts.clear()
@@ -412,6 +417,7 @@ class ProximityController internal constructor(
             relockRecoveryPending = false; relockProbeJob?.cancel(); relockProbeJob = null
             pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
             if (bleConfirmed) {
+                manualCloudLockCheck?.cancel(); manualCloudLockCheck = null
                 unverifiedLockAlertRaised = false
                 alerts.clear()
             } else {
@@ -419,8 +425,9 @@ class ProximityController internal constructor(
                 val posted = alerts.show(LockAlertPolicy.Event.MANUAL_CLOUD_LOCK_UNVERIFIED)
                 unverifiedLockAlertRaised = true
                 _state.value = _state.value.copy(lastAction =
-                    "Cloud Lock accepted · vehicle lock unverified; check car")
+                    "Cloud Lock accepted · checking whether the car locked")
                 Logx.w("prox", "manual cloud Lock accepted; physical lock unverified (notification posted=$posted)")
+                checkManualCloudLock(clock.wallMs())
             }
             if (_state.value.running && config().proximityEnabled) {
                 needToUnlock = false
@@ -440,6 +447,7 @@ class ProximityController internal constructor(
     }
 
     private fun recordUnlockConfirmed(source: String) {
+        manualCloudLockCheck?.cancel(); manualCloudLockCheck = null
         resetLinkedWatch()
         val now = clock.wallMs()
         val unlockElapsed = clock.elapsedMs()
@@ -692,8 +700,39 @@ class ProximityController internal constructor(
             "without a motion signal; NO LOCK SENT; notification posted=$posted")
     }
 
+    /**
+     * After the user's cloud Lock (also the fallback when the car received a key Lock but stayed
+     * open, field 05/10 16:08): only a car report newer than the Lock clears the warning; otherwise
+     * the car is NOT locked and the alarm sounds (user decision 05/10).
+     */
+    private fun checkManualCloudLock(lockAtMs: Long) {
+        manualCloudLockCheck?.cancel()
+        manualCloudLockCheck = scope.launch {
+            val lockedByCloud = verifyFreshLockStatus(lockAtMs)
+            val lockedByKey = lastVehicleStatus?.centralLockCode == 3 &&
+                ble.state.value == DkBleManager.State.SESSION_READY
+            if (lockedByCloud || lockedByKey) {
+                unverifiedLockAlertRaised = false
+                alerts.clear()
+                alerts.carLocked()
+                _state.value = _state.value.copy(lastAction = "Cloud Lock · vehicle reports locked ✓")
+                Logx.d("prox", "manual cloud Lock verified (cloud=$lockedByCloud key=$lockedByKey)")
+            } else {
+                val posted = alerts.show(LockAlertPolicy.Event.LOCK_NOT_EXECUTED)
+                unverifiedLockAlertRaised = true
+                _state.value = _state.value.copy(lastAction = "Lock NOT executed ✗ · car still open; check doors")
+                Logx.w("prox", "manual Lock not executed: no fresh locked report; alarm posted=$posted")
+            }
+        }
+    }
+
     /** The car's own status push: a fresh unlocked -> locked transition means the car locked itself. */
     private fun onVehicleStatus(status: ObservedVehicleStatus) {
+        val previous = lastVehicleStatus
+        lastVehicleStatus = status
+        if (previous != null && previous.sessionGeneration == status.sessionGeneration &&
+            (previous.centralLockCode == 1 || previous.centralLockCode == 2) && status.centralLockCode == 3)
+            alerts.carLocked()
         when (carSelfLock.observe(status, clock.elapsedMs())) {
             CarSelfLockDetector.Event.NONE -> Unit
             CarSelfLockDetector.Event.SELF_LOCK -> scope.launch {
@@ -1359,6 +1398,7 @@ class ProximityController internal constructor(
             lastTriggerMs = lockStartedAtMs   // start the action cooldown
             var confirmed = false
             var attempt = 0
+            var notExecuted = 0
             val maxAttempts = if (ble.state.value == DkBleManager.State.SESSION_READY)
                 MAX_LOCK_ATTEMPTS else 1 // a lost radio should reach the cloud fallback promptly
             while (isActive && attempt < maxAttempts) {
@@ -1412,13 +1452,20 @@ class ProximityController internal constructor(
                 Logx.d("prox", "$reason: BLE lock attempt #$attempt -> $r")
                 if (r == ControlResult.CONFIRMED) {
                     confirmed = true
-                    Logx.d("prox", "auto lock confirmed ($reason) by BLE receipt")
+                    Logx.d("prox", "auto lock confirmed ($reason): the car reports locked")
                     // The guard of the walk-back return starts at the confirmed Lock (review 0.1.63).
                     decisionPolicy.onAutomaticLockProvenDeparture(clock.wallMs())
                     // The car acknowledged: stop any alarm now, not after the cloud catches up.
                     departureAlarmJob?.cancel(); departureAlarmJob = null
                     alerts.silenceAlarm()
                     break
+                }
+                if (r == ControlResult.NOT_EXECUTED) {
+                    // The link works; the car received the Lock but stayed open (field 05/10 16:08).
+                    // One more try over the key, then the cloud below; no link reset.
+                    if (++notExecuted >= MAX_NOT_EXECUTED_LOCKS) break
+                    delay(UNLOCK_RETRY_DELAY_MS)
+                    continue
                 }
                 resetLink()   // write-fail / no-response / reject → clear the wedge and retry
                 delay(UNLOCK_RETRY_DELAY_MS)
@@ -1458,18 +1505,11 @@ class ProximityController internal constructor(
                 armedUnlocked = false
                 resetLinkedWatch()
                 pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
-                if (verifyFreshLockStatus(lockStartedAtMs)) {
-                    unverifiedLockAlertRaised = false
-                    alerts.clear()
-                    _state.value = _state.value.copy(lastAction = "$reason · vehicle reports locked ✓")
-                } else {
-                    val posted = alerts.show(LockAlertPolicy.Event.AUTO_LOCK_STATE_UNVERIFIED)
-                    unverifiedLockAlertRaised = true
-                    _state.value = _state.value.copy(lastAction =
-                        "$reason · BLE Lock acknowledged; vehicle state unverified; check car")
-                    Logx.w("prox", "$reason: BLE Lock acknowledged but fresh vehicle lock state unavailable; " +
-                        "notification posted=$posted")
-                }
+                // CONFIRMED now means the car itself reported locked (LockExecutionWatch); the
+                // cloud lags by minutes and is no longer needed to verify it.
+                unverifiedLockAlertRaised = false
+                alerts.clear()
+                _state.value = _state.value.copy(lastAction = "$reason · vehicle reports locked ✓")
             }
             lockJob = null
         }
@@ -1732,6 +1772,8 @@ class ProximityController internal constructor(
         // Confirmed-lock loop (walk-away). After MAX_LOCK_ATTEMPTS unconfirmed BLE tries, fall back to
         // cloud. Shorter session-wait than unlock: if BLE won't come up we want cloud sooner (car open).
         private const val MAX_LOCK_ATTEMPTS = 5
+        /** Key Locks the car received but did not execute before the cloud is tried (field 05/10). */
+        private const val MAX_NOT_EXECUTED_LOCKS = 2
         private const val LOCK_SESSION_WAIT_MS = 3_000L    // brief wait for SESSION_READY per attempt
         private const val LOCK_ACK_TIMEOUT_MS = 1_500L     // wait for the car's lock receipt
 

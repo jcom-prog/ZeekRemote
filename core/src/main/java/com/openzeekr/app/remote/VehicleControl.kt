@@ -56,9 +56,16 @@ class VehicleControl(
         // BLE path: only when a byte is mapped AND the key session is up. extraParams (temperature,
         // SOC, …) have no BLE representation, so a command carrying them always goes cloud.
         if (b != null && extraParams.isEmpty() && ble.state.value == DkBleManager.State.SESSION_READY) {
-            val r = runCatching { ble.session.control(b, BLE_ACK_TIMEOUT_MS) }
+            var r = runCatching { ble.session.control(b, BLE_ACK_TIMEOUT_MS) }
                 .getOrDefault(ControlResult.WRITE_FAILED)
             Logx.d("ctl", "${cmd.name}: BLE control 0x%02x -> $r".format(b))
+            if (r == ControlResult.NOT_EXECUTED) {
+                // The car received the Lock but did not report locked (field 05/10 16:08): try the
+                // key once more; a second refusal goes to the cloud, which is then checked.
+                r = runCatching { ble.session.control(b, BLE_ACK_TIMEOUT_MS) }
+                    .getOrDefault(ControlResult.WRITE_FAILED)
+                Logx.d("ctl", "${cmd.name}: BLE control 0x%02x retry -> $r".format(b))
+            }
             if (r == ControlResult.CONFIRMED) {
                 if (cmd == Command.UNLOCK) onUnlockConfirmed("manual BLE control")
                 if (cmd == Command.LOCK) onLockConfirmed("manual BLE control")

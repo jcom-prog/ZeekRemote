@@ -6,9 +6,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LockAlertPolicyTest {
+    @Test fun aLockTheCarDidNotExecuteSoundsAndOffersLockAgain() {
+        // Field 05/10 16:08/16:18: the tile said "Locked", the car stayed open.
+        assertTrue(LockAlertPolicy.audible(Event.LOCK_NOT_EXECUTED))
+        assertTrue(LockAlertPolicy.offersLock(Event.LOCK_NOT_EXECUTED))
+    }
+
     @Test fun expectedButUnconfirmedLockIsAudible() {
         for (e in listOf(Event.AUTO_LOCK_UNCONFIRMED, Event.LINK_LOST_WHILE_UNLOCKED,
-                Event.DEPARTURE_UNVERIFIED))
+                Event.DEPARTURE_UNVERIFIED, Event.LOCK_NOT_EXECUTED))
             assertTrue("$e must sound", LockAlertPolicy.audible(e))
     }
 

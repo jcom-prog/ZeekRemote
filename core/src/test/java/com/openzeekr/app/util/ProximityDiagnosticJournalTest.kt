@@ -38,12 +38,18 @@ class ProximityDiagnosticJournalTest {
         assertEquals("AUTO_LOCK_STARTED ble",
             ProximityDiagnosticJournal.event("prox", "ble departure lock authorized (rssi=-90); sending Lock"))
         assertEquals("AUTO_LOCK_CONFIRMED ble-departure", ProximityDiagnosticJournal.event("prox",
-            "auto lock confirmed (ble-departure) by BLE receipt"))
+            "auto lock confirmed (ble-departure): the car reports locked"))
         assertEquals("AUTO_LOCK_CONFIRMED verified-link-departure", ProximityDiagnosticJournal.event("prox",
-            "auto lock confirmed (verified-link-departure) by BLE receipt"))
+            "auto lock confirmed (verified-link-departure): the car reports locked"))
+        assertEquals("LOCK_NOT_EXECUTED", ProximityDiagnosticJournal.event("dk",
+            "control 0x02: received, but no locked status within 3000 ms -> NOT_EXECUTED"))
+        assertEquals("MANUAL_LOCK_NOT_EXECUTED", ProximityDiagnosticJournal.event("prox",
+            "manual Lock not executed: no fresh locked report; alarm posted=true"))
+        assertEquals("CAR_LOCKED_CHIME", ProximityDiagnosticJournal.event("prox",
+            "car reported locked -> 'Auto gesloten' notification"))
         assertEquals("BLE_DEPARTURE_REVOKED strong_near",
             ProximityDiagnosticJournal.event("prox", "ble departure revoked (strong_near)"))
-        assertNull(ProximityDiagnosticJournal.event("prox", "auto lock confirmed (other) by BLE receipt"))
+        assertNull(ProximityDiagnosticJournal.event("prox", "auto lock confirmed (other): the car reports locked"))
         assertNull(ProximityDiagnosticJournal.event("prox", "ble departure revoked (latitude=51)"))
         assertNull("per-sample reasons are not journaled",
             ProximityDiagnosticJournal.event("prox", "ble departure evidence clear_too_short"))

@@ -73,8 +73,12 @@ interface DkSession {
     fun close()
 }
 
-/** Outcome of a [DkSession.control] call, reading the car's actual answer (not just the GATT write). */
-enum class ControlResult { CONFIRMED, REJECTED, NO_RESPONSE, WRITE_FAILED }
+/**
+ * Outcome of a [DkSession.control] call, reading the car's actual answer (not just the GATT write).
+ * [NOT_EXECUTED]: the car received a Lock (0x0111) but did not report itself locked afterwards
+ * (see [LockExecutionWatch]); the car is still open.
+ */
+enum class ControlResult { CONFIRMED, REJECTED, NO_RESPONSE, WRITE_FAILED, NOT_EXECUTED }
 
 class NotYetReversedException(what: String) :
     UnsupportedOperationException("$what is not reverse-engineered yet — placeholder")

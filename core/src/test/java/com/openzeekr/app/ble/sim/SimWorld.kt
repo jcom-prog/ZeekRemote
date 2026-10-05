@@ -109,6 +109,8 @@ internal class SimWorld(
     startDistanceM: Double,
     val gnssAccuracyM: Float? = 4f,
     val notificationPermission: Boolean = true,
+    /** Field 05/10 16:08/16:18: the car acknowledges a key Lock (0x0111) but does not lock. */
+    val carRefusesKeyLock: Boolean = false,
 ) {
     val rnd = SimRandom(seed)
     val scheduler = TestCoroutineScheduler()
@@ -259,6 +261,13 @@ internal class SimWorld(
                 if (!isEstablished) return ControlResult.NO_RESPONSE
                 if (lock != null) {
                     record(if (lock) "KEY_LOCK_CMD" else "KEY_UNLOCK_CMD")
+                    if (lock && carRefusesKeyLock) {
+                        // Receipt only, no "locked" status. SIM_RECEIPT_ONLY=1 replays 0.2.2, which
+                        // counted the receipt as a Lock; the real session now waits and reports it.
+                        if (System.getenv("SIM_RECEIPT_ONLY") == "1") return ControlResult.CONFIRMED
+                        delay(com.openzeekr.app.ble.LockExecutionWatch.STATUS_WAIT_MS)
+                        return ControlResult.NOT_EXECUTED
+                    }
                     car.actuate(lock, "key")
                 }
                 delay(20L)
@@ -400,6 +409,7 @@ internal class SimWorld(
         }
         override fun clear() { alarmRaisedAt = 0L; alarmShowingUntil = -1L }
         override fun silenceAlarm() { alarmRaisedAt = 0L; alarmShowingUntil = -1L }
+        override fun carLocked() { record("LOCKED_CHIME") }
     }
 
     // ---------------- GNSS (real NearDepartureAnchor / DepartureObservationWindow) ----------------

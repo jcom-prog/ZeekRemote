@@ -19,7 +19,7 @@ import com.openzeekr.app.ble.sim.Leg.WalkPeak
  * Global invariants are checked over the whole run (SimOracle).
  */
 internal data class Scenario(val family: String, val description: String, val startM: Double, val legs: List<Leg>,
-                    val gnssAccuracyM: Float? = 4f)
+                    val gnssAccuracyM: Float? = 4f, val carRefusesKeyLock: Boolean = false)
 
 internal object SimScenarios {
     private val F20_PEAK_DB = System.getenv("SIM_F20_PEAK_DB")?.toDouble() ?: 15.0
@@ -81,10 +81,14 @@ internal object SimScenarios {
                 Stand(40_000, Facing.AWAY), Mark("expect-unlock"), Walk(1.0), Stand(10_000))),
         // Field 04/10 22:06 (0.2.1): auto Lock at home, walking on indoors a 1.5 s peak (to about
         // -80) reopened the car behind the user. Then a real return must still open.
-        Scenario("F20 peak while walking away", "auto Lock, 30 m, walking on a 1.5 s signal peak (+${'$'}{F20_PEAK_DB} dB), later back", 30.0,
+        Scenario("F20 peak while walking away", "auto Lock, 30 m, walking on a 1.5 s signal peak (+$F20_PEAK_DB dB), later back", 30.0,
             approachAndOpen() + listOf(Mark("expect-lock"), Walk(30.0), Stand(40_000, Facing.AWAY), Mark("expect-stay-locked"),
                 Walk(32.0), WalkPeak(1_500, F20_PEAK_DB), Walk(36.0), Stand(20_000), Mark("expect-unlock"), Walk(1.0),
                 Stand(10_000))),
+        // Field 05/10 16:08/16:18 (0.2.2): the car received the key Lock (0x0111) but stayed open,
+        // while the app showed "Locked". The departure must end in an alarm, never in silence.
+        Scenario("F21 car ignores key Lock", "normal departure; the car acknowledges but never executes a key Lock", 30.0,
+            approachAndOpen() + listOf(Mark("-"), Walk(30.0), Stand(150_000)), carRefusesKeyLock = true),
     )
 
     /** families x carry x motion profile x seeds. */

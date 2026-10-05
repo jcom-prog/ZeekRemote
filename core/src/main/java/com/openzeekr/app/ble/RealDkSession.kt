@@ -68,6 +68,7 @@ class RealDkSession(
     /** Serializes encrypted 0x0110 commands which share the 0x0111/0x0112 response slots. */
     private val controlMutex = Mutex()
     private val vehicleObservations = VehicleObservationSession()
+    private val lockExecution = LockExecutionWatch()
     private val _vehicleStatus = kotlinx.coroutines.flow.MutableSharedFlow<ObservedVehicleStatus>(
         extraBufferCapacity = 8, onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST)
     override val vehicleStatus: kotlinx.coroutines.flow.Flow<ObservedVehicleStatus> = _vehicleStatus
@@ -240,6 +241,7 @@ class RealDkSession(
         }.onFailure { Logx.w("dk", "coef upload: ${it.message}") }
 
         isEstablished = true
+        lockExecution.reset()
         vehicleObservations.authenticated()
         Logx.d("dk", "=== DK session established ===")
     }
@@ -339,6 +341,7 @@ class RealDkSession(
         val result = CompletableDeferred<ByteArray>()
         pending[DkProtocol.CMD_V2A_CMD_RECEIVED] = recv   // 0x0111
         pending[DkProtocol.CMD_V2A_RESULT] = result       // 0x0112
+        val lockWatch = if (ctrl == DkProtocol.CTRL_LOCK) lockExecution.arm() else null
         return try {
             if (!send(DkProtocol.CMD_A2V_CONTROL, byteArrayOf(ctrl))) {
                 Logx.w("dk", "control 0x%02x: write failed".format(ctrl)); return ControlResult.WRITE_FAILED
@@ -356,12 +359,25 @@ class RealDkSession(
                 Logx.d("dk", "control 0x%02x: 0x0111 ok, 0x0112 err=0x%04x tail=%s".format(ctrl, err, hexOf(afterHeader(resBody))))
                 if (err != 0) ControlResult.REJECTED else ControlResult.CONFIRMED
             } else {
-                Logx.d("dk", "control 0x%02x: 0x0111 received (no 0x0112) -> CONFIRMED".format(ctrl))
+                Logx.d("dk", "control 0x%02x: 0x0111 received (no 0x0112)".format(ctrl))
                 ControlResult.CONFIRMED
+            }.let { r ->
+                // A received Lock counts only once the car reports itself locked (LockExecutionWatch).
+                if (r != ControlResult.CONFIRMED || lockWatch == null) r
+                else if (lockExecution.awaitExecuted(lockWatch, LockExecutionWatch.STATUS_WAIT_MS)) {
+                    Logx.d("dk", "control 0x%02x: car reports locked -> CONFIRMED".format(ctrl)); r
+                } else {
+                    Logx.w("dk", "control 0x%02x: received, but no locked status within %d ms -> NOT_EXECUTED"
+                        .format(ctrl, LockExecutionWatch.STATUS_WAIT_MS))
+                    ControlResult.NOT_EXECUTED
+                }
             }.also { r ->
                 // Display only (Lock tile direction); never an authorization for anything.
                 if (r == ControlResult.CONFIRMED && (ctrl == DkProtocol.CTRL_LOCK || ctrl == DkProtocol.CTRL_UNLOCK))
                     com.openzeekr.app.remote.LocalLockEvidence.onKeyConfirmed(locked = ctrl == DkProtocol.CTRL_LOCK)
+                // The car said it is still open: the tile must not keep an older "Locked".
+                if (r == ControlResult.NOT_EXECUTED && lockExecution.reportedOpen)
+                    com.openzeekr.app.remote.LocalLockEvidence.onKeyConfirmed(locked = false)
             }
         } catch (e: Exception) {
             Logx.w("dk", "control error: ${e.message}"); ControlResult.WRITE_FAILED
@@ -415,6 +431,7 @@ class RealDkSession(
      */
     fun reset() {
         vehicleObservations.reset()
+        lockExecution.reset()
         isEstablished = false; cryptoReady = false; cmacKeyCache = null
         // Complete (don't bare-cancel) each in-flight waiter with a typed error. A bare .cancel()
         // makes an awaiting handshake step throw a CancellationException whose obfuscated class name
@@ -620,6 +637,7 @@ class RealDkSession(
             // Same session-generation guard as the diagnostics: a frame captured before a reset is dropped.
             if (observationGeneration != null && observationGeneration == vehicleObservations.capture()) {
                 VehicleProximityStatus.parse(body)?.let {
+                    lockExecution.onStatus(it.centralLockCode)
                     _vehicleStatus.tryEmit(ObservedVehicleStatus(observationGeneration, it.centralLockCode))
                 }
             }
