@@ -35,8 +35,12 @@ class ProximityDiagnosticJournalTest {
     @Test fun bleDepartureAndAutomaticLockEventsAreCategorical() {
         assertEquals("BLE_DEPARTURE_CONFIRMED",
             ProximityDiagnosticJournal.event("prox", "ble departure confirmed"))
-        assertEquals("AUTO_LOCK_STARTED ble",
-            ProximityDiagnosticJournal.event("prox", "ble departure lock authorized (rssi=-90); sending Lock"))
+        assertEquals("AUTO_LOCK_STARTED ble very_deep_gradual -101",
+            ProximityDiagnosticJournal.event("prox", "ble departure lock authorized (rssi=-101 kind=very_deep_gradual); sending Lock"))
+        assertEquals("UNLOCK_STARTED presence -84", ProximityDiagnosticJournal.event("prox",
+            "approach-unlock ARM (rssi=-84 ~10,0m prevZone=NEAR route=presence) — confirmed-unlock loop"))
+        assertEquals("UNLOCK_STARTED self_lock_return -58", ProximityDiagnosticJournal.event("prox",
+            "approach-unlock ARM (rssi=-58 ~0,9m prevZone=NEAR route=self_lock_return) — confirmed-unlock loop"))
         assertEquals("AUTO_LOCK_CONFIRMED ble-departure", ProximityDiagnosticJournal.event("prox",
             "auto lock confirmed (ble-departure): the car reports locked"))
         assertEquals("AUTO_LOCK_CONFIRMED verified-link-departure", ProximityDiagnosticJournal.event("prox",

@@ -97,6 +97,8 @@ internal sealed class Leg {
     data class Shuffle(val ms: Long, val shadowDb: Double = 0.0) : Leg()
     /** Keep walking away for [ms] while the car is briefly in sight (a door, window or gap: +[boostDb]). */
     data class WalkPeak(val ms: Long, val boostDb: Double, val speedMps: Double = 1.3) : Leg()
+    /** Busy on the spot while moving (locking a door or a gate): Activity Recognition sees walking. */
+    data class Fidget(val ms: Long, val shadowDb: Double = 0.0) : Leg()
     object OpenDoor : Leg()
     object ManualLock : Leg()
     data class Mark(val label: String) : Leg()
@@ -525,6 +527,11 @@ internal class SimWorld(
                 is Leg.WalkPeak -> {
                     walking = true; walkSpeed = leg.speedMps; walkTarget = distanceM + leg.speedMps * leg.ms / 1000.0
                     facing = Facing.AWAY; extraShadowDb = leg.boostDb
+                    run(leg.ms); walking = false; extraShadowDb = 0.0
+                }
+                is Leg.Fidget -> {
+                    walking = true; walkSpeed = 0.0; walkTarget = distanceM; facing = Facing.TOWARD
+                    extraShadowDb = leg.shadowDb
                     run(leg.ms); walking = false; extraShadowDb = 0.0
                 }
                 Leg.OpenDoor -> { car.openDoor(); run(100) }

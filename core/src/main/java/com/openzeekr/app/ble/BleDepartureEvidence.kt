@@ -38,7 +38,12 @@ internal class BleDepartureEvidence(
     private val veryDeepMarginDb: Int = VERY_DEEP_MARGIN_DB,
     private val veryDeepMs: Long = VERY_DEEP_MS,
     private val veryDeepStillToleranceMs: Long = VERY_DEEP_STILL_TOLERANCE_MS,
+    private val stillDeepMarginDb: Int = STILL_DEEP_MARGIN_DB,
+    private val gradualDescentMs: Long = GRADUAL_DESCENT_MS,
 ) {
+    /** Which proof confirmed the latest departure (categorical, for the log and the journal). */
+    var confirmKind: String = "none"
+        private set
     private val strongNearRssi: Int = maxOf(strongNearRssi, lockThreshold + MIN_STRONG_GAP_DB)
     enum class Decision { NONE, CONFIRMED }
 
@@ -53,6 +58,9 @@ internal class BleDepartureEvidence(
     private var weakSinceMs = UNSET
     private var veryDeepSinceMs = UNSET
     private var veryDeepStillSinceMs = UNSET
+    private var belowLockSinceMs = UNSET
+    private var descentMs = UNSET
+    private var stillDeepSinceMs = UNSET
     private var confirmedAtMs = UNSET
 
     /** Categorical reason for the latest decision; never contains a position. */
@@ -78,6 +86,7 @@ internal class BleDepartureEvidence(
             // Duplicate or backward time cannot extend any window; keep the old sample time so a
             // replayed callback cannot shift the continuity boundary forward either.
             veryDeepSinceMs = UNSET
+            belowLockSinceMs = UNSET; descentMs = UNSET; stillDeepSinceMs = UNSET
             restartObservation()
             return decide("time_not_advancing")
         }
@@ -107,6 +116,33 @@ internal class BleDepartureEvidence(
         // Confirmed only while walking again, never during a stop.
         if (moving && veryDeepSinceMs != UNSET && nowMs - veryDeepSinceMs >= veryDeepMs) {
             if (confirmedAtMs == UNSET) confirmedAtMs = nowMs
+            confirmKind = "very_deep"
+            return decide("confirmed")
+        }
+
+        // Motion sensor stuck at STILL during a real walk away (field 09/10 13:30, screen off: STILL
+        // for 40 s while the signal fell -64 -> -104 in ~30 s; no Lock, the link dropped). Allowed
+        // only for a GRADUAL fall - at least [gradualDescentMs] from the lock threshold down to the
+        // very-deep level, as walking produces - and then [veryDeepMs] at [stillDeepMarginDb] or
+        // deeper. Standing at the boot the body drops the signal in one step (simulator F06: about
+        // 3.5 s), which never qualifies.
+        // A short sampling gap (the post-unlock fast window ending, 13:30:23-29) keeps the descent
+        // clock; a long one does not.
+        val longGap = previous != UNSET && nowMs - previous > MAX_DESCENT_GAP_MS
+        if (longGap || smoothedRssi > lockThreshold) belowLockSinceMs = UNSET
+        else if (belowLockSinceMs == UNSET) belowLockSinceMs = nowMs
+        if (!deepNow) descentMs = UNSET
+        else if (descentMs == UNSET && belowLockSinceMs != UNSET) descentMs = nowMs - belowLockSinceMs
+        val stillDeep = !gap && descentMs != UNSET && descentMs >= gradualDescentMs &&
+            rawRssi < strongNearRssi && smoothedRssi <= lockThreshold - stillDeepMarginDb
+        stillDeepSinceMs = when {
+            !stillDeep -> UNSET
+            stillDeepSinceMs == UNSET -> nowMs
+            else -> stillDeepSinceMs
+        }
+        if (stillDeepSinceMs != UNSET && nowMs - stillDeepSinceMs >= veryDeepMs) {
+            if (confirmedAtMs == UNSET) confirmedAtMs = nowMs
+            confirmKind = "very_deep_gradual"
             return decide("confirmed")
         }
 
@@ -168,6 +204,7 @@ internal class BleDepartureEvidence(
                 decide("not_receding")
             else -> {
                 if (confirmedAtMs == UNSET) confirmedAtMs = nowMs
+                confirmKind = "walk"
                 decide("confirmed")
             }
         }
@@ -179,6 +216,7 @@ internal class BleDepartureEvidence(
      */
     fun restart() {
         veryDeepSinceMs = UNSET
+        belowLockSinceMs = UNSET; descentMs = UNSET; stillDeepSinceMs = UNSET
         veryDeepStillSinceMs = UNSET
         restartObservation()
         reason = "restarted"
@@ -214,5 +252,8 @@ internal class BleDepartureEvidence(
         const val VERY_DEEP_MARGIN_DB = 13
         const val VERY_DEEP_MS = 12_000L
         const val VERY_DEEP_STILL_TOLERANCE_MS = 5_000L
+        const val STILL_DEEP_MARGIN_DB = 18
+        const val GRADUAL_DESCENT_MS = 10_000L
+        const val MAX_DESCENT_GAP_MS = 8_000L
     }
 }

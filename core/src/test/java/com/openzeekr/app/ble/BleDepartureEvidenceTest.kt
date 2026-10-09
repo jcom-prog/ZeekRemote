@@ -321,4 +321,35 @@ class BleDepartureEvidenceTest {
         val deepStart = 39_000L
         assertTrue("confirmed ${f.firstConfirmAt}", f.firstConfirmAt!! in deepStart + 12_000L..deepStart + 12_400L)
     }
+
+    // ---- 0.2.6: walking away while Activity Recognition hangs on STILL ----
+
+    @Test fun gradualDescentToVeryDeepConfirmsEvenWhenMotionSaysStill() {
+        // Synthetic shape of field 09/10 13:30: screen off, AR reported STILL for the whole walk,
+        // no steps; the signal sank ~1 dB/s from the lock level to below -100 and stayed there.
+        val f = arrivedFeed()
+        val leaveAt = f.t
+        val raw = { at: Long -> (-70 - (at - leaveAt) / 1000.0).toInt().coerceAtLeast(-104) }
+        f.run(90_000, raw, moving = false, stepsAvailable = false)
+        assertTrue("confirmed", f.firstConfirmAt != null)
+        assertEquals("very_deep_gradual", f.e.confirmKind)
+        // -100 is first reached 30 s after leaving; then 12 s held there.
+        assertTrue(f.firstConfirmAt!! - leaveAt >= 30_000 + BleDepartureEvidence.VERY_DEEP_MS)
+    }
+
+    @Test fun suddenDropToVeryDeepWhileStillNeverConfirms() {
+        // Phone put down / shielded beside the car: from strong straight to -101 with no descent.
+        val f = arrivedFeed()
+        f.run(10 * 60_000, { -101 }, moving = false, stepsAvailable = false)
+        assertNull(f.firstConfirmAt)
+    }
+
+    @Test fun gradualDescentThatStopsAboveTheStillDeepLevelNeverConfirms() {
+        // Sitting at home ~25 m away with the phone still: the signal settles at -95, not -100.
+        val f = arrivedFeed()
+        val leaveAt = f.t
+        f.run(10 * 60_000, { at -> (-70 - (at - leaveAt) / 1000.0).toInt().coerceAtLeast(-95) },
+            moving = false, stepsAvailable = false)
+        assertNull(f.firstConfirmAt)
+    }
 }

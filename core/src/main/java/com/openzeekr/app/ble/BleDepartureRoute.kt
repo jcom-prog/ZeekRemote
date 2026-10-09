@@ -26,6 +26,9 @@ internal class BleDepartureRoute private constructor(lockThreshold: Int) {
     /** Categorical reason of the latest evidence decision; never contains a position. */
     val evidenceReason: String get() = evidence.reason
 
+    /** Which proof confirmed the departure: walk, very_deep or very_deep_gradual. */
+    val confirmKind: String get() = evidence.confirmKind
+
     /** Set when the latest feed revoked a held proof; cleared by the next feed. */
     var revokedReason: String? = null
         private set

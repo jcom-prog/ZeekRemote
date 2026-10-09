@@ -1,5 +1,6 @@
 package com.openzeekr.app.ble.sim
 
+import com.openzeekr.app.ble.sim.Leg.Fidget
 import com.openzeekr.app.ble.sim.Leg.Mark
 import com.openzeekr.app.ble.sim.Leg.ManualLock
 import com.openzeekr.app.ble.sim.Leg.OpenDoor
@@ -97,6 +98,16 @@ internal object SimScenarios {
         Scenario("F23 key Lock fails, no GNSS", "normal departure, car ignores key Locks, no GNSS", 30.0,
             approachAndOpen() + listOf(Mark("expect-lock"), Walk(30.0), Stand(150_000)), gnssAccuracyM = null,
             carRefusesKeyLock = true),
+        // User 09/10 12:59: inside the house 25 m away (walls), then locking the front door ~20 s in
+        // the open with the phone in hand (+6 dB line of sight), 20 m to the garden gate ~3 m from
+        // the car, gate ~25 s, then the door. No unlock at the house; open before the door.
+        Scenario("F24 house door, gate, car", "inside 25 m, front door 20 s (LOS), gate at 4 m 25 s, door", 25.0,
+            listOf(Stand(150_000, Facing.SIDE, -12.0), Mark("expect-stay-locked"), Fidget(20_000, 6.0),
+                Mark("expect-unlock"), Walk(4.0), Fidget(25_000), Walk(1.0), Stand(10_000))),
+        // The same with a long stop at the gate (2.5 min): the car relocks itself; walking up to the
+        // door must open it again (0.2.6 B).
+        Scenario("F25 gate 2.5 min, car relocks", "approach to the gate at 4 m, 150 s there, then the door", 25.0,
+            listOf(Mark("-"), Walk(4.0), Fidget(150_000), Walk(1.0), Mark("expect-unlocked-by-end"), Stand(10_000))),
         Scenario("F21 car ignores key Lock", "normal departure; the car acknowledges but never executes a key Lock", 30.0,
             approachAndOpen() + listOf(Mark("-"), Walk(30.0), Stand(150_000)), carRefusesKeyLock = true),
     )

@@ -75,6 +75,13 @@ internal class ProximityDecisionPolicy {
     private var deepReturnUnlockUntilMs = UNSET_MS
     /** The current arrival epoch replaced a Lock's departure latch (see [onPresenceMatch]). */
     private var arrivalEpochAfterLock = false
+    private var selfLockReopenAtMs = UNSET_MS
+    private var selfLockMinRssi = 0  // the smoothed level at the self-lock
+    private var selfLockReopenReadings = 0
+
+    /** Which rule qualified the latest unlock (categorical, for the log and the journal). */
+    var unlockRoute: String = "none"
+        private set
 
     /** Set once when a return after a Lock was recognised from the signal alone (for the log). */
     var deepFarReturnRearmed = false
@@ -149,7 +156,7 @@ internal class ProximityDecisionPolicy {
         if (!departureLatched && arrivalEpochAfterLock && tryRearmManualDeepFarReturn(nowMs, rssi, unlockThreshold)) {
             finishSameLinkReturn()
             arrivalEpochAfterLock = false
-            unlockQualifiedAtMs = nowMs
+            unlockQualifiedAtMs = nowMs; unlockRoute = "deep_return"
             deepReturnUnlockUntilMs = nowMs + DEEP_RETURN_UNLOCK_WINDOW_MS
             deepFarReturnRearmed = true
         }
@@ -162,7 +169,7 @@ internal class ProximityDecisionPolicy {
                 if (presenceNearSinceMs == UNSET_MS) presenceNearSinceMs = nowMs
                 if (nowMs - presenceNearSinceMs >= PRESENCE_CONFIRM_MS &&
                     unlockQualifiedAtMs == UNSET_MS) {
-                    unlockQualifiedAtMs = nowMs
+                    unlockQualifiedAtMs = nowMs; unlockRoute = "presence"
                 }
             } else {
                 presenceNearSinceMs = UNSET_MS
@@ -198,13 +205,13 @@ internal class ProximityDecisionPolicy {
         if (stillApproach) {
             if (stillApproachSinceMs == UNSET_MS) stillApproachSinceMs = nowMs
             if (nowMs - stillApproachSinceMs >= STILL_APPROACH_CONFIRM_MS && unlockQualifiedAtMs == UNSET_MS)
-                unlockQualifiedAtMs = nowMs
+                unlockQualifiedAtMs = nowMs; unlockRoute = "still"
         } else stillApproachSinceMs = UNSET_MS
         if (qualifiedApproach || freshDoorSession) {
             if (nearCandidateSinceMs == UNSET_MS) nearCandidateSinceMs = nowMs
             val holdMs = if (qualifiedApproach) APPROACH_CONFIRM_MS else DOOR_CONFIRM_MS
             if (nowMs - nearCandidateSinceMs >= holdMs && unlockQualifiedAtMs == UNSET_MS) {
-                unlockQualifiedAtMs = nowMs
+                unlockQualifiedAtMs = nowMs; unlockRoute = if (qualifiedApproach) "approach" else "door"
             }
         } else {
             nearCandidateSinceMs = UNSET_MS
@@ -221,7 +228,7 @@ internal class ProximityDecisionPolicy {
         // reading re-qualifies without a motion edge (review 0.1.61).
         if (unlockQualifiedAtMs == UNSET_MS && deepReturnUnlockUntilMs != UNSET_MS && nowMs <= deepReturnUnlockUntilMs &&
             rssi >= unlockThreshold + MANUAL_DEEP_RETURN_MARGIN_DB) {
-            unlockQualifiedAtMs = nowMs
+            unlockQualifiedAtMs = nowMs; unlockRoute = "deep_window"
         }
         return unlockQualifiedAtMs != UNSET_MS
     }
@@ -276,6 +283,17 @@ internal class ProximityDecisionPolicy {
         deepReturnNeedsRecession = true
     }
 
+    /**
+     * The car locked itself within 3 min of our approach unlock (the controller decides): a walk
+     * up to the door in the next [SELF_LOCK_REOPEN_WINDOW_MS] may reopen it once (call after
+     * [onManualLockConfirmed]).
+     */
+    fun armSelfLockReopen(nowMs: Long, rssi: Int) {
+        selfLockReopenAtMs = nowMs
+        selfLockMinRssi = rssi
+        selfLockReopenReadings = 0
+    }
+
     /** Confirmed manual lock shares the departure latch. */
     fun onManualLockConfirmed() {
         onDepartureLockStarted()
@@ -322,13 +340,37 @@ internal class ProximityDecisionPolicy {
     ): Boolean {
         if (departureLinkEnded) return false // fresh offloaded presence owns this path
 
+        // The car locked itself shortly after OUR approach unlock, before the user got in (field
+        // 09/10 12:59: unlocked as the user locked the front door ~25 m away, the car relocked
+        // after 58 s, and at the door "stay locked after a self-lock" kept it shut). Walking up to
+        // the door afterwards - a clear rise above the level at the self-lock, while moving - opens it again,
+        // once. Sitting in the car or standing beside it gives no such rise and stays locked.
+        if (selfLockReopenAtMs != UNSET_MS) {
+            if (nowMs - selfLockReopenAtMs > SELF_LOCK_REOPEN_WINDOW_MS) {
+                selfLockReopenAtMs = UNSET_MS
+            } else {
+                // Measured against the level AT the self-lock: sitting in the car (-48 there) would
+                // need -42; standing at the gate a few metres away only a real walk to the door
+                // clears the rise. No absolute strong-near level: a back pocket reads -76 at 1 m.
+                if (moving && rssi >= unlockThreshold + SELF_LOCK_REOPEN_MARGIN_DB &&
+                    rssi >= selfLockMinRssi + SELF_LOCK_REOPEN_RISE_DB)
+                    selfLockReopenReadings++
+                else selfLockReopenReadings = 0
+                if (selfLockReopenReadings >= SELF_LOCK_REOPEN_READINGS) {
+                    finishSameLinkReturn()
+                    unlockQualifiedAtMs = nowMs; unlockRoute = "self_lock_return"
+                    return true
+                }
+            }
+        }
+
         // A return from clearly far away rearms after any Lock (manual, the car's own, or automatic):
         // simulator 03/10, "turn back at 9 m": after an automatic Lock the motion-gated route below
         // missed the walk back and the car stayed locked at the door.
         if (tryRearmManualDeepFarReturn(nowMs, rssi, unlockThreshold)) {
             finishSameLinkReturn()
             // The sustained strong return is itself the approach proof: no motion edge needed.
-            unlockQualifiedAtMs = nowMs
+            unlockQualifiedAtMs = nowMs; unlockRoute = "deep_return"
             deepReturnUnlockUntilMs = nowMs + DEEP_RETURN_UNLOCK_WINDOW_MS
             deepFarReturnRearmed = true
             return true
@@ -442,7 +484,7 @@ internal class ProximityDecisionPolicy {
             // At that level the return itself is the approach proof (no extra hold: the field
             // return of 0.1.35 must still open before the door).
             finishSameLinkReturn()
-            unlockQualifiedAtMs = nowMs
+            unlockQualifiedAtMs = nowMs; unlockRoute = "manual_return"
             return true
         } else {
             // After an automatic Lock only the strict routes reopen: the deep-far return above or
@@ -478,7 +520,7 @@ internal class ProximityDecisionPolicy {
         val needed = if (moving) MANUAL_AT_CAR_MIN_READINGS else MANUAL_AT_CAR_STILL_MIN_READINGS
         if (manualAtCarReadings < needed) return false
         finishSameLinkReturn()
-        unlockQualifiedAtMs = nowMs
+        unlockQualifiedAtMs = nowMs; unlockRoute = "at_car"
         return true
     }
 
@@ -601,6 +643,8 @@ internal class ProximityDecisionPolicy {
     }
 
     private fun resetSameLinkReturn() {
+        selfLockReopenAtMs = UNSET_MS
+        selfLockReopenReadings = 0
         departureSameLinkFarSinceMs = UNSET_MS
         departureSameLinkFarQualifiedAtMs = UNSET_MS
         manualStillSinceMs = UNSET_MS
@@ -802,7 +846,11 @@ internal class ProximityDecisionPolicy {
         // Requiring another +4 dB after the DK handshake delayed the field-proven 0.1.33 cold start
         // by ~1.35 s. Keep the two-sample confirmation, but allow readiness at the configured Far
         // threshold; commands still cannot run before SESSION_READY.
-        const val PRESENCE_READY_MARGIN_DB = 0
+        // 0.2.6: right after the wake/connect, two readings 4 dB inside the Far threshold. Field
+        // 09/10 12:59: the link came up as the user locked the front door ~25 m away and noise
+        // just over the threshold opened the car 0.2 s after connecting. The captured 0.1.28
+        // arrival (-83..-87, -82 twice during the handshake) still qualifies in time.
+        const val PRESENCE_READY_MARGIN_DB = 4
         const val PRESENCE_RISE_DB = 1
         // Two consecutive fast-cadence observations. Requiring 400 ms made the result depend on
         // whether one noisy 200 ms sample landed just before SESSION_READY (the 0.1.28 failure).
@@ -842,6 +890,10 @@ internal class ProximityDecisionPolicy {
         const val MANUAL_MOTION_RETURN_MARGIN_DB = 6
         const val MANUAL_MOTION_RETURN_MIN_READINGS = 2
         /** The walk away must have dipped to the deep-far level (field: -98 at ~10 m; at the car -55..-81). */
+        const val SELF_LOCK_REOPEN_WINDOW_MS = 300_000L
+        const val SELF_LOCK_REOPEN_RISE_DB = 6
+        const val SELF_LOCK_REOPEN_MARGIN_DB = 8
+        const val SELF_LOCK_REOPEN_READINGS = 2
         const val MANUAL_AT_CAR_DIP_DB = 6
         const val MANUAL_AT_CAR_MIN_READINGS = 2
         const val MANUAL_AT_CAR_STILL_MIN_READINGS = 4

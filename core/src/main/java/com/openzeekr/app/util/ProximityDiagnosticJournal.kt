@@ -26,6 +26,10 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
         // Whitelisted categorical values only; anything else is not journaled.
         private val autoLockConfirmed = Regex(
             "auto lock confirmed \\((ble-departure|verified-link-departure|walk-away-lock|idle-far-lock)\\): the car reports locked")
+        private val unlockArm = Regex("^approach-unlock ARM \\(rssi=(-[0-9]{2,3}) .* route=(presence|approach|door|still|" +
+            "deep_return|deep_window|manual_return|at_car|self_lock_return|none)\\)")
+        private val bleLockAuthorized = Regex("^ble departure lock authorized \\(rssi=(-[0-9]{2,3}) kind=(walk|very_deep|" +
+            "very_deep_gradual|none)\\)")
         private val lockAlarm = Regex("lock alarm (raised|unavailable|suppressed) \\(([A-Z_]{1,40})\\)")
         private val bleDepartureRevoked = Regex(
             "ble departure revoked \\((strong_near|signal_recovered|time_not_advancing)\\)")
@@ -77,7 +81,9 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                     message.startsWith("vehicle relock unverified (") -> "RELOCK_REJECTED"
                     message.startsWith("usable departure location anchor unavailable") -> "ANCHOR_UNAVAILABLE"
                     message.startsWith("usable departure location anchor available") -> "ANCHOR_AVAILABLE"
-                    message.startsWith("approach-unlock ARM (") -> "UNLOCK_STARTED"
+                    // Which rule opened, at which smoothed signal (a number, never a position).
+                    message.startsWith("approach-unlock ARM (") -> unlockArm.find(message)
+                        ?.let { "UNLOCK_STARTED ${it.groupValues[2]} ${it.groupValues[1]}" } ?: "UNLOCK_STARTED"
                     message.startsWith("car locked itself (") -> "CAR_SELF_LOCK"
                     message.startsWith("manual Lock not executed:") -> "MANUAL_LOCK_NOT_EXECUTED"
                     Regex("(ble-departure|verified-link-departure|walk-away-lock|idle-far-lock|far-no-motion): " +
@@ -99,7 +105,8 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                     message.startsWith("ble departure route enabled (") -> "BLE_DEPARTURE_ROUTE enabled"
                     message == "ble departure route suspended for this epoch after unconfirmed Lock" ->
                         "BLE_DEPARTURE_SUSPENDED"
-                    message.startsWith("ble departure lock authorized (") -> "AUTO_LOCK_STARTED ble"
+                    message.startsWith("ble departure lock authorized (") -> bleLockAuthorized.find(message)
+                        ?.let { "AUTO_LOCK_STARTED ble ${it.groupValues[2]} ${it.groupValues[1]}" } ?: "AUTO_LOCK_STARTED ble"
                     message.startsWith("auto lock confirmed (") -> autoLockConfirmed.matchEntire(message)
                         ?.let { "AUTO_LOCK_CONFIRMED ${it.groupValues[1]}" }
                     else -> bleDepartureRevoked.matchEntire(message)

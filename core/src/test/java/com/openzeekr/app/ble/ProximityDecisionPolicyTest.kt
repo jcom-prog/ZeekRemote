@@ -154,9 +154,13 @@ class ProximityDecisionPolicyTest {
         val policy = ProximityDecisionPolicy()
         policy.onPresenceMatch(0L, -87, true, -86)
 
+        // 0.2.6: noise just over the Far threshold right after the connect no longer opens (field
+        // 09/10 12:59, ~25 m away); two readings 4 dB inside it do, without any further wait.
         assertFalse(policy.shouldUnlock(100L, -86, true, -86))
+        assertFalse(policy.shouldUnlock(300L, -86, true, -86))
+        assertFalse(policy.shouldUnlock(500L, -82, true, -86))
         assertTrue("qualified cold arrival must not wait for an extra 4 dB after handshake",
-            policy.shouldUnlock(300L, -86, true, -86))
+            policy.shouldUnlock(700L, -82, true, -86))
     }
 
     @Test
@@ -546,7 +550,8 @@ class ProximityDecisionPolicyTest {
         // 0.1.34: once the old link ended, hardware presence + movement + a rising signal may
         // qualify at the configured Far threshold after two fast samples. The pre-link rebound
         // above remains blocked, so this latency gain does not weaken the departure latch.
-        assertTrue(policy.shouldUnlock(now + 600, -82, true, -86))
+        // 0.2.6: two readings 4 dB inside the Far threshold (-82 and better).
+        assertFalse(policy.shouldUnlock(now + 600, -82, true, -86))
         assertTrue(policy.shouldUnlock(now + 800, -81, true, -86))
     }
 
@@ -970,5 +975,45 @@ class ManualLockDeepFarReturnTest {
         // Two readings at the car reopen.
         assertFalse(p.shouldUnlock(t, -70, true, -86)); t += 200L
         assertTrue(p.shouldUnlock(t, -69, true, -86))
+    }
+
+    // ---- 0.2.6: the car locked itself soon after our approach unlock ----
+
+    private fun selfLockedAt(rssi: Int): ProximityDecisionPolicy {
+        val policy = ProximityDecisionPolicy()
+        policy.onManualLockConfirmed()
+        policy.armSelfLockReopen(0L, rssi)
+        return policy
+    }
+
+    @Test
+    fun selfLockAtTheGateReopensOnceWhenWalkingUpToTheDoor() {
+        // Synthetic shape of field 09/10 12:59-13:00: unlocked, the car relocked while the user
+        // was busy at the gate ~4 m away (back pocket, ~-84), then walked to the door (~-76).
+        val policy = selfLockedAt(-84)
+        for (time in 200L..60_000L step 200L) {
+            val rssi = if ((time / 200) % 3 == 0L) -81 else -85 // fidgeting at the gate
+            assertFalse("gate $time", policy.shouldUnlock(time, rssi, true, -86))
+        }
+        assertFalse(policy.shouldUnlock(60_200L, -77, true, -86))
+        assertTrue(policy.shouldUnlock(60_400L, -76, true, -86))
+        assertEquals("self_lock_return", policy.unlockRoute)
+    }
+
+    @Test
+    fun selfLockWhileSittingInTheCarStaysLocked() {
+        val policy = selfLockedAt(-48)
+        for (time in 200L..120_000L step 200L) {
+            val rssi = -50 + ((time / 200) % 5).toInt() // -50..-46
+            assertFalse("seat $time", policy.shouldUnlock(time, rssi, (time / 1_000) % 2 == 0L, -86))
+        }
+    }
+
+    @Test
+    fun selfLockReopenNeedsMotion() {
+        val policy = selfLockedAt(-84)
+        for (time in 200L..20_000L step 200L) {
+            assertFalse(policy.shouldUnlock(time, -74, false, -86))
+        }
     }
 }

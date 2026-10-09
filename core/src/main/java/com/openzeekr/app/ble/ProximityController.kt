@@ -165,6 +165,8 @@ class ProximityController internal constructor(
     private var lastVehicleStatus: ObservedVehicleStatus? = null
     private var manualCloudLockCheck: Job? = null
     private var verifyLogAtMs = 0L
+    private var lastUnlockSource = ""
+    private var selfLockReopenPending = false
     @Volatile private var measureUntilElapsedMs = 0L
     private val _measuring = kotlinx.coroutines.flow.MutableStateFlow(false)
     /** True while Measurement mode samples fast for a calibration walk. */
@@ -437,6 +439,11 @@ class ProximityController internal constructor(
                 armedUnlocked = false
                 resetLinkedWatch()
                 decisionPolicy.onManualLockConfirmed()
+                if (selfLockReopenPending && source == "car self-lock") {
+                    decisionPolicy.armSelfLockReopen(clock.wallMs(), (gattEma ?: -100.0).toInt())
+                    Logx.d("prox", "car relocked soon after our unlock -> walking up to the door reopens once")
+                }
+                selfLockReopenPending = false
                 lastTriggerMs = clock.wallMs()
                 _wakeLockNeeded.value = false
                 activityWake?.complete(Unit)
@@ -448,6 +455,7 @@ class ProximityController internal constructor(
     }
 
     private fun recordUnlockConfirmed(source: String) {
+        lastUnlockSource = source
         manualCloudLockCheck?.cancel(); manualCloudLockCheck = null
         resetLinkedWatch()
         val now = clock.wallMs()
@@ -759,6 +767,9 @@ class ProximityController internal constructor(
         alerts.silenceAlarm()
         com.openzeekr.app.remote.LocalLockEvidence.onKeyConfirmed(locked = true)
         Logx.w("prox", "car locked itself (key status central=${status.centralLockCode}) -> treated as Lock")
+        val sinceUnlockMs = clock.wallMs() - unlockObservedAtMs
+        selfLockReopenPending = lastUnlockSource == "proximity" && unlockObservedAtMs != 0L &&
+            sinceUnlockMs in 0..SELF_LOCK_REOPEN_AFTER_UNLOCK_MS
         onExternalLockConfirmed("car self-lock")
     }
 
@@ -851,7 +862,7 @@ class ProximityController internal constructor(
                     lockConfirmationJob?.cancel(); lockConfirmationJob = null
                     linkDepartureJob?.cancel(); linkDepartureJob = null
                     departureProofAtMs = clock.wallMs()
-                    Logx.d("prox", "ble departure lock authorized (rssi=$rssi); sending Lock")
+                    Logx.d("prox", "ble departure lock authorized (rssi=$rssi kind=${bleRoute?.confirmKind ?: "none"}); sending Lock")
                     startLockLoop("ble-departure")
                     return
                 }
@@ -1293,7 +1304,8 @@ class ProximityController internal constructor(
             decisionPolicy.onPendingUnlockStarted()
             // A liveness command must never occupy the shared reply slots while unlock starts.
             pingJob?.cancel(); pingJob = null; pingInFlight = false
-            Logx.d("prox", "approach-unlock ARM (rssi=$smoothed ~${"%.1f".format(dist)}m prevZone=$prevZone) — confirmed-unlock loop")
+            Logx.d("prox", "approach-unlock ARM (rssi=$smoothed ~${"%.1f".format(dist)}m prevZone=$prevZone " +
+                "route=${decisionPolicy.unlockRoute}) — confirmed-unlock loop")
             startUnlockLoop()
             return
         }
@@ -1318,7 +1330,7 @@ class ProximityController internal constructor(
             lockConfirmationJob?.cancel(); lockConfirmationJob = null
             linkDepartureJob?.cancel(); linkDepartureJob = null
             departureProofAtMs = clock.wallMs()
-            Logx.d("prox", "ble departure lock authorized (rssi=$smoothed); sending Lock")
+            Logx.d("prox", "ble departure lock authorized (rssi=$smoothed kind=${bleRoute?.confirmKind ?: "none"}); sending Lock")
             startLockLoop("ble-departure")
             return
         }
@@ -1807,6 +1819,8 @@ class ProximityController internal constructor(
         private const val MAX_NOT_EXECUTED_LOCKS = 2
         /** How long a BLE departure proof may back a cloud Lock after the key link failed. */
         private const val BLE_PROOF_CLOUD_MS = 30_000L
+        /** A self-lock this soon after our approach unlock may be undone by walking up to the door. */
+        private const val SELF_LOCK_REOPEN_AFTER_UNLOCK_MS = 180_000L
         private const val LOCK_SESSION_WAIT_MS = 3_000L    // brief wait for SESSION_READY per attempt
         private const val LOCK_ACK_TIMEOUT_MS = 1_500L     // wait for the car's lock receipt
 
