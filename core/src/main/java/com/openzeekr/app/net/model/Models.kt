@@ -1334,6 +1334,35 @@ object VehicleStatus {
             if (v is JsonObject && depth > 0) "$k{${keyTree(v, depth - 1)}}" else k
         }
 
+    private val CONSUMPTION_KEY = Regex("(?i)consum|aver|avg|trip|energy|kwh|dist|mileage|odo")
+    private val NEVER_LOG_KEY = Regex("(?i)vin|lat|lon|posit|gps|coord|addr|name|phone|id$|token|key")
+
+    /**
+     * Diagnostics: every numeric value in the status tree whose key looks like consumption, an
+     * average or a trip ("path=number", sorted). Field 10/10: the car shows trip 1 at 21.3 but
+     * averTraPowerConsumption is absent (null); this finds where the cloud carries it, if at all.
+     * Never identifiers or location: keys matching [NEVER_LOG_KEY] are skipped, values are numbers.
+     */
+    fun consumptionCandidates(root: JsonObject): String {
+        val out = sortedMapOf<String, String>()
+        fun walk(o: JsonObject, path: String, depth: Int) {
+            for ((k, v) in o) {
+                val p = if (path.isEmpty()) k else "$path.$k"
+                if (NEVER_LOG_KEY.containsMatchIn(k)) continue
+                when (v) {
+                    is JsonObject -> if (depth < 4) walk(v, p, depth + 1)
+                    is JsonPrimitive -> {
+                        val n = v.contentOrNull?.toDoubleOrNull()
+                        if (n != null && CONSUMPTION_KEY.containsMatchIn(k)) out[p] = v.content
+                    }
+                    else -> Unit
+                }
+            }
+        }
+        walk(root, "", 0)
+        return out.entries.joinToString(" ") { "${it.key}=${it.value}" }
+    }
+
     private fun JsonObject.obj(key: String): JsonObject? = this[key] as? JsonObject
     private fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
     private fun JsonObject.intOf(key: String): Int? =

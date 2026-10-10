@@ -70,6 +70,7 @@ class RemoteControlRepository(private val store: ConfigStore, private val client
     /** Last status key-structure we logged; used to dump the schema only when it changes (not per poll). */
     private var lastStatusKeyTree: String? = null
     private var lastConsumptionFields: String? = null
+    private var lastConsumptionCandidates: String? = null
     private var missingActiveVinCount = 0
 
     /** Fire a catalog command. Physical-actuation ids (RDU_2/RDL_2/RDO/RDC) route through
@@ -157,6 +158,11 @@ class RemoteControlRepository(private val store: ConfigStore, private val client
             if (keyTree != lastStatusKeyTree) {
                 lastStatusKeyTree = keyTree
                 com.openzeekr.app.util.Logx.d("status", "keys=$keyTree")
+            }
+            val candidates = VehicleStatus.consumptionCandidates(obj)
+            if (candidates != lastConsumptionCandidates) {
+                lastConsumptionCandidates = candidates
+                com.openzeekr.app.util.Logx.d("consumption", "consumption candidates $candidates")
             }
             // `data` is a raw JsonObject; map it tolerantly (never throws on shape).
             VehicleStatus.parse(obj).also { st ->
