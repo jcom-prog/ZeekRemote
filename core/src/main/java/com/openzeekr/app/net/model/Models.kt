@@ -1110,9 +1110,9 @@ data class ElectricStatusVo(
      *  `timeToFullyCharged`). 0/absent when not charging or unknown. */
     val timeToFullyCharged: Int? = null,
 ) {
-    /** The car's trip computer 1 ("Rit 1"): [averTraPowerConsumption] (field 10/10: car 21.3). */
-    val trip1Consumption: Double? get() = averTraPowerConsumption?.toDoubleOrNull()?.takeIf { it > 0.0 }
-    /** The car's trip computer 2 ("Rit 2"): [averPowerConsumption] (field 10/10: app showed 30.9). */
+    /** Trip computer 2 ("Rit 2") consumption: [averPowerConsumption] (field 10/10: 30.9, as the car).
+     *  Trip 1's consumption is not in the cloud status for this car (averTraPowerConsumption absent,
+     *  no field held the car's 21.3), and a shared account gets no trip history (HTTP 401). */
     val trip2Consumption: Double? get() = averPowerConsumption?.toDoubleOrNull()?.takeIf { it > 0.0 }
 
     /** Charge-port (AC or DC flap) open. */
@@ -1134,6 +1134,20 @@ data class ElectricStatusVo(
             val v = chargeUAct?.toDoubleOrNull() ?: return null
             if (a <= 0.0 || v <= 0.0) return null
             return if (v >= AC_3PHASE_MIN_V) kotlin.math.sqrt(3.0) * v * a else v * a
+        }
+
+    /**
+     * What kind of charge, only when the data proves it: "DC" for a DC session, "3-fase" at a
+     * line-to-line voltage (>= 300 V) or above what one phase can carry (32 A x 230 V = 7.4 kW;
+     * field 10/10: 21.3 kW at a 22 kW post had been labelled "1-phase"), else null - at ~230 V and
+     * low power it may be 1 phase or 3 phases at low current.
+     */
+    val chargeKindLabel: String?
+        get() {
+            if (dcPower() != null) return "DC"
+            val p = chargePowerW ?: return null
+            val v = chargeUAct?.toDoubleOrNull() ?: 0.0
+            return if (v >= AC_3PHASE_MIN_V || p > ONE_PHASE_MAX_W) "3-fase" else null
         }
 
     /** DC pile power (W) when a DC session reports live values, else null. */
@@ -1177,6 +1191,8 @@ data class ElectricStatusVo(
         private val CONNECTED_STATES = setOf(1, 2, 3)
         /** AC voltage at/above which the session is treated as 3-phase (line-to-line ~400 V). */
         private const val AC_3PHASE_MIN_V = 300.0
+        /** The most one phase carries on a home/post connection: 32 A x 230 V. */
+        private const val ONE_PHASE_MAX_W = 7_400.0
     }
 }
 
@@ -1197,6 +1213,9 @@ data class MaintenanceStatusVo(
 data class RunningStatusVo(
     val fuelLevel: String? = null,
     val fuelLevelPct: Int? = null,
+    /** The car's trip computers (km since their manual reset): "Rit 1" / "Rit 2" on the car. */
+    val tripMeter1: Double? = null,
+    val tripMeter2: Double? = null,
 )
 
 /**
@@ -1314,6 +1333,8 @@ object VehicleStatus {
                         RunningStatusVo(
                             fuelLevel = r.str("fuelLevel"),
                             fuelLevelPct = r.intOf("fuelLevelPct"),
+                            tripMeter1 = r.dblOf("tripMeter1"),
+                            tripMeter2 = r.dblOf("tripMeter2"),
                         )
                     },
                 )
@@ -1333,35 +1354,6 @@ object VehicleStatus {
         root.entries.joinToString(", ") { (k, v) ->
             if (v is JsonObject && depth > 0) "$k{${keyTree(v, depth - 1)}}" else k
         }
-
-    private val CONSUMPTION_KEY = Regex("(?i)consum|aver|avg|trip|energy|kwh|dist|mileage|odo")
-    private val NEVER_LOG_KEY = Regex("(?i)vin|lat|lon|posit|gps|coord|addr|name|phone|id$|token|key")
-
-    /**
-     * Diagnostics: every numeric value in the status tree whose key looks like consumption, an
-     * average or a trip ("path=number", sorted). Field 10/10: the car shows trip 1 at 21.3 but
-     * averTraPowerConsumption is absent (null); this finds where the cloud carries it, if at all.
-     * Never identifiers or location: keys matching [NEVER_LOG_KEY] are skipped, values are numbers.
-     */
-    fun consumptionCandidates(root: JsonObject): String {
-        val out = sortedMapOf<String, String>()
-        fun walk(o: JsonObject, path: String, depth: Int) {
-            for ((k, v) in o) {
-                val p = if (path.isEmpty()) k else "$path.$k"
-                if (NEVER_LOG_KEY.containsMatchIn(k)) continue
-                when (v) {
-                    is JsonObject -> if (depth < 4) walk(v, p, depth + 1)
-                    is JsonPrimitive -> {
-                        val n = v.contentOrNull?.toDoubleOrNull()
-                        if (n != null && CONSUMPTION_KEY.containsMatchIn(k)) out[p] = v.content
-                    }
-                    else -> Unit
-                }
-            }
-        }
-        walk(root, "", 0)
-        return out.entries.joinToString(" ") { "${it.key}=${it.value}" }
-    }
 
     private fun JsonObject.obj(key: String): JsonObject? = this[key] as? JsonObject
     private fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull

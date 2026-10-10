@@ -69,8 +69,7 @@ class RemoteControlRepository(private val store: ConfigStore, private val client
 
     /** Last status key-structure we logged; used to dump the schema only when it changes (not per poll). */
     private var lastStatusKeyTree: String? = null
-    private var lastConsumptionFields: String? = null
-    private var lastConsumptionCandidates: String? = null
+    private var lastChargeRaw: String? = null
     private var missingActiveVinCount = 0
 
     /** Fire a catalog command. Physical-actuation ids (RDU_2/RDL_2/RDO/RDC) route through
@@ -159,22 +158,17 @@ class RemoteControlRepository(private val store: ConfigStore, private val client
                 lastStatusKeyTree = keyTree
                 com.openzeekr.app.util.Logx.d("status", "keys=$keyTree")
             }
-            val candidates = VehicleStatus.consumptionCandidates(obj)
-            if (candidates != lastConsumptionCandidates) {
-                lastConsumptionCandidates = candidates
-                com.openzeekr.app.util.Logx.d("consumption", "consumption candidates $candidates")
-            }
             // `data` is a raw JsonObject; map it tolerantly (never throws on shape).
             VehicleStatus.parse(obj).also { st ->
-                // Field 10/10: the app showed 30.9 kWh/100km where the car showed 21.3. Log the two
-                // candidate consumption figures (plain numbers, no identifiers) when they change, to
-                // pick the one that matches the car.
                 val e = st.additionalVehicleStatus?.electricVehicleStatus
-                val cons = "aver=${e?.averPowerConsumption} averTra=${e?.averTraPowerConsumption}"
-                if (cons != lastConsumptionFields) {
-                    lastConsumptionFields = cons
-                    // Own area: "status" is gated by the HTTP-logging switch (off in the field, 10/10).
-                    com.openzeekr.app.util.Logx.d("consumption", "consumption fields $cons")
+                e?.trip2Consumption?.let { LastKnownTrip2.value = it }
+                // Raw charge readings (numbers only) to check the phase label against the post
+                // (field 10/10: 21.3 kW at a 22 kW post had been labelled "1-phase").
+                val charge = "U=${e?.chargeUAct} I=${e?.chargeIAct} dcU=${e?.dcChargePileUAct} dcI=${e?.dcChargePileIAct}"
+                if (e?.chargingActive == true && charge != lastChargeRaw) {
+                    lastChargeRaw = charge
+                    // Own area: "status" is gated by the HTTP-logging switch (off in the field).
+                    com.openzeekr.app.util.Logx.d("charge", "charge raw $charge kind=${e.chargeKindLabel ?: "-"}")
                 }
             }
         }
@@ -744,4 +738,12 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
                 "car must be awake to store it. Wake the car (unlock it, open the Zeekr app, or plug it in " +
                 "to charge) and try again."
     }
+}
+
+/**
+ * The last trip 2 ("Rit 2") consumption the cloud reported. The status leaves it out while the car
+ * charges (field 10/10), so the home screen keeps showing this instead of "—" (process lifetime).
+ */
+object LastKnownTrip2 {
+    @Volatile var value: Double? = null
 }

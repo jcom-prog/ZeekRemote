@@ -251,11 +251,14 @@ fun VehicleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = M
             StatItem("Battery", soc?.let { "${fmt(it)}%" } ?: "—", MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
             StatItem("Range", rangeStr?.let { s -> s.toDoubleOrNull()?.let { Units.distance(it, cfg.distanceUnit) } ?: "$s km" } ?: "—", MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
         }
-        // The car's two trip computers (Rit 1 / Rit 2), live from the cloud status; unit is the
-        // car's own (kWh/100km). Own row: four columns left "Unlocked" and the unit no room.
+        // The car's two trip computers (Rit 1 / Rit 2): distance from runningStatus.tripMeter1/2,
+        // consumption only for trip 2 (averPowerConsumption; the cloud has none for trip 1). While
+        // charging the status leaves the consumption out: keep the last known value.
+        val running = status?.additionalVehicleStatus?.runningStatus
+        val trip2 = elec?.trip2Consumption ?: com.openzeekr.app.remote.LastKnownTrip2.value
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 14.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            StatItem("Rit 1 · kWh/100km", elec?.trip1Consumption?.let { fmt1(it) } ?: "—", MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
-            StatItem("Rit 2 · kWh/100km", elec?.trip2Consumption?.let { fmt1(it) } ?: "—", MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
+            TripItem("Rit 1", null, running?.tripMeter1, Modifier.weight(1f))
+            TripItem("Rit 2", trip2, running?.tripMeter2, Modifier.weight(1f))
         }
         Divider()
 
@@ -270,7 +273,7 @@ fun VehicleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = M
                 // Always open the sheet — charge limit, battery pre-conditioning (a PRE-charge
                 // action) and the charge-port control all live there, so it must be reachable when
                 // unplugged too, not only mid-charge.
-                ChargeCtl(charging, plugged, soc, powerKw, elec?.timeToFullyCharged, Modifier.weight(1f)) { showCharge = true }
+                ChargeCtl(charging, plugged, soc, powerKw, elec?.timeToFullyCharged, Modifier.weight(1f), elec?.chargeKindLabel) { showCharge = true }
                 Ctl(windowIcon, windowLabel, tint = windowTint, active = windowsOpen, modifier = Modifier.weight(1f)) { showWindows = true }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -411,6 +414,15 @@ private fun Hero(
 }
 
 @Composable
+private fun TripItem(name: String, kwhPer100: Double?, km: Double?, modifier: Modifier = Modifier) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(kwhPer100?.let { fmt1(it) } ?: "—", color = MaterialTheme.colorScheme.onSurface, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+        Text("$name · kWh/100km", color = Brand.muted, fontSize = 11.sp)
+        Text(km?.let { "${fmt1(it)} km" } ?: "— km", color = Brand.muted, fontSize = 11.sp)
+    }
+}
+
+@Composable
 private fun StatItem(label: String, value: String, color: Color, modifier: Modifier = Modifier) {
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         Text(value, color = color, fontSize = 19.sp, fontWeight = FontWeight.Bold)
@@ -432,10 +444,13 @@ private fun Ctl(icon: ImageVector, label: String, tint: Color = MaterialTheme.co
     }
 }
 
+/** "21,3 kW · 3-fase" / "50,0 kW · DC", or just the power when the phase count is not provable. */
+private fun chargeLabel(kw: Double, kind: String?): String = fmt1(kw) + " kW" + (kind?.let { " · $it" } ?: "")
+
 @Composable
 private fun ChargeCtl(
     charging: Boolean, plugged: Boolean, soc: Float?, powerKw: Double?,
-    timeToFullMin: Int? = null, modifier: Modifier = Modifier, onClick: () -> Unit,
+    timeToFullMin: Int? = null, modifier: Modifier = Modifier, kind: String? = null, onClick: () -> Unit,
 ) {
     Column(modifier.clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -454,7 +469,7 @@ private fun ChargeCtl(
                 modifier = Modifier.size(if (charging) 18.dp else 24.dp))
         }
         Text(
-            when { charging -> powerKw?.let { "${fmt1(it)} kW · 1-phase" } ?: "Charging"; plugged -> "Plugged in"; else -> "Charge & more" },
+            when { charging -> powerKw?.let { chargeLabel(it, kind) } ?: "Charging"; plugged -> "Plugged in"; else -> "Charge & more" },
             // Match the lightning-bolt colour while charging (energy amber); muted otherwise.
             color = if (charging) Brand.energy else Brand.muted, fontSize = 11.sp, textAlign = TextAlign.Center,
         )
@@ -514,7 +529,7 @@ private fun ChargeSheet(
             Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text(soc?.let { "${fmt(it)}%" } ?: "—", fontSize = 30.sp, fontWeight = FontWeight.Bold)
                 Column(horizontalAlignment = Alignment.End) {
-                    Text(if (charging) (powerKw?.let { "${fmt1(it)} kW · 1-phase" } ?: "Charging") else if (plugged) "Plugged in" else "Unplugged",
+                    Text(if (charging) (powerKw?.let { chargeLabel(it, elec?.chargeKindLabel) } ?: "Charging") else if (plugged) "Plugged in" else "Unplugged",
                         color = if (charging) Brand.energy else Brand.muted, fontWeight = FontWeight.SemiBold)
                     status?.additionalVehicleStatus?.electricVehicleStatus?.distanceToEmptyOnBatteryOnly?.let { Text("$it km range", color = Brand.muted, fontSize = 12.sp) }
                 }
