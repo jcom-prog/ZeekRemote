@@ -89,12 +89,20 @@ fun JourneyScreen(deps: Deps, onBack: () -> Unit, snackbar: (String) -> Unit, mo
         when (val r = deps.journey.trips(page = next)) {
             is CallResult.Ok -> {
                 val pg = r.value
+                // Counts only (no places): whether the cloud serves trips to this account at all.
+                com.openzeekr.app.util.Logx.w("journey", "journey page $next owner=${cfg.isOwner}: " +
+                    "${pg.trips.size} trips, more=${pg.hasMore}")
                 trips = if (reset) pg.trips else (trips + pg.trips).distinctBy { "${it.reportTime}-${it.tripId}" }
                 page = next // trust the page we actually requested, not the echoed `current`
                 hasMore = pg.hasMore
                 error = null
             }
-            is CallResult.Err -> if (reset) error = r.message else snackbar("Couldn't load more — tap to retry")
+            is CallResult.Err -> {
+                com.openzeekr.app.util.Logx.w("journey", "journey page $next owner=${cfg.isOwner}: refused/failed: ${r.message}")
+                if (reset) error = if (cfg.isOwner) r.message
+                    else "Ritgeschiedenis niet beschikbaar voor dit account (geweigerd door Zeekr-cloud).\n${r.message}"
+                else snackbar("Couldn't load more — tap to retry")
+            }
         }
         loading = false; loadingMore = false
     }

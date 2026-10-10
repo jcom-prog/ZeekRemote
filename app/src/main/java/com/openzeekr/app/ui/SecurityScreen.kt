@@ -125,11 +125,12 @@ fun SecurityScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
                         pinFor = if (on) Command.VISITOR_ON else Command.VISITOR_OFF
                     }, colors = brandSwitchColors(Brand.good))
                 }
-                // Journey log is also owner-only server-side (a shared/Friend account is refused —
-                // confirmed 2026-09-16 against the stock app), so it lives inside the owner gate.
-                SecRow(Icons.Filled.Timeline, "Journey log", "Trips · distance & energy · export",
-                    onClick = { showJourney = true }) { Chevron() }
             }
+            // Journey log: refused to a shared account on 16/09, but the field account is now shared
+            // with "Volledige functie" (since 18/09) - shown to every account as a test (0.2.10); a
+            // refusal is shown on the journey screen. Visitor mode / glovebox stay owner-only.
+            SecRow(Icons.Filled.Timeline, "Journey log", "Trips · distance & energy · export",
+                onClick = { showJourney = true }) { Chevron() }
         }
 
         pinFor?.let { cmd ->
