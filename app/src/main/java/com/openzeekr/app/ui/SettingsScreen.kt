@@ -582,6 +582,12 @@ private fun LogViewer() {
                 OutlinedButton(onClick = { Logx.clear(); copyMsg = "" }) { Text("Clear") }
             }
         }
+        // Readable, filtered report to share from the phone itself (no PC needed).
+        val diagScope = rememberCoroutineScope()
+        OutlinedButton(onClick = { diagScope.launch { copyMsg = shareDiagnostics(ctx) } },
+            modifier = Modifier.fillMaxWidth()) { Text("Deel diagnose") }
+        Text("Dagboek + gefilterd app-log als tekstbestand - zonder VIN, tokens, sleutels, ruwe BLE-data of locatie.",
+            color = Brand.faint, fontSize = 11.sp)
         if (copyMsg.isNotBlank()) Text(copyMsg, color = Brand.muted, fontSize = 11.sp)
         else Text("\"Share (encrypted)\" sends the log as a file only the developers can read - the best way to report a bug.", color = Brand.faint, fontSize = 11.sp)
         if (lines.isEmpty()) Text("No log yet.", color = Brand.muted, fontSize = 12.sp)
