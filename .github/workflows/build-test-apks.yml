@@ -42,6 +42,7 @@ on:
       - zeekremote-0.2.5-short-stops-cloud
       - zeekremote-0.2.6-presence-selflock
       - zeekremote-0.2.7-key-awake-status
+      - zeekremote-0.2.8-trip-consumption
 
 permissions:
   contents: read
@@ -158,7 +159,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='113' versionName='0.2.7-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='114' versionName='0.2.8-work'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
           sha256sum "$APK"

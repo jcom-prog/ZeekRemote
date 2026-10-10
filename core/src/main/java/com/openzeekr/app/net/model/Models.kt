@@ -1110,11 +1110,10 @@ data class ElectricStatusVo(
      *  `timeToFullyCharged`). 0/absent when not charging or unknown. */
     val timeToFullyCharged: Int? = null,
 ) {
-    /** Average energy consumption to surface, preferring the overall figure, then the trip window.
-     *  null when neither is reported (or it's a non-positive/garbage value). */
-    val avgConsumption: Double?
-        get() = (averPowerConsumption?.toDoubleOrNull() ?: averTraPowerConsumption?.toDoubleOrNull())
-            ?.takeIf { it > 0.0 }
+    /** The car's trip computer 1 ("Rit 1"): [averTraPowerConsumption] (field 10/10: car 21.3). */
+    val trip1Consumption: Double? get() = averTraPowerConsumption?.toDoubleOrNull()?.takeIf { it > 0.0 }
+    /** The car's trip computer 2 ("Rit 2"): [averPowerConsumption] (field 10/10: app showed 30.9). */
+    val trip2Consumption: Double? get() = averPowerConsumption?.toDoubleOrNull()?.takeIf { it > 0.0 }
 
     /** Charge-port (AC or DC flap) open. */
     val chargePortOpen: Boolean get() = chargeLidAcStatus == "1" || chargeLidDcAcStatus == "1"

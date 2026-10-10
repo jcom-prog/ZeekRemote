@@ -250,10 +250,12 @@ fun VehicleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = M
                 if (locked) Brand.good else Brand.energy, Modifier.weight(1f))
             StatItem("Battery", soc?.let { "${fmt(it)}%" } ?: "—", MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
             StatItem("Range", rangeStr?.let { s -> s.toDoubleOrNull()?.let { Units.distance(it, cfg.distanceUnit) } ?: "$s km" } ?: "—", MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
-            // Live average energy consumption (ElectricStatusVo.averPowerConsumption); unit is the
-            // car's own — assume kWh/100km. "Ø" = average (compact so the label stays on ONE line in
-            // the narrow 1/4-width stat column, instead of wrapping like "Avg · kWh/100km" did).
-            StatItem("Ø kWh/100km", elec?.avgConsumption?.let { fmt1(it) } ?: "—", MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
+        }
+        // The car's two trip computers (Rit 1 / Rit 2), live from the cloud status; unit is the
+        // car's own (kWh/100km). Own row: four columns left "Unlocked" and the unit no room.
+        Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 14.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+            StatItem("Rit 1 · kWh/100km", elec?.trip1Consumption?.let { fmt1(it) } ?: "—", MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
+            StatItem("Rit 2 · kWh/100km", elec?.trip2Consumption?.let { fmt1(it) } ?: "—", MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
         }
         Divider()
 

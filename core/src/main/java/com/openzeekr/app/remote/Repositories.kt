@@ -167,7 +167,8 @@ class RemoteControlRepository(private val store: ConfigStore, private val client
                 val cons = "aver=${e?.averPowerConsumption} averTra=${e?.averTraPowerConsumption}"
                 if (cons != lastConsumptionFields) {
                     lastConsumptionFields = cons
-                    com.openzeekr.app.util.Logx.d("status", "consumption fields $cons")
+                    // Own area: "status" is gated by the HTTP-logging switch (off in the field, 10/10).
+                    com.openzeekr.app.util.Logx.d("consumption", "consumption fields $cons")
                 }
             }
         }
