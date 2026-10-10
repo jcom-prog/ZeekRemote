@@ -100,6 +100,10 @@ internal sealed class Leg {
     /** Busy on the spot while moving (locking a door or a gate): Activity Recognition sees walking. */
     data class Fidget(val ms: Long, val shadowDb: Double = 0.0) : Leg()
     object OpenDoor : Leg()
+    /** The car is opened without the phone key (inside handle, card, stock app). */
+    object ReopenByOther : Leg()
+    /** The phone lies still inside the car, out of the pocket (field 10/10 16:44: -46..-49 dBm). */
+    data class PhoneInCar(val ms: Long) : Leg()
     object ManualLock : Leg()
     data class Mark(val label: String) : Leg()
 }
@@ -317,7 +321,9 @@ internal class SimWorld(
                 _state.value = DkBleManager.State.SESSION_READY
                 record("LINK_READY")
                 delay(rnd.uniform(300.0, 5_000.0).toLong())
-                pushStatus()   // the car pushes its status early in a new session
+                // The car pushes its status early in a new session. SIM_FIRST_STATUS_LOST=1 replays
+                // 0.2.6, which dropped that push (it arrives before "established").
+                if (System.getenv("SIM_FIRST_STATUS_LOST") != "1") pushStatus()
             }
         }
         override fun disconnect() {
@@ -345,6 +351,7 @@ internal class SimWorld(
     val service = SimService()
     inner class SimService {
         var keySleeping = false; private set
+        private var lastAtCarMs = -1L
         var sleepGraceUntilMs = 0L; private set
         private var presenceArmed = false
         private var presenceMode = 0 // 0 low power, 1 approach, 2 low latency
@@ -354,9 +361,14 @@ internal class SimWorld(
         private var initialProbe = false
         fun tick() {
             // Security sleep (ProximityService.stationaryKeySecurity, 500 ms poll).
-            if (!keySleeping && motion.isStillFor(120_000L)) {
+            val atCar = if (System.getenv("SIM_SLEEP_AT_CAR") == "1") false else
+                com.openzeekr.app.ble.KeySleepPolicy.atCar(link.state.value == DkBleManager.State.SESSION_READY,
+                    controller.state.value.smoothedRssi)
+            if (atCar) lastAtCarMs = now()
+            val sinceAtCar = if (lastAtCarMs >= 0) now() - lastAtCarMs else null
+            if (!keySleeping && com.openzeekr.app.ble.KeySleepPolicy.maySleep(motion::isStillFor, atCar, sinceAtCar)) {
                 keySleeping = true; sleepGraceUntilMs = now() + 15_000L; presenceArmed = false
-                link.disconnect(); log('D', "svc", "security sleep: stationary for 2 min — BLE session/presence disabled")
+                link.disconnect(); log('D', "svc", "security sleep: stationary — BLE session/presence disabled")
                 record("SECURITY_SLEEP")
             } else if (keySleeping && motion.isMovingFor(1_500L)) {
                 keySleeping = false; sleepGraceUntilMs = 0L
@@ -471,7 +483,8 @@ internal class SimWorld(
         config = { config }, ble = link, motion = motion, scope = scope,
         cloudLock = { delay(2_000L); record("CLOUD_LOCK_CMD"); if (car.locked) Unit else car.actuate(true, "cloud"); true },
         cloudIsLocked = { car.locked },
-        cloudLockSnapshot = { com.openzeekr.app.ble.CloudLockSnapshot(car.locked, car.changedAtWallMs) },
+        cloudLockSnapshot = { if (System.getenv("SIM_NO_CLOUD_STATUS") == "1") null
+            else com.openzeekr.app.ble.CloudLockSnapshot(car.locked, car.changedAtWallMs) },
         clock = clock, alerts = alerts, departureLocationSource = locator, wakeLocks = wakeLocks,
     )
 
@@ -535,6 +548,13 @@ internal class SimWorld(
                     run(leg.ms); walking = false; extraShadowDb = 0.0
                 }
                 Leg.OpenDoor -> { car.openDoor(); run(100) }
+                is Leg.PhoneInCar -> {
+                    // In the cabin, no body loss: the outdoor path-loss fit reads ~-69 at 0.7 m.
+                    // Stays in the cabin until the next walk (a reopen by hand does not move it).
+                    walking = false; facing = Facing.TOWARD; extraShadowDb = 21.0 - carry.db
+                    run(leg.ms)
+                }
+                Leg.ReopenByOther -> { if (car.locked) car.actuate(false, "by hand"); car.openDoor(); run(100) }
                 Leg.ManualLock -> {
                     record("USER_MANUAL_LOCK")
                     scope.launch {

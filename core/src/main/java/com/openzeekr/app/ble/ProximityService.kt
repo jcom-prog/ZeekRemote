@@ -80,6 +80,8 @@ class ProximityService : Service() {
     /** Modern-key security mode: after two minutes without movement there is no BLE session and no
      * presence scan. Motion must be confirmed before the key is made discoverable/useful again. */
     @Volatile private var keySleeping = false
+    /** Last time the phone was at or in the car with a live key session ([KeySleepPolicy]). */
+    private var lastAtCarElapsedMs = 0L
     private var sleepDisconnectGraceUntilMs = 0L
 
     private val wakeReceiver = object : BroadcastReceiver() {
@@ -471,7 +473,7 @@ class ProximityService : Service() {
      * Motion-gated anti-relay mode, modelled after modern motion-sleeping key fobs.
      *
      * After two minutes of sensor-confirmed stillness the phone stops both the live GATT session and
-     * the hardware-offloaded presence scan. Screen-on/Bluetooth-on cannot bypass this state. A newly
+     * the hardware-offloaded presence scan; at or in the car only after 30 min ([KeySleepPolicy]). Screen-on/Bluetooth-on cannot bypass this state. A newly
      * moving phone must remain moving for a short debounce window; it then performs one immediate,
      * bounded recovery scan. Drive authorization and Watch link borrowing always take precedence.
      */
@@ -482,15 +484,21 @@ class ProximityService : Service() {
                 !deps.ble.driveAuthorizationActive &&
                 !com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value
 
-            if (!keySleeping && eligible && deps.motion.isStillFor(KEY_SLEEP_AFTER_MS)) {
+            val atCar = KeySleepPolicy.atCar(deps.ble.state.value == DkBleManager.State.SESSION_READY,
+                deps.proximity.state.value.smoothedRssi)
+            val nowElapsed = android.os.SystemClock.elapsedRealtime()
+            if (atCar) lastAtCarElapsedMs = nowElapsed
+            val sinceAtCar = lastAtCarElapsedMs.takeIf { it != 0L }?.let { nowElapsed - it }
+            if (!keySleeping && eligible && KeySleepPolicy.maySleep(deps.motion::isStillFor, atCar, sinceAtCar)) {
                 keySleeping = true
                 // Allow the existing controller a bounded window to finish a walk-away lock if the
                 // car had just been auto-unlocked. No new presence event can start an unlock now.
                 sleepDisconnectGraceUntilMs = System.currentTimeMillis() + KEY_SLEEP_LOCK_GRACE_MS
                 deps.ble.disarmPresenceScan()
                 runCatching { deps.ble.disconnect() }
-                deps.proximity.updateDiagnostics("security sleep · stationary 2 min · BLE off")
-                Logx.d("svc", "security sleep: stationary for 2 min — BLE session/presence disabled")
+                val stillFor = if (atCar) "30 min at the car" else "2 min"
+                deps.proximity.updateDiagnostics("security sleep · stationary $stillFor · BLE off")
+                Logx.d("svc", "security sleep: stationary for $stillFor — BLE session/presence disabled")
             } else if (keySleeping) {
                 // A running/starting car must never lose its key just because the phone lies still.
                 val driveOverride = deps.ble.driveAuthorizationActive
@@ -620,7 +628,6 @@ class ProximityService : Service() {
         private const val MOTION_PRESENCE_RECOVERY_MS = 30_000L
         private const val FAST_PRESENCE_WINDOW_MS = 30_000L
         private const val WATCHDOG_INTERVAL_MS = 5_000L
-        private const val KEY_SLEEP_AFTER_MS = 2 * 60 * 1_000L
         private const val KEY_WAKE_MOTION_CONFIRM_MS = 1_500L
         private const val KEY_SLEEP_POLL_MS = 500L
         private const val EARLY_PRESENCE_WINDOW_MS = KEY_WAKE_MOTION_CONFIRM_MS + 2 * KEY_SLEEP_POLL_MS

@@ -68,6 +68,8 @@ class RealDkSession(
     /** Serializes encrypted 0x0110 commands which share the 0x0111/0x0112 response slots. */
     private val controlMutex = Mutex()
     private val vehicleObservations = VehicleObservationSession()
+    /** Orders status emission: the held handshake status never overtakes a newer one. */
+    private val statusGate = Any()
     private val lockExecution = LockExecutionWatch()
     private val _vehicleStatus = kotlinx.coroutines.flow.MutableSharedFlow<ObservedVehicleStatus>(
         extraBufferCapacity = 8, onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST)
@@ -100,6 +102,7 @@ class RealDkSession(
             ?: throw IllegalStateException("no DK credential provisioned (enrol + key-info first)")
         DkPayload.resetSeq()
         cryptoReady = false
+        synchronized(statusGate) { vehicleObservations.handshakeStarted() }
 
         // 0) PAIRING EPOCH — 0x0101 CONNECT_CONFIRM -> 0x0102 DK_STATUS (AES-128-CBC
         //    under connectKey = VIN ⊕ hex(broadcastRnd)). The 0x0102 carries an errCode
@@ -242,8 +245,14 @@ class RealDkSession(
 
         isEstablished = true
         lockExecution.reset()
-        vehicleObservations.authenticated()
         Logx.d("dk", "=== DK session established ===")
+        synchronized(statusGate) {
+            val early = vehicleObservations.authenticated()
+            if (early != null) {
+                Logx.d("dk", "status pushed during the handshake -> applied to the new session")
+                applyStatus(vehicleObservations.capture(), early)
+            }
+        }
     }
 
     /**
@@ -430,7 +439,7 @@ class RealDkSession(
      * keys) but leaves the transport handler live so the re-handshake still receives frames.
      */
     fun reset() {
-        vehicleObservations.reset()
+        synchronized(statusGate) { vehicleObservations.reset() }
         lockExecution.reset()
         isEstablished = false; cryptoReady = false; cmacKeyCache = null
         // Complete (don't bare-cancel) each in-flight waiter with a typed error. A bare .cancel()
@@ -617,6 +626,20 @@ class RealDkSession(
         }
     }
 
+    /** Caller holds [statusGate]. */
+    private fun applyStatus(observationGeneration: Long?, body: ByteArray) {
+        if (Logx.isBleEnabled) {
+            vehicleObservations.changedStatus(observationGeneration, body)?.let { Logx.d("dk", it) }
+        }
+        // Same session-generation guard as the diagnostics: a frame captured before a reset is dropped.
+        if (observationGeneration != null && observationGeneration == vehicleObservations.capture()) {
+            VehicleProximityStatus.parse(body)?.let {
+                lockExecution.onStatus(it.centralLockCode)
+                _vehicleStatus.tryEmit(ObservedVehicleStatus(observationGeneration, it.centralLockCode))
+            }
+        }
+    }
+
     /** Called by the transport for each reassembled+CRC-checked inbound frame. */
     private fun onRawInbound(cmdId: Int, rawBody: ByteArray) {
         val observationGeneration = vehicleObservations.capture()
@@ -627,20 +650,10 @@ class RealDkSession(
         } catch (e: Exception) {
             Logx.w("dk", "decrypt ${hex(cmdId)} failed: ${e.message} rawBody(${rawBody.size}B)=${hexOf(rawBody)}"); return
         }
-        // Read-only status transitions. Never decode raw pre-authentication data as CAN status.
-        if (cmdId == DkProtocol.CMD_V2A_VSTATUS_SYNC && isEstablished && cryptoReady) {
-            if (Logx.isBleEnabled) {
-                vehicleObservations.changedStatus(observationGeneration, body)?.let {
-                    Logx.d("dk", it)
-                }
-            }
-            // Same session-generation guard as the diagnostics: a frame captured before a reset is dropped.
-            if (observationGeneration != null && observationGeneration == vehicleObservations.capture()) {
-                VehicleProximityStatus.parse(body)?.let {
-                    lockExecution.onStatus(it.centralLockCode)
-                    _vehicleStatus.tryEmit(ObservedVehicleStatus(observationGeneration, it.centralLockCode))
-                }
-            }
+        // Read-only status transitions. Never decode raw pre-authentication data as CAN status:
+        // only frames under this session's GCM keys count (a push during the handshake is kept).
+        if (cmdId == DkProtocol.CMD_V2A_VSTATUS_SYNC && cryptoReady) synchronized(statusGate) {
+            vehicleObservations.offer(observationGeneration, body)?.let { applyStatus(it, body) }
         }
         // Diagnostic tap (active only during a probeControl window): see every frame the car returns.
         probeSink?.invoke(cmdId, body)

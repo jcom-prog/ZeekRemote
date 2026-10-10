@@ -4,6 +4,8 @@ import com.openzeekr.app.ble.sim.Leg.Fidget
 import com.openzeekr.app.ble.sim.Leg.Mark
 import com.openzeekr.app.ble.sim.Leg.ManualLock
 import com.openzeekr.app.ble.sim.Leg.OpenDoor
+import com.openzeekr.app.ble.sim.Leg.ReopenByOther
+import com.openzeekr.app.ble.sim.Leg.PhoneInCar
 import com.openzeekr.app.ble.sim.Leg.Shuffle
 import com.openzeekr.app.ble.sim.Leg.Stand
 import com.openzeekr.app.ble.sim.Leg.Walk
@@ -108,6 +110,13 @@ internal object SimScenarios {
         // door must open it again (0.2.6 B).
         Scenario("F25 gate 2.5 min, car relocks", "approach to the gate at 4 m, 150 s there, then the door", 25.0,
             listOf(Mark("-"), Walk(4.0), Fidget(150_000), Walk(1.0), Mark("expect-unlocked-by-end"), Stand(10_000))),
+        // User 10/10 16:44-16:53: unlocked on approach, the phone laid in the car (-46..-49) while the
+        // user worked beside it; the car relocked itself; the door was then opened by other means
+        // (no key Unlock); finally the user took the phone and walked away. The key must stay awake
+        // at the car, and the open car must be locked or alarmed after the walk away.
+        Scenario("F26 phone in car, reopened, away", "phone still in the car 5 min, car relocks, opened by hand, walk away", 25.0,
+            listOf(Mark("expect-unlock"), Walk(0.5), Mark("-"), PhoneInCar(300_000), ReopenByOther, PhoneInCar(60_000),
+                Mark("expect-lock"), Walk(30.0), Stand(150_000))),
         Scenario("F21 car ignores key Lock", "normal departure; the car acknowledges but never executes a key Lock", 30.0,
             approachAndOpen() + listOf(Mark("-"), Walk(30.0), Stand(150_000)), carRefusesKeyLock = true),
     )
@@ -136,6 +145,11 @@ internal object SimOracle {
                 out += f("LOCK_WHILE_NEAR", e, "automatic Lock at %.1f m".format(e.distanceM))
             if (e.kind == "KEY_UNLOCK_CMD" && e.distanceM > 15.0)
                 out += f("UNLOCK_WHILE_FAR", e, "unlock at %.1f m".format(e.distanceM))
+            // The key went to sleep with the phone at the car (field 10/10 16:47: the car then no
+            // longer recognised the phone lying in it).
+            if (e.kind == "SECURITY_SLEEP" && e.distanceM <= 2.0 &&
+                w.samples.filter { it.atMs in (e.atMs - 30 * 60_000L)..e.atMs }.any { it.distanceM > 2.0 })
+                out += f("KEY_ASLEEP_AT_CAR", e, "security sleep at %.1f m".format(e.distanceM))
             if (e.kind == "ALARM" && e.detail.contains("car LOCKED"))
                 out += f("FALSE_ALARM_CAR_LOCKED", e)
             if (e.kind == "ALARM" && !e.detail.contains("car LOCKED")) {

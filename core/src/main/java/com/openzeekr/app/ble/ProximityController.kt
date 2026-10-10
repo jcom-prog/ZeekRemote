@@ -161,6 +161,10 @@ class ProximityController internal constructor(
     private var deepFarAtLinkLossMs = 0L
     private var idleFastWindows = 0
     private var vehicleStatusJob: Job? = null
+    private var lockStateCheckJob: Job? = null
+    private var lockStateCheckedForLossAt = 0L
+    /** The link ended with the phone at the car (key asleep beside it, not a walk home). */
+    private var linkLostNearCar = false
     /** The car's previous status push (for the "Auto gesloten" chime on open -> locked). */
     private var lastVehicleStatus: ObservedVehicleStatus? = null
     private var manualCloudLockCheck: Job? = null
@@ -253,6 +257,13 @@ class ProximityController internal constructor(
             motionWake?.complete(Unit)   // wake the FAR-still approach sleep
             activityWake?.complete(Unit) // resume armed RSSI tracking on the first motion edge
             if (linkLostAtMs != 0L && armedUnlocked) scope.launch { scheduleLinkDepartureCheck() }
+            // The key may have slept while the car was opened by other means (inside handle, card,
+            // the stock app): a walk away without a link would otherwise go unnoticed.
+            if (linkLostAtMs != 0L && linkLostNearCar && !armedUnlocked && lockStateCheckedForLossAt != linkLostAtMs &&
+                clock.wallMs() - linkLostAtMs >= LOCK_STATE_GAP_MS) {
+                lockStateCheckedForLossAt = linkLostAtMs
+                scope.launch { scheduleLockStateCheck("motion after ${(clock.wallMs() - linkLostAtMs) / 1000} s without link") }
+            }
         }
         motion.start()
         vehicleStatusJob?.cancel()
@@ -265,6 +276,8 @@ class ProximityController internal constructor(
                 when (ble.state.value) {
                     DkBleManager.State.SESSION_READY, DkBleManager.State.CONNECTED -> {
                         if (linkLostAtMs != 0L) {
+                            val lostAt = linkLostAtMs
+                            val wasNearCar = linkLostNearCar
                             linkDepartureJob?.cancel(); linkDepartureJob = null
                             relockRecoveryPending = armedUnlocked &&
                                 clock.wallMs() - linkLostAtMs >= 30_000L &&
@@ -287,6 +300,9 @@ class ProximityController internal constructor(
                             }
                             deepFarAtLinkLossMs = 0L
                             Logx.d("prox", "link restored; proximity monitoring resumed")
+                            val gapMs = clock.wallMs() - lostAt
+                            if (!armedUnlocked && wasNearCar && gapMs >= LOCK_STATE_GAP_MS)
+                                scheduleLockStateCheck("link restored after ${gapMs / 1000} s")
                         }
                         // Unlocked at the car (NEAR): don't burn battery polling — idle until the car
                         // pushes a frame (activity = you moving/leaving) or the link drops. Hold the
@@ -340,6 +356,7 @@ class ProximityController internal constructor(
     fun stop() {
         monitorJob?.cancel(); monitorJob = null
         vehicleStatusJob?.cancel(); vehicleStatusJob = null
+        lockStateCheckJob?.cancel(); lockStateCheckJob = null
         manualCloudLockCheck?.cancel(); manualCloudLockCheck = null
         measureUntilElapsedMs = 0L; _measuring.value = false
         departureAnchorJob?.cancel(); departureAnchorJob = null; departureAnchor = null
@@ -537,6 +554,7 @@ class ProximityController internal constructor(
         if (linkLostAtMs == 0L) {
             decisionPolicy.onLinkEnded()
             linkLostAtMs = clock.wallMs()
+            linkLostNearCar = lostRssi?.let { it >= config().sensitivityUnlockRssi } ?: false
             deepFarAtLinkLossMs = stationaryFar.deepFarForMs(linkLostAtMs)
             stationaryFar.onReadingsStopped()
             // RSSI/body shielding and a real departure can both tear down the link. Neither a timer
@@ -736,6 +754,28 @@ class ProximityController internal constructor(
     }
 
     /** The car's own status push: a fresh unlocked -> locked transition means the car locked itself. */
+    /**
+     * After a gap without the key link the car's lock state is unknown: it may have been opened
+     * by other means (field 10/10 16:48-16:51: phone asleep in the car, door opened, then walked
+     * away; the app still believed the car's self-lock of 16:44:51 and neither locked nor alarmed).
+     * The car pushes its status at the start of a new session; if none arrives, ask the cloud.
+     * A cloud "unlocked" re-arms the departure watch like a reopen seen by the key.
+     */
+    private fun scheduleLockStateCheck(reason: String) {
+        if (lockStateCheckJob?.isActive == true) return
+        val statusBefore = lastVehicleStatus
+        lockStateCheckJob = scope.launch {
+            delay(LOCK_STATE_STATUS_WAIT_MS)
+            if (lastVehicleStatus !== statusBefore || armedUnlocked || !_state.value.running) return@launch
+            val snapshot = runCatching { cloudLockSnapshot() }.getOrNull()
+            Logx.d("prox", "lock state unknown ($reason): cloud says " +
+                (snapshot?.let { if (it.locked) "locked" else "unlocked" } ?: "nothing"))
+            if (snapshot == null || snapshot.locked || armedUnlocked || lastVehicleStatus !== statusBefore) return@launch
+            Logx.w("prox", "car reported unlocked by the cloud without our Unlock -> departure watch re-armed")
+            onExternalUnlockConfirmed("car reopened (cloud)")
+        }
+    }
+
     private fun onVehicleStatus(status: ObservedVehicleStatus) {
         val previous = lastVehicleStatus
         lastVehicleStatus = status
@@ -1821,6 +1861,10 @@ class ProximityController internal constructor(
         private const val BLE_PROOF_CLOUD_MS = 30_000L
         /** A self-lock this soon after our approach unlock may be undone by walking up to the door. */
         private const val SELF_LOCK_REOPEN_AFTER_UNLOCK_MS = 180_000L
+        /** A link gap after which the car's lock state counts as unknown. */
+        private const val LOCK_STATE_GAP_MS = 60_000L
+        /** Time for the car's own status push in a new session before asking the cloud. */
+        private const val LOCK_STATE_STATUS_WAIT_MS = 10_000L
         private const val LOCK_SESSION_WAIT_MS = 3_000L    // brief wait for SESSION_READY per attempt
         private const val LOCK_ACK_TIMEOUT_MS = 1_500L     // wait for the car's lock receipt
 

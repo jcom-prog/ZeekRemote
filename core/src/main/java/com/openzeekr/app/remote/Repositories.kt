@@ -69,6 +69,7 @@ class RemoteControlRepository(private val store: ConfigStore, private val client
 
     /** Last status key-structure we logged; used to dump the schema only when it changes (not per poll). */
     private var lastStatusKeyTree: String? = null
+    private var lastConsumptionFields: String? = null
     private var missingActiveVinCount = 0
 
     /** Fire a catalog command. Physical-actuation ids (RDU_2/RDL_2/RDO/RDC) route through
@@ -158,7 +159,17 @@ class RemoteControlRepository(private val store: ConfigStore, private val client
                 com.openzeekr.app.util.Logx.d("status", "keys=$keyTree")
             }
             // `data` is a raw JsonObject; map it tolerantly (never throws on shape).
-            VehicleStatus.parse(obj)
+            VehicleStatus.parse(obj).also { st ->
+                // Field 10/10: the app showed 30.9 kWh/100km where the car showed 21.3. Log the two
+                // candidate consumption figures (plain numbers, no identifiers) when they change, to
+                // pick the one that matches the car.
+                val e = st.additionalVehicleStatus?.electricVehicleStatus
+                val cons = "aver=${e?.averPowerConsumption} averTra=${e?.averTraPowerConsumption}"
+                if (cons != lastConsumptionFields) {
+                    lastConsumptionFields = cons
+                    com.openzeekr.app.util.Logx.d("status", "consumption fields $cons")
+                }
+            }
         }
     }
 

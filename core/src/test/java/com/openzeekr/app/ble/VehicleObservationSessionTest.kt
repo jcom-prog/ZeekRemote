@@ -45,4 +45,35 @@ class VehicleObservationSessionTest {
         assertNotEquals(a.capture(), b.capture())
         assertNull(b.changedStatus(a.capture(), body()))
     }
+
+    // ---- 0.2.7: the status the car pushes during the handshake ----
+
+    @Test fun statusPushedDuringTheHandshakeIsAppliedToTheNewSession() {
+        // Field 10/10 16:51:34: 0x0121 arrived after the session keys, before "established".
+        val s = VehicleObservationSession()
+        val pushed = body(64)
+        assertNull("held, not applied yet", s.offer(s.capture(), pushed))
+        val early = s.authenticated()
+        assertArrayEquals(pushed, early)
+        assertNotNull(s.changedStatus(s.capture(), early!!))
+    }
+
+    @Test fun heldStatusIsDroppedOnResetOrNewHandshake() {
+        val s = VehicleObservationSession()
+        s.offer(null, body()); s.reset()
+        assertNull(s.authenticated())
+        s.reset(); s.offer(null, body()); s.handshakeStarted()
+        assertNull(s.authenticated())
+    }
+
+    @Test fun handshakeFrameLandingJustAfterAuthenticationIsAppliedOnceAndNeverOvertakesNewer() {
+        val s = VehicleObservationSession()
+        assertNull(s.authenticated())
+        val gen = s.capture()
+        // Captured before authentication, offered after it: still the newest -> apply now.
+        assertEquals(gen, s.offer(null, body()))
+        // A normal frame afterwards, then another late handshake frame: the late one is stale.
+        assertEquals(gen, s.offer(gen, body(64)))
+        assertNull(s.offer(null, body()))
+    }
 }
