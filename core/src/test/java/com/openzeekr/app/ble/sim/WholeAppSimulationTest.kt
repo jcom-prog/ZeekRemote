@@ -19,7 +19,8 @@ class WholeAppSimulationTest {
                           val findings: List<SimOracle.Finding>, val world: SimWorld)
         val results = runs.map { (sc, carry, mp) ->
             val (profile, seed) = mp
-            val w = SimWorld(seed, profile, carry, sc.startM, sc.gnssAccuracyM, carRefusesKeyLock = sc.carRefusesKeyLock)
+            val w = SimWorld(seed, profile, carry, sc.startM, sc.gnssAccuracyM, carRefusesKeyLock = sc.carRefusesKeyLock,
+                keyEdgeRssi = sc.keyEdgeRssi)
             w.play(sc.legs)
             Result(sc, carry, profile, seed, SimOracle.check(w), w)
         }
@@ -65,9 +66,15 @@ class WholeAppSimulationTest {
             }
             val locks = rs.flatMap { r -> val manual = r.world.events.filter { it.kind == "USER_MANUAL_LOCK" }.map { it.atMs }
                 r.world.events.filter { it.kind == "KEY_LOCK_CMD" && manual.none { m -> it.atMs - m in 0..2_000 } }.map { it.distanceM } }.sorted()
+            // Seconds from the "expect-lock" mark (start of the walk away) to the car reporting locked.
+            val lockT = rs.mapNotNull { r ->
+                val m = r.world.events.firstOrNull { it.kind == "MARK" && it.detail == "expect-lock" } ?: return@mapNotNull null
+                r.world.events.firstOrNull { it.kind == "CAR_LOCKED" && it.atMs >= m.atMs }?.let { (it.atMs - m.atMs) / 1000.0 }
+            }.sorted()
             val ap = perApproach.toSortedMap().values.joinToString("; ") { l -> val s = l.sorted()
                 "n=%d %.1f (%.1f-%.1f)".format(s.size, pct(s, .5), pct(s, .1), pct(s, .9)) }
-            sb.appendLine("  %-40s unlock[%s]  lock[n=%d %.1f (%.1f-%.1f)]".format(fam, ap, locks.size, pct(locks, .5), pct(locks, .1), pct(locks, .9)))
+            sb.appendLine("  %-40s unlock[%s]  lock[n=%d %.1f (%.1f-%.1f)]".format(fam, ap, locks.size, pct(locks, .5), pct(locks, .1), pct(locks, .9)) +
+                "  lockT[n=%d %.0fs (%.0f-%.0f)]".format(lockT.size, pct(lockT, .5), pct(lockT, .1), pct(lockT, .9)))
         }
         sb.appendLine()
         sb.appendLine("Every finding:")

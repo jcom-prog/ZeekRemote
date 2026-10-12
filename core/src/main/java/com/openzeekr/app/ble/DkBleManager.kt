@@ -220,6 +220,7 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
     private var scanCb: ScanCallback? = null
     private var scanJob: Job? = null
     private val seenAdvertisers = mutableSetOf<String>()
+    private val waitingRndLogged = mutableSetOf<String>()
     /** 8-byte broadcast-random from the matched car's advertisement (see [parseBroadcastRnd]). */
     @Volatile private var advBroadcastRnd: ByteArray? = null
     /** Per-MAC broadcast-random seen during this scan (the DK mfr-data advert is separate from
@@ -375,7 +376,7 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
     private fun startScan(a: BluetoothAdapter, useBatching: Boolean = true) {
         val scanner = a.bluetoothLeScanner ?: run { fail("no LE scanner"); return }
         _state.value = State.SCANNING
-        seenAdvertisers.clear()
+        seenAdvertisers.clear(); waitingRndLogged.clear()
         rndByMac.clear()
         advBroadcastRnd = null
         // No device ScanFilter on the foreground connect: the car doesn't advertise the DK
@@ -403,29 +404,12 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
             val rec = result.scanRecord
             val name = rec?.deviceName ?: runCatching { dev.name }.getOrNull()
             val uuids = rec?.serviceUuids
-            if (seenAdvertisers.add(addr)) {
-                // Log EVERY unique advertiser (deduped by MAC) with the fields that identify a car:
-                // name, advertised service UUIDs, service-data UUIDs, and manufacturer company ids.
-                // This is what tells us how a non-matching car advertises so we can widen the match.
-                val svcData = rec?.serviceData?.keys?.joinToString { it.uuid.toString() } ?: "none"
-                val mfrIds = rec?.manufacturerSpecificData?.let { m ->
-                    if (m.size() == 0) "none" else (0 until m.size()).joinToString { "%04x".format(m.keyAt(it)) }
-                } ?: "none"
-                Logx.d("ble", "adv $addr rssi=${result.rssi} name=${name ?: "?"} " +
-                    "uuids=${uuids?.joinToString { it.uuid.toString() } ?: "none"} svcData=[$svcData] mfr=[$mfrIds] " +
-                    // Full raw advert bytes - lets us derive the hardware ScanFilter (company id +
-                    // constant/masked bytes) for the PendingIntent offloaded screen-off scan.
-                    "raw=${rec?.bytes?.joinToString("") { "%02x".format(it) } ?: ""}")
-            }
             // The DK broadcast-random rides a separate manufacturer-data PDU; capture it per-MAC
             // from every advert so it's ready whichever PDU triggers the name match.
             if (rndByMac[addr] == null) DkAdvertParser.parseBroadcastRnd(
                 rawRecord = rec?.bytes,
                 manufacturerData = rec?.manufacturerSpecificData?.get(DK_MFR_COMPANY_ID),
-            )?.let {
-                rndByMac[addr] = it
-                Logx.d("ble", "broadcastRnd[$addr]=${it.joinToString("") { b -> "%02x".format(b) }}")
-            }
+            )?.let { rndByMac[addr] = it }
             // Software match (the foreground scan is unfiltered): any ONE of these = our car.
             // Loosened from startsWith("Zeekr") to contains, and added service-data + DK mfr id, so a
             // car whose name/primary-UUID differ by region/firmware still matches.
@@ -436,6 +420,14 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
             val matchesSvcData = rec?.serviceData?.keys?.any { it.uuid == target || it.uuid == advTarget } == true
             val matchesMfr = (rec?.manufacturerSpecificData?.indexOfKey(DK_MFR_COMPANY_ID) ?: -1) >= 0
             if (matchesName || matchesUuid || matchesSvcData || matchesMfr) {
+                // Only advertisers that match the car are logged (once per MAC per scan). Logging
+                // every headset, TV and watch around filled the phone log within minutes (field
+                // 12/10: the 16:33 key problem had already scrolled out of the log at 16:48).
+                if (seenAdvertisers.add(addr)) {
+                    val svcData = rec?.serviceData?.keys?.joinToString { it.uuid.toString() } ?: "none"
+                    Logx.d("ble", "adv $addr rssi=${result.rssi} name=${name ?: "?"} " +
+                        "uuids=${uuids?.joinToString { it.uuid.toString() } ?: "none"} svcData=[$svcData]")
+                }
                 val why = when {
                     matchesName -> "name '$name'"
                     matchesUuid -> "service uuid"
@@ -444,7 +436,8 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
                 }
                 val rnd = rndByMac[addr]
                 if (rnd == null) {
-                    Logx.d("ble", "matched $why $addr but no broadcastRnd yet - waiting for the DK mfr-data advert…")
+                    if (waitingRndLogged.add(addr))
+                        Logx.d("ble", "matched $why $addr but no broadcastRnd yet - waiting for the DK mfr-data advert…")
                     return false
                 }
                 advBroadcastRnd = rnd
@@ -474,7 +467,7 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
         scanCb = cb
         Logx.d("ble", "scanning (UNFILTERED, ${if (useBatching) "batched ${REPORT_DELAY_MS}ms" else "immediate"}) " +
             "- match by name *zeekr*, adv-uuid 0xFDFD, DK service ${DkProtocol.SERVICE_UUID}, svcData or mfr 0x06FE. " +
-            "Every advertiser is logged so a car with different adv identifiers is still visible.")
+            "Only matching advertisers are logged.")
         // Foreground connect: scan UNFILTERED and match in software (see handleAdvert). The hardware
         // 0xFDFD/0x06FE ScanFilter is kept ONLY for the offloaded background presence scan; on the
         // foreground connect it risked hiding (and never logging) a car whose region/firmware

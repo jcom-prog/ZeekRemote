@@ -1457,6 +1457,7 @@ class ProximityController internal constructor(
             var confirmed = false
             var attempt = 0
             var notExecuted = 0
+            var lastFreshRssi: Int? = null
             val maxAttempts = if (ble.state.value == DkBleManager.State.SESSION_READY)
                 MAX_LOCK_ATTEMPTS else 1 // a lost radio should reach the cloud fallback promptly
             while (isActive && attempt < maxAttempts) {
@@ -1482,6 +1483,7 @@ class ProximityController internal constructor(
                 var bleProofFresh = false
                 if (ble.state.value == DkBleManager.State.SESSION_READY) {
                     val fresh = ble.pollRemoteRssi()
+                    lastFreshRssi = fresh
                     if (fresh != null) {
                         bleProofFresh = bleRoute?.freshBleLockAuthorized(
                             clock.elapsedMs(), fresh) == true
@@ -1524,6 +1526,16 @@ class ProximityController internal constructor(
                     if (++notExecuted >= MAX_NOT_EXECUTED_LOCKS) break
                     delay(UNLOCK_RETRY_DELAY_MS)
                     continue
+                }
+                // Field 12/10 17:52:37: proof at -102, the key Lock got no answer, four link resets
+                // and status-133 reconnects took 30 s before the cloud locked. At the edge of the
+                // link the key will not get through: go to the cloud while the proof is fresh.
+                val fr = lastFreshRssi
+                // The cloud path below re-verifies the departure before its request, whatever the route.
+                if (fr != null && fr <= FAR_LINK_CLOUD_RSSI &&
+                    (r == ControlResult.NO_RESPONSE || r == ControlResult.WRITE_FAILED)) {
+                    Logx.w("prox", "$reason: key Lock unanswered at the edge of the link (rssi=$fr) -> cloud now")
+                    break
                 }
                 resetLink()   // write-fail / no-response / reject → clear the wedge and retry
                 delay(UNLOCK_RETRY_DELAY_MS)
@@ -1859,6 +1871,8 @@ class ProximityController internal constructor(
         private const val MAX_NOT_EXECUTED_LOCKS = 2
         /** How long a BLE departure proof may back a cloud Lock after the key link failed. */
         private const val BLE_PROOF_CLOUD_MS = 30_000L
+        /** A key Lock left unanswered at or below this fresh reading goes to the cloud at once. */
+        private const val FAR_LINK_CLOUD_RSSI = -98
         /** A self-lock this soon after our approach unlock may be undone by walking up to the door. */
         private const val SELF_LOCK_REOPEN_AFTER_UNLOCK_MS = 180_000L
         /** A link gap after which the car's lock state counts as unknown. */

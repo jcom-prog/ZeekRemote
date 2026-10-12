@@ -47,6 +47,7 @@ on:
       - zeekremote-0.2.10-journey-shared
       - zeekremote-0.2.11-trips-charge
       - zeekremote-0.2.12-share-diagnostics
+      - zeekremote-0.2.13-faster-cloud-lock
 
 permissions:
   contents: read
@@ -163,7 +164,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='118' versionName='0.2.12-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='119' versionName='0.2.13-work'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
           sha256sum "$APK"

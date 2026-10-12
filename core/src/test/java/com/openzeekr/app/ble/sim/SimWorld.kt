@@ -117,6 +117,9 @@ internal class SimWorld(
     val notificationPermission: Boolean = true,
     /** Field 05/10 16:08/16:18: the car acknowledges a key Lock (0x0111) but does not lock. */
     val carRefusesKeyLock: Boolean = false,
+    /** Field 12/10 17:52:39: at the edge of the link (~-102) the key Lock got no answer although the
+     *  session was still up. Below this true RSSI a key Lock times out without reaching the car. */
+    val keyEdgeRssi: Double? = null,
 ) {
     val rnd = SimRandom(seed)
     val scheduler = TestCoroutineScheduler()
@@ -270,6 +273,10 @@ internal class SimWorld(
                 if (!isEstablished) return ControlResult.NO_RESPONSE
                 if (lock != null) {
                     record(if (lock) "KEY_LOCK_CMD" else "KEY_UNLOCK_CMD")
+                    if (lock && keyEdgeRssi != null && trueRssi < keyEdgeRssi) {
+                        delay(timeoutMs)
+                        return ControlResult.NO_RESPONSE
+                    }
                     if (lock && carRefusesKeyLock) {
                         // Receipt only, no "locked" status. SIM_RECEIPT_ONLY=1 replays 0.2.2, which
                         // counted the receipt as a Lock; the real session now waits and reports it.

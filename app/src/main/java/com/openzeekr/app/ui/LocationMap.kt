@@ -117,4 +117,11 @@ fun CarLocationSection(deps: Deps, modifier: Modifier = Modifier) {
         if (pos != null) PrimaryButton("Navigate to car", Modifier.fillMaxWidth(), tint = Brand.good) { navigateToCar(ctx, pos!!.first, pos!!.second) }
         else GhostButton("Location unavailable", Modifier.fillMaxWidth(), enabled = false, tint = Brand.muted) {}
     }
+    // How to send a destination to the car's navigation (SendToCarActivity is a share target, there
+    // is no button for it). Moved here from Security, where its English one-liner was unclear (12/10).
+    CockpitCard(Modifier.fillMaxWidth()) {
+        SectionHeader("Bestemming naar de auto sturen")
+        Text("Open een plek in Google Maps, tik op Delen en kies \"Send to Zeekr\". Na bevestigen " +
+            "staat de bestemming in de navigatie van de auto.", color = Brand.muted, fontSize = 12.sp)
+    }
 }

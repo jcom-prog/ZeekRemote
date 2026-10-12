@@ -22,7 +22,8 @@ import com.openzeekr.app.ble.sim.Leg.WalkPeak
  * Global invariants are checked over the whole run (SimOracle).
  */
 internal data class Scenario(val family: String, val description: String, val startM: Double, val legs: List<Leg>,
-                    val gnssAccuracyM: Float? = 4f, val carRefusesKeyLock: Boolean = false)
+                    val gnssAccuracyM: Float? = 4f, val carRefusesKeyLock: Boolean = false,
+                    val keyEdgeRssi: Double? = null)
 
 internal object SimScenarios {
     private val F20_PEAK_DB = System.getenv("SIM_F20_PEAK_DB")?.toDouble() ?: 15.0
@@ -117,6 +118,10 @@ internal object SimScenarios {
         Scenario("F26 phone in car, reopened, away", "phone still in the car 5 min, car relocks, opened by hand, walk away", 25.0,
             listOf(Mark("expect-unlock"), Walk(0.5), Mark("-"), PhoneInCar(300_000), ReopenByOther, PhoneInCar(60_000),
                 Mark("expect-lock"), Walk(30.0), Stand(150_000))),
+        // Field 12/10 17:52: walk away; the departure is proven at the edge of the link and the key
+        // Lock gets no answer there - the cloud must take over promptly.
+        Scenario("F27 key Lock unanswered at link edge", "normal departure; key Lock gets no answer below -97", 30.0,
+            approachAndOpen() + listOf(Mark("expect-lock"), Walk(60.0), Stand(150_000)), keyEdgeRssi = -97.0),
         Scenario("F21 car ignores key Lock", "normal departure; the car acknowledges but never executes a key Lock", 30.0,
             approachAndOpen() + listOf(Mark("-"), Walk(30.0), Stand(150_000)), carRefusesKeyLock = true),
     )
