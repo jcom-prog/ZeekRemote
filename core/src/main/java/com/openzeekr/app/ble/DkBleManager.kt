@@ -155,6 +155,7 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
     /** Name of the advertiser we are connecting to; learned as ours once its session is READY. */
     @Volatile private var connectingName: String? = null
     private val skippedOtherCars = mutableSetOf<String>()
+    private val weakAdvertLogged = mutableSetOf<String>()
 
     /** Single stable session so Deps/controllers capture it once; needs a credential to establish(). */
     override val session: DkSession by lazy { RealDkSession(this, { credential }, certPins = certPins) }
@@ -352,6 +353,10 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
             }
             else -> {}
         }
+        if (WeakConnectGate.tooWeak(result.rssi)) {
+            Logx.d("ble", "weak advert ${result.device.address} rssi=${result.rssi} - no direct connect at the edge of range")
+            return false
+        }
         val record = result.scanRecord
         val presenceName = record?.deviceName
         if (ownKey.decide(presenceName) == OwnKeyNameFilter.Decision.SKIP_OTHER_CAR) {
@@ -393,7 +398,7 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
         val scanner = a.bluetoothLeScanner ?: run { fail("no LE scanner"); return }
         _state.value = State.SCANNING
         seenAdvertisers.clear(); waitingRndLogged.clear()
-        skippedOtherCars.clear(); ownKey.onScanStart()
+        skippedOtherCars.clear(); weakAdvertLogged.clear(); ownKey.onScanStart()
         rndByMac.clear()
         advBroadcastRnd = null
         // No device ScanFilter on the foreground connect: the car doesn't advertise the DK
@@ -439,6 +444,12 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
             if (matchesName || matchesUuid || matchesSvcData || matchesMfr) {
                 // Every Zeekr advertises these identifiers; once we know our own key module's name,
                 // another car nearby is skipped instead of costing a doomed handshake (field 12/10).
+                // An advert at the edge of range cannot carry a connection (field 13/10: every such
+                // attempt ended in status 133). Keep scanning; the next, stronger advert connects.
+                if (WeakConnectGate.tooWeak(result.rssi)) {
+                    if (weakAdvertLogged.add(addr)) Logx.d("ble", "weak advert $addr rssi=${result.rssi} - waiting for a stronger one")
+                    return false
+                }
                 if (ownKey.decide(name) == OwnKeyNameFilter.Decision.SKIP_OTHER_CAR) {
                     if (skippedOtherCars.add(addr)) Logx.d("ble", "skip other Zeekr $addr (not our key module)")
                     return false

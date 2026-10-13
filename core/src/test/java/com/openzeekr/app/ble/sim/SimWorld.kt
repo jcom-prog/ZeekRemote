@@ -308,6 +308,26 @@ internal class SimWorld(
             return if (_state.value == DkBleManager.State.SESSION_READY || _state.value == DkBleManager.State.CONNECTED) readRssi() else null
         }
         override fun reconnectLast(): Boolean { connect(null); return true }
+        /**
+         * Direct connect from an offloaded presence result. SIM_PRESENCE_EDGE=1 replays field 13/10
+         * 19:41: the controller hears the car at -100 dBm, but a link cannot be established below
+         * about -94 - each attempt ends in status 133 after ~0.7 s, plus one immediate retry.
+         */
+        fun connectFromPresence(advertRssi: Int) {
+            if (!PRESENCE_EDGE || advertRssi >= com.openzeekr.app.ble.WeakConnectGate.CONNECT_FLOOR_RSSI) { connect(null); return }
+            if (connectJob?.isActive == true || _state.value != DkBleManager.State.IDLE) return
+            _state.value = DkBleManager.State.CONNECTING
+            connectJob = scope.launch {
+                repeat(2) { attempt ->
+                    delay(if (attempt == 0) 700L else 400L + 700L)
+                    record("STATUS_133", "advert $advertRssi")
+                    if (trueRssi >= com.openzeekr.app.ble.WeakConnectGate.CONNECT_FLOOR_RSSI) {
+                        _state.value = DkBleManager.State.IDLE; connectJob = null; connect(null); return@launch
+                    }
+                }
+                _state.value = DkBleManager.State.IDLE
+            }
+        }
         override fun connect(deviceMac: String?) {
             if (connectJob?.isActive == true || _state.value == DkBleManager.State.SESSION_READY ||
                 _state.value == DkBleManager.State.CONNECTED) return
@@ -385,15 +405,32 @@ internal class SimWorld(
             }
             // Presence scan (offloaded, in the BT controller): detection latency by duty mode.
             if (presenceArmed && !keySleeping && link.state.value == DkBleManager.State.IDLE) {
-                if (trueRssi >= PRESENCE_MIN_RSSI) {
+                if (trueRssi >= (if (PRESENCE_EDGE) -100.0 else PRESENCE_MIN_RSSI)) {
                     if (presenceSeenSinceMs < 0) presenceSeenSinceMs = now()
                     val latency = when (presenceMode) { 2 -> 400L; 1 -> 1_500L; else -> 5_000L }
                     if (now() - presenceSeenSinceMs >= latency) {
-                        presenceArmed = false; presenceSeenSinceMs = -1L
+                        presenceSeenSinceMs = -1L
                         val r = readRssi()
                         log('D', "svc", "presence MATCH rssi=$r")
-                        controller.onPresenceMatch(r)
-                        link.connect(null)
+                        // 0.2.16: ProximityService gates edge-of-range hits (WeakConnectGate).
+                        val action = if (WEAK_GATE) com.openzeekr.app.ble.WeakConnectGate.onPresence(r,
+                            motion.state.value == MotionMonitor.Motion.MOVING)
+                            else com.openzeekr.app.ble.WeakConnectGate.PresenceAction.CONNECT
+                        when (action) {
+                            com.openzeekr.app.ble.WeakConnectGate.PresenceAction.CONNECT -> {
+                                presenceArmed = false
+                                controller.onPresenceMatch(r)
+                                link.connectFromPresence(r)
+                            }
+                            com.openzeekr.app.ble.WeakConnectGate.PresenceAction.FOREGROUND_SCAN -> {
+                                presenceArmed = false
+                                log('D', "svc", "presence at the edge of range while moving - foreground scan")
+                                controller.onPresenceMatch(r)
+                                link.connect(null)
+                            }
+                            com.openzeekr.app.ble.WeakConnectGate.PresenceAction.IGNORE ->
+                                log('D', "svc", "presence at the edge of range while still - not connecting")
+                        }
                     }
                 } else presenceSeenSinceMs = -1L
             }
@@ -583,6 +620,8 @@ internal class SimWorld(
         const val TICK_MS = 100L
         const val SELF_LOCK_MS = 120_000L
         const val CONNECT_MIN_RSSI = -96.0
+        val PRESENCE_EDGE = System.getenv("SIM_PRESENCE_EDGE") == "1"
+        val WEAK_GATE = System.getenv("SIM_WEAK_GATE") != "0"
         const val DROP_RSSI = -102.0
         const val SUPERVISION_MS = 3_000L
         const val PRESENCE_MIN_RSSI = -95.0

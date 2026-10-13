@@ -644,11 +644,48 @@ class ProximityController internal constructor(
             // Stationary loss so far (e.g. security sleep beside the car). If the user then walks
             // away while the car is still open and out of reach, sound the alarm after all. Waiting
             // on the motion flow needs no wakelock; link restore cancels this job.
-            val walked = withTimeoutOrNull(UNVERIFIED_LOCK_ESCALATION_MS) {
+            // The S24 with the screen off can report STILL for a whole walk away (field 09/10
+            // 13:30), so "no motion" does not mean "beside the car". A link that went down on a
+            // weak signal (out of range, not a deliberate disconnect at the car) and is still down
+            // [STATIONARY_LINK_LOSS_CHECK_MS] after the loss is checked with the cloud: car still
+            // open -> alarm. A phone beside the car reconnects within seconds.
+            val outOfRangeLoss = !linkLostNearCar
+            val checkInMs = (linkLostAtMs + STATIONARY_LINK_LOSS_CHECK_MS - clock.wallMs()).coerceAtLeast(0L)
+            val checkWl = if (outOfRangeLoss) acquireSafetyWakelock(checkInMs + 30_000L) else null
+            val walkedEarly = try {
+                withTimeoutOrNull(if (outOfRangeLoss) checkInMs else UNVERIFIED_LOCK_ESCALATION_MS) {
+                    motion.state.first { it == MotionMonitor.Motion.MOVING &&
+                        !com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value }
+                } != null
+            } finally {
+                releaseSafetyWakelock(checkWl)
+            }
+            if (linkLostAtMs == 0L || !armedUnlocked || !_state.value.running) return@launch
+            if (walkedEarly) {
+                alerts.show(LockAlertPolicy.Event.LINK_LOST_WHILE_UNLOCKED)
+                Logx.w("prox", "BLE still down and walking; vehicle lock unverified -> alarm")
+                return@launch
+            }
+            if (!outOfRangeLoss || com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value) return@launch
+            val snapshot = runCatching { cloudLockSnapshot() }.getOrNull()
+            if (linkLostAtMs == 0L || !armedUnlocked || !_state.value.running) return@launch
+            when {
+                snapshot == null -> Logx.d("prox", "BLE down ${STATIONARY_LINK_LOSS_CHECK_MS / 1000} s after an " +
+                    "out-of-range loss; cloud state unavailable -> still waiting for a walk")
+                snapshot.locked -> Logx.d("prox", "BLE down ${STATIONARY_LINK_LOSS_CHECK_MS / 1000} s after an " +
+                    "out-of-range loss; cloud says locked -> no alarm")
+                else -> {
+                    alerts.show(LockAlertPolicy.Event.LINK_LOST_WHILE_UNLOCKED)
+                    Logx.w("prox", "BLE down ${STATIONARY_LINK_LOSS_CHECK_MS / 1000} s after an out-of-range " +
+                        "loss and the cloud says unlocked -> alarm")
+                    return@launch
+                }
+            }
+            val walkedLater = withTimeoutOrNull(UNVERIFIED_LOCK_ESCALATION_MS - STATIONARY_LINK_LOSS_CHECK_MS) {
                 motion.state.first { it == MotionMonitor.Motion.MOVING &&
                     !com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value }
             } != null
-            if (walked && linkLostAtMs != 0L && armedUnlocked && _state.value.running) {
+            if (walkedLater && linkLostAtMs != 0L && armedUnlocked && _state.value.running) {
                 alerts.show(LockAlertPolicy.Event.LINK_LOST_WHILE_UNLOCKED)
                 Logx.w("prox", "BLE still down and walking; vehicle lock unverified -> alarm")
             }
@@ -1839,6 +1876,8 @@ class ProximityController internal constructor(
         private const val UNVERIFIED_LOCK_ALERT_DELAY_MS = 10_000L
         private const val UNVERIFIED_LOCK_ALERT_WAKE_MS = 15_000L
         private const val UNVERIFIED_LOCK_ESCALATION_MS = 30 * 60_000L
+        /** Out-of-range link loss with the phone still: check the cloud this long after the loss (0.2.16). */
+        private const val STATIONARY_LINK_LOSS_CHECK_MS = 100_000L
         private const val SHADOW_RECHECK_MS = 5_000L
         private const val DEPARTURE_ALARM_READS = 3
         private const val SHADOW_REARM_MS = 15_000L

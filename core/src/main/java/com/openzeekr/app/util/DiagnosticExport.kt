@@ -19,7 +19,7 @@ object DiagnosticExport {
     /** BLE link lines worth keeping: connection state and presence scanning. */
     private val BLE_SAFE = listOf("onConnectionStateChange", "presence scan", "presence MATCH", "connectGatt",
         "DK session READY", "services discovered", "starting DK handshake",
-        "skip other Zeekr", "own key module")
+        "skip other Zeekr", "own key module", "weak advert")
     /** Any line mentioning one of these is dropped whole. */
     private val DENY = Regex(
         "(?i)vin|token|passw|secret|bearer|cert|cmac|digitalkey|dkid|phoneid|deviceid|userid|e-?mail|" +

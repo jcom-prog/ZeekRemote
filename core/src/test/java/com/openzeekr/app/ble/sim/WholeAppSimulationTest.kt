@@ -50,6 +50,9 @@ class WholeAppSimulationTest {
         }.sorted()
         fun pct(l: List<Double>, p: Double) = if (l.isEmpty()) Double.NaN else l[((l.size - 1) * p).toInt()]
         sb.appendLine("Unlock distance m: n=%d p10=%.1f median=%.1f p90=%.1f".format(unlockD.size, pct(unlockD, .1), pct(unlockD, .5), pct(unlockD, .9)))
+        sb.appendLine("Status-133 connect failures: %d (runs affected %d)".format(
+            results.sumOf { r -> r.world.events.count { it.kind == "STATUS_133" } },
+            results.count { r -> r.world.events.any { it.kind == "STATUS_133" } }))
         sb.appendLine("Auto-Lock distance m: n=%d p10=%.1f median=%.1f p90=%.1f".format(autoLockD.size, pct(autoLockD, .1), pct(autoLockD, .5), pct(autoLockD, .9)))
         sb.appendLine()
         sb.appendLine("Per family: unlock distance on each expected approach / auto-Lock distance (median, p10-p90):")

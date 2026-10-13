@@ -157,6 +157,26 @@ class ProximityService : Service() {
                     intent.getParcelableExtra(EXTRA_SCAN_RESULT) as? android.bluetooth.le.ScanResult
                 }
                 val mac = scanResult?.device?.address ?: intent.getStringExtra(EXTRA_MAC)
+                if (scanResult != null) {
+                    val moving = deps.motion.state.value == MotionMonitor.Motion.MOVING
+                    when (WeakConnectGate.onPresence(scanResult.rssi, moving)) {
+                        WeakConnectGate.PresenceAction.CONNECT -> Unit
+                        WeakConnectGate.PresenceAction.FOREGROUND_SCAN -> {
+                            Logx.d("svc", "presence at the edge of range (rssi=${scanResult.rssi}) while moving - " +
+                                "foreground scan connects once the car is in range")
+                            // Still arrival evidence: it opens the arrival epoch that clears a Lock's
+                            // departure latch (a back-pocket return never reads strong-near at the door).
+                            if (deps.config.config.value.proximityEnabled) deps.proximity.onPresenceMatch(scanResult.rssi)
+                            runCatching { deps.ble.connect(null) }
+                            return START_STICKY
+                        }
+                        WeakConnectGate.PresenceAction.IGNORE -> {
+                            Logx.d("svc", "presence at the edge of range (rssi=${scanResult.rssi}) while still - " +
+                                "not connecting; offloaded scan stays armed")
+                            return START_STICKY
+                        }
+                    }
+                }
                 if (scanResult != null && deps.ble.shouldDeferWeakPresence(scanResult.rssi)) {
                     Logx.d("svc", "status 133: deferring weak presence at rssi=${scanResult.rssi}; keeping offloaded scan armed")
                     return START_STICKY
