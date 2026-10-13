@@ -146,6 +146,16 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
         override fun put(vin: String, fingerprint: String) { prefs.edit().putString(vin, fingerprint).apply() }
     }
 
+    /** Our own key module's advertised name, learned after a successful DK session (phone only). */
+    private val ownKey = OwnKeyNameFilter(object : OwnKeyNameFilter.Store {
+        private val prefs = appContext.getSharedPreferences("dk_own_key", Context.MODE_PRIVATE)
+        override fun load(): String? = prefs.getString("name", null)
+        override fun save(name: String?) { prefs.edit().putString("name", name).apply() }
+    })
+    /** Name of the advertiser we are connecting to; learned as ours once its session is READY. */
+    @Volatile private var connectingName: String? = null
+    private val skippedOtherCars = mutableSetOf<String>()
+
     /** Single stable session so Deps/controllers capture it once; needs a credential to establish(). */
     override val session: DkSession by lazy { RealDkSession(this, { credential }, certPins = certPins) }
 
@@ -343,6 +353,11 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
             else -> {}
         }
         val record = result.scanRecord
+        val presenceName = record?.deviceName
+        if (ownKey.decide(presenceName) == OwnKeyNameFilter.Decision.SKIP_OTHER_CAR) {
+            Logx.d("ble", "skip other Zeekr ${result.device.address} (presence) - foreground scan for our key module")
+            return false
+        }
         val rnd = DkAdvertParser.parseBroadcastRnd(
             rawRecord = record?.bytes,
             manufacturerData = record?.manufacturerSpecificData?.get(DK_MFR_COMPANY_ID),
@@ -361,6 +376,7 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
 
         lastError = null
         advBroadcastRnd = rnd
+        connectingName = presenceName
         lastDevice = result.device
         lastRnd = rnd
         // Advertising RSSI remains approach evidence; it must not masquerade as a GATT read.
@@ -377,6 +393,7 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
         val scanner = a.bluetoothLeScanner ?: run { fail("no LE scanner"); return }
         _state.value = State.SCANNING
         seenAdvertisers.clear(); waitingRndLogged.clear()
+        skippedOtherCars.clear(); ownKey.onScanStart()
         rndByMac.clear()
         advBroadcastRnd = null
         // No device ScanFilter on the foreground connect: the car doesn't advertise the DK
@@ -420,6 +437,12 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
             val matchesSvcData = rec?.serviceData?.keys?.any { it.uuid == target || it.uuid == advTarget } == true
             val matchesMfr = (rec?.manufacturerSpecificData?.indexOfKey(DK_MFR_COMPANY_ID) ?: -1) >= 0
             if (matchesName || matchesUuid || matchesSvcData || matchesMfr) {
+                // Every Zeekr advertises these identifiers; once we know our own key module's name,
+                // another car nearby is skipped instead of costing a doomed handshake (field 12/10).
+                if (ownKey.decide(name) == OwnKeyNameFilter.Decision.SKIP_OTHER_CAR) {
+                    if (skippedOtherCars.add(addr)) Logx.d("ble", "skip other Zeekr $addr (not our key module)")
+                    return false
+                }
                 // Only advertisers that match the car are logged (once per MAC per scan). Logging
                 // every headset, TV and watch around filled the phone log within minutes (field
                 // 12/10: the 16:33 key problem had already scrolled out of the log at 16:48).
@@ -441,6 +464,7 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
                     return false
                 }
                 advBroadcastRnd = rnd
+                connectingName = name
                 lastDevice = dev; lastRnd = rnd   // cache for a scan-free forced reconnect
                 Logx.d("ble", "match by $why rnd=${rnd.joinToString("") { "%02x".format(it) }} -> connecting $addr")
                 stopScanInternal(scanner)
@@ -477,6 +501,8 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
             delay(SCAN_TIMEOUT_MS)
             if (_state.value == State.SCANNING) {
                 stopScanInternal(scanner)
+                if (ownKey.onScanTimeout())
+                    Logx.w("ble", "own key module not seen in ${OwnKeyNameFilter.FORGET_AFTER_TIMEOUTS} scans, only other Zeekrs - learned name forgotten, next scan accepts any Zeekr")
                 fail("no DK device matched in ${SCAN_TIMEOUT_MS / 1000}s — check the advertiser log above " +
                     "for the car's name/MAC, then connect by MAC")
             }
@@ -795,6 +821,9 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
             Logx.d("ble", "starting DK handshake …")
             (session as RealDkSession).establish()
             Logx.d("ble", "DK session READY")
+            val before = ownKey.learnedName
+            ownKey.onSessionReady(connectingName)
+            if (ownKey.learnedName != before) Logx.d("ble", "own key module name learned")
             setupRetries = 0 // clean session — clear the fast-retry budget
             status133RecoveryPolicy.onSessionReady()
             handshakeFailStreak = 0; handshakeBackoffUntilMs = 0L // handshake worked — clear the backoff
