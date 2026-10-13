@@ -124,6 +124,13 @@ internal object SimScenarios {
             approachAndOpen() + listOf(Mark("expect-lock"), Walk(60.0), Stand(150_000)), keyEdgeRssi = -97.0),
         Scenario("F21 car ignores key Lock", "normal departure; the car acknowledges but never executes a key Lock", 30.0,
             approachAndOpen() + listOf(Mark("-"), Walk(30.0), Stand(150_000)), carRefusesKeyLock = true),
+        // Field 13/10 16:44: approach + open, walk away ~20 m so the car auto-locks and the link
+        // drops far, then turn straight back. The reconnect only completed at the door while the
+        // user stood still; the departure-ended latch kept the car shut and the user had to unlock
+        // by hand. A proven away-and-back must reopen at the door (0.2.14 B).
+        Scenario("F28 walk-away lock, straight back", "open, away 30 m (auto-lock, link drops far), back to the door", 30.0,
+            approachAndOpen() + listOf(Mark("expect-lock"), Walk(30.0), Stand(14_000, Facing.AWAY),
+                Mark("expect-unlock"), Walk(1.0), Stand(20_000))),
     )
 
     /** families x carry x motion profile x seeds. */

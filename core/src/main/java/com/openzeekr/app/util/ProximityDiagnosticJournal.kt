@@ -27,7 +27,7 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
         private val autoLockConfirmed = Regex(
             "auto lock confirmed \\((ble-departure|verified-link-departure|walk-away-lock|idle-far-lock)\\): the car reports locked")
         private val unlockArm = Regex("^approach-unlock ARM \\(rssi=(-[0-9]{2,3}) .* route=(presence|approach|door|still|" +
-            "deep_return|deep_window|manual_return|at_car|self_lock_return|none)\\)")
+            "deep_return|deep_window|manual_return|at_car|away_return|self_lock_return|none)\\)")
         private val bleLockAuthorized = Regex("^ble departure lock authorized \\(rssi=(-[0-9]{2,3}) kind=(walk|very_deep|" +
             "very_deep_gradual|none)\\)")
         private val lockAlarm = Regex("lock alarm (raised|unavailable|suppressed) \\(([A-Z_]{1,40})\\)")

@@ -78,6 +78,14 @@ internal class ProximityDecisionPolicy {
     private var selfLockReopenAtMs = UNSET_MS
     private var selfLockMinRssi = 0  // the smoothed level at the self-lock
     private var selfLockReopenReadings = 0
+    // A proven away-and-back round trip: the authenticated link dropped far from the car (out of
+    // range) while the car was locked, so a later fresh session that comes up sustained strong-near
+    // is a genuine return to the door - even when the reconnect completes without an offloaded
+    // presence approach (field 13/10 16:44: after a walk-away lock the link only re-established at
+    // the door, standing still, and the connected-RSSI return was disabled because the departure
+    // had ended the link). Sitting in or beside the car never drops the link out of range.
+    private var awayRoundTripPending = false
+    private var awayReturnReadings = 0
 
     /** Which rule qualified the latest unlock (categorical, for the log and the journal). */
     var unlockRoute: String = "none"
@@ -111,6 +119,8 @@ internal class ProximityDecisionPolicy {
         arrivalEpochAfterLock = false
         pendingUnlockFarSinceMs = UNSET_MS
         deepReturnUnlockUntilMs = UNSET_MS
+        awayRoundTripPending = false
+        awayReturnReadings = 0
     }
 
     /** Records hardware-offloaded arrival evidence before connect/handshake timing can erase it. */
@@ -146,7 +156,9 @@ internal class ProximityDecisionPolicy {
 
     /** Returns true only for a qualified approach or a fresh, stable session already at the door. */
     fun shouldUnlock(nowMs: Long, rssi: Int, moving: Boolean, unlockThreshold: Int): Boolean {
-        if (departureLatched && !tryRearmSameLinkReturn(nowMs, rssi, moving, unlockThreshold)) {
+        if (departureLatched &&
+            !tryRearmSameLinkReturn(nowMs, rssi, moving, unlockThreshold) &&
+            !(awayRoundTripPending && tryRearmAwayReturn(nowMs, rssi, moving, unlockThreshold))) {
             return false
         }
         // The key can wake while the user walks AWAY (security sleep at the car, car self-locked):
@@ -244,12 +256,14 @@ internal class ProximityDecisionPolicy {
         arrivalConfirmed = false
         resetAbortedArrivalCandidate()
         resetWalkAwayCandidate()
+        awayRoundTripPending = false
     }
 
     /** Suppress every unlock decision from the moment walk-away locking starts. */
     fun onDepartureLockStarted() {
         pendingUnlockFarSinceMs = UNSET_MS
         arrivalEpochAfterLock = false
+        awayRoundTripPending = false
         departureLatched = true
         // An automatic lock never inherits the manual routes of an earlier manual Lock on the same
         // link (review 0.1.61); onManualLockConfirmed sets it again right after this.
@@ -320,6 +334,20 @@ internal class ProximityDecisionPolicy {
             farFloorRssi = 0; stillApproachSinceMs = UNSET_MS
             nearCandidateSinceMs = UNSET_MS
             unlockQualifiedAtMs = UNSET_MS
+        }
+    }
+
+    /**
+     * The authenticated link dropped clearly far from the car while the car was locked: a physical
+     * round trip is under way. Record it so a later fresh session that comes up sustained
+     * strong-near can reopen the car once (see [awayRoundTripPending] and [tryRearmAwayReturn]).
+     * Only called with real far evidence (a far reading at loss), so a wedged link beside the car
+     * or a phone left inside it never arms this.
+     */
+    fun onFarLinkLossWhileLocked() {
+        if (departureLatched) {
+            awayRoundTripPending = true
+            awayReturnReadings = 0
         }
     }
 
@@ -525,6 +553,24 @@ internal class ProximityDecisionPolicy {
     }
 
     /**
+     * Guarded reopen on a proven away-and-back round trip ([onFarLinkLossWhileLocked]). The link
+     * already proved physical separation (it dropped far from the car); the only thing left to
+     * verify is that the phone is now genuinely back at the door. Require a sustained strong-near
+     * run; any reading back out of the near band resets it. A slow reconnect that completes only at
+     * the door, standing still, still opens the car - the exact field 16:44 failure.
+     */
+    private fun tryRearmAwayReturn(nowMs: Long, rssi: Int, moving: Boolean, unlockThreshold: Int): Boolean {
+        if (rssi <= unlockThreshold - FAR_MARGIN_DB) { awayReturnReadings = 0; return false }
+        if (rssi >= STRONG_NEAR_RSSI) awayReturnReadings++ else awayReturnReadings = 0
+        val needed = if (moving) AWAY_RETURN_MOVING_READINGS else AWAY_RETURN_STILL_READINGS
+        if (awayReturnReadings < needed) return false
+        finishSameLinkReturn()
+        unlockQualifiedAtMs = nowMs; unlockRoute = "away_return"
+        awayRoundTripPending = false
+        return true
+    }
+
+    /**
      * A return after a Lock (own or the car's self-lock), recognised from the signal alone. Field
      * 03/10 16:22 (0.1.60): after the car locked itself the user walked to ~15 m (-92..-98 dBm) and
      * back; Activity Recognition said STILL for most of the walk both ways, the stand-still/motion-edge
@@ -669,6 +715,7 @@ internal class ProximityDecisionPolicy {
         manualDeepFarLastAtMs = UNSET_MS
         deepReturnNotBeforeMs = UNSET_MS
         deepReturnNeedsRecession = false
+        awayReturnReadings = 0
     }
 
     /** Reads and clears [deepFarReturnRearmed]. */
@@ -862,7 +909,11 @@ internal class ProximityDecisionPolicy {
         const val ABORTED_ARRIVAL_FAR_MS = 1_500L
         const val ABORTED_ARRIVAL_DROP_DB = 8
         const val ABORTED_ARRIVAL_FAR_MARGIN_DB = 4
-        const val WALK_AWAY_CONFIRM_MS = 2_000L
+        // 0.2.14 C (user 13/10: the Lock takes too long): confirm a receding departure sooner. The
+        // independent GNSS position proof and the downstream WalkAwayLockConfirmation still gate the
+        // actual Lock, so a shorter RSSI sustain only brings the candidate forward, never past the
+        // "never lock while near" guard.
+        const val WALK_AWAY_CONFIRM_MS = 1_200L
         const val MAX_DEPARTURE_SAMPLE_GAP_MS = 1_000L
         const val WALK_AWAY_DROP_DB = 3
         const val WALK_AWAY_RECOVERY_DB = 3
@@ -897,6 +948,11 @@ internal class ProximityDecisionPolicy {
         const val MANUAL_AT_CAR_DIP_DB = 6
         const val MANUAL_AT_CAR_MIN_READINGS = 2
         const val MANUAL_AT_CAR_STILL_MIN_READINGS = 4
+        // Away-and-back reopen (physical separation already proven by the far link loss): a sustained
+        // strong-near run at the door. STILL needs more readings because a STILL reconnect at the
+        // door is exactly the ambiguous field 16:44 case.
+        const val AWAY_RETURN_MOVING_READINGS = 2
+        const val AWAY_RETURN_STILL_READINGS = 4
         /** Linked-watch samples every 1 s; a longer silence is a far-sleep gap. */
         const val MANUAL_DEEP_MAX_GAP_MS = 2_500L
         const val MANUAL_DEEP_PROOF_TTL_MS = 60_000L

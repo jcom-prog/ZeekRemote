@@ -48,6 +48,7 @@ on:
       - zeekremote-0.2.11-trips-charge
       - zeekremote-0.2.12-share-diagnostics
       - zeekremote-0.2.13-faster-cloud-lock
+      - zeekremote-0.2.14-return-reopen
 
 permissions:
   contents: read
@@ -143,6 +144,9 @@ jobs:
           grep -Fq 'door(lockView.tapLocks)' app/src/main/java/com/openzeekr/app/ui/VehicleScreen.kt
           grep -Fq '!bleLockAuthorized() && !confirmPhysicalDeparture()' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'const val MIN_WEAK_MS = 8_000L' core/src/main/java/com/openzeekr/app/ble/BleDepartureEvidence.kt
+          grep -Fq 'const val WALK_AWAY_CONFIRM_MS = 1_200L' core/src/main/java/com/openzeekr/app/ble/ProximityDecisionPolicy.kt
+          grep -Fq 'unlockRoute = "away_return"' core/src/main/java/com/openzeekr/app/ble/ProximityDecisionPolicy.kt
+          grep -Fq 'decisionPolicy.onFarLinkLossWhileLocked()' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -164,7 +168,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='119' versionName='0.2.13-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='120' versionName='0.2.14-work'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
           sha256sum "$APK"

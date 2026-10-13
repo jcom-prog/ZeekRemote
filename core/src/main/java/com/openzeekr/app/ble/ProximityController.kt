@@ -556,6 +556,14 @@ class ProximityController internal constructor(
             linkLostAtMs = clock.wallMs()
             linkLostNearCar = lostRssi?.let { it >= config().sensitivityUnlockRssi } ?: false
             deepFarAtLinkLossMs = stationaryFar.deepFarForMs(linkLostAtMs)
+            // Locked car, link torn down clearly far from it (out of range): a physical round trip.
+            // A fresh session later arriving sustained strong-near at the door may reopen once
+            // (field 13/10 16:44: a slow reconnect completed at the door, standing still, and the
+            // departure-ended latch otherwise kept it shut). Needs a real far reading, so a wedged
+            // link beside the car or a phone left inside it never arms it.
+            val lostFar = lostRssi?.let { it < config().sensitivityLockRssi } ?: false
+            if (!armedUnlocked && lostFar)
+                decisionPolicy.onFarLinkLossWhileLocked()
             stationaryFar.onReadingsStopped()
             // RSSI/body shielding and a real departure can both tear down the link. Neither a timer
             // nor the last (possibly stale) RSSI can tell them apart; position must corroborate.
