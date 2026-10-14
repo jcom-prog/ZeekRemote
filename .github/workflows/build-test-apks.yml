@@ -52,6 +52,7 @@ on:
       - zeekremote-0.2.15-own-key
       - zeekremote-0.2.16-edge-of-range
       - zeekremote-0.2.17-step-counter
+      - zeekremote-0.3.0-safety
 
 permissions:
   contents: read
@@ -171,6 +172,17 @@ jobs:
           grep -Fq 'private val stepCounter: Sensor? = sensors?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)' core/src/main/java/com/openzeekr/app/ble/MotionMonitor.kt
           grep -Fq 'internal class StepTally' core/src/main/java/com/openzeekr/app/ble/StepTally.kt
           grep -Fq 'cloudLockWithheldUnverified && userBackAtCar()' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'interface ProximityStateStore' core/src/main/java/com/openzeekr/app/ble/ProximityPorts.kt
+          grep -Fq 'LOCKED_WHILE_AWAY' core/src/main/java/com/openzeekr/app/ble/UnlockedSafetyNets.kt
+          grep -Fq 'private fun lockVeto(fresh: Int?): String?' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'fun vetoed(smoothedRssi: Int)' core/src/main/java/com/openzeekr/app/ble/BleDepartureRoute.kt
+          grep -Fq 'private const val LOCK_LOOP_WAKE_MS = 3 * 60_000L' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'private const val LOSS_NEAR_STALE_READING_MS = 10_000L' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'fun resolvesAlarm(' core/src/main/java/com/openzeekr/app/ble/LockAlertPolicy.kt
+          grep -Fq 'internal class SharedVinRemovalPolicy' core/src/main/java/com/openzeekr/app/remote/SharedVinRemovalPolicy.kt
+          grep -Fq 'const val MAX_HOLD_MS = 30_000L' core/src/main/java/com/openzeekr/app/ble/rpa/RpaController.kt
+          grep -Fq 'object LockAlarmHealth' core/src/main/java/com/openzeekr/app/ble/LockAlarmHealth.kt
+          grep -Fq 'edge (plan H10, 0.3.0)' core/src/main/java/com/openzeekr/app/util/DiagnosticExport.kt
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -192,7 +204,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='123' versionName='0.2.17-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='124' versionName='0.3.0-work'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
           sha256sum "$APK"
