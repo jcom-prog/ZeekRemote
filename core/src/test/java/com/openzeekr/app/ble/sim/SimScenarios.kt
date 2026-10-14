@@ -369,7 +369,10 @@ internal object SimOracle {
                         l.distanceM > 30.0 -> out += f("DEPARTURE_LOCK_LATE", l, "locked at %.1f m".format(l.distanceM))
                     }
                 }
-                "expect-alarm" -> if (ev.none { it.kind == "ALARM" && it.atMs >= m.atMs && it.atMs < plus(endAt, 30_000) } &&
+                // Only an open car needs the alarm (stress F41: the approach unlock failed, the car
+                // stayed locked the whole time and was counted as a silent departure).
+                "expect-alarm" -> if ((unlockedAtMark || seg.any { it.kind == "CAR_UNLOCKED" }) &&
+                    ev.none { it.kind == "ALARM" && it.atMs >= m.atMs && it.atMs < plus(endAt, 30_000) } &&
                     seg.none { it.kind == "CAR_LOCKED" })
                     out += Finding("DEPARTURE_NO_LOCK_SILENT", m.atMs, m.distanceM, "car could not be locked and no alarm")
                 "expect-stay-unlocked" -> seg.firstOrNull { it.kind == "KEY_LOCK_CMD" || it.kind == "CLOUD_LOCK_CMD" }?.let {

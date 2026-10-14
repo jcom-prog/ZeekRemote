@@ -219,6 +219,9 @@ class ProximityController internal constructor(
     // ---- link-loss handling ----
     private var linkLostAtMs = 0L
     private var lostRssi: Int? = null
+    // Step count and time when [lostRssi] was read: steps since then = the phone moved on.
+    private var lostRssiSteps: Long? = null
+    private var lostRssiAtMs = 0L
     private var pendingUnverifiedLockAlert: Job? = null
     private var unverifiedLockAlertRaised = false
 
@@ -246,7 +249,7 @@ class ProximityController internal constructor(
         inCarSinceMs = 0L; steadyRef = null; steadySinceMs = 0L; lastCadence = ""
         rssiNullStreak = 0; pingJob?.cancel(); pingJob = null
         pingInFlight = false; pingFailStreak = 0; lastPingMs = 0L
-        linkLostAtMs = 0L; lostRssi = null
+        linkLostAtMs = 0L; lostRssi = null; lostRssiSteps = null; lostRssiAtMs = 0L
         relockRecoveryPending = false; relockProbeJob?.cancel(); relockProbeJob = null
         departureAnchorJob?.cancel(); departureAnchorJob = null; departureAnchor = null
         linkDepartureJob?.cancel(); linkDepartureJob = null
@@ -589,7 +592,15 @@ class ProximityController internal constructor(
             decisionPolicy.onLinkEnded()
             carSelfLock.onLinkLost()
             linkLostAtMs = clock.wallMs()
-            linkLostNearCar = lostRssi?.let { it >= config().sensitivityUnlockRssi } ?: false
+            // Near the car only if the last reading was taken here: steps since it mean the phone
+            // has moved on (stress F22/F42: the last reading -83 was 10 m and 17 s back, the loss
+            // at 22 m counted as "near the car" and the alarm stayed silent).
+            val stepsSinceReading = lostRssiSteps?.let { at -> motion.observedSteps?.let { it - at } }
+            val readingAgeMs = if (lostRssiAtMs == 0L) Long.MAX_VALUE else clock.wallMs() - lostRssiAtMs
+            val movedSinceLastReading = stepsSinceReading != null &&
+                (stepsSinceReading >= LOSS_NEAR_MAX_STEPS_SINCE_READING ||
+                    (stepsSinceReading > 0L && readingAgeMs >= LOSS_NEAR_STALE_READING_MS))
+            linkLostNearCar = !movedSinceLastReading && lostRssi?.let { it >= config().sensitivityUnlockRssi } ?: false
             deepFarAtLinkLossMs = stationaryFar.deepFarForMs(linkLostAtMs)
             // Locked car, link torn down clearly far from it (out of range): a physical round trip.
             // A fresh session later arriving sustained strong-near at the door may reopen once
@@ -655,7 +666,10 @@ class ProximityController internal constructor(
         // Walking when the link went (or while waiting) = leaving radio range with the car open:
         // audible. A stationary loss (security sleep, Watch hand-over, phone set down near the car)
         // is not an expected Lock and stays silent.
-        var movedDuringLoss = walkingOutsideHandOver() || departureSuspected()
+        // Walked clearly away from the car before an out-of-range loss (stress F22/F42: the motion
+        // sensor said STILL for the whole walk, the step counter did count).
+        var movedDuringLoss = walkingOutsideHandOver() || departureSuspected() ||
+            (!linkLostNearCar && stepsShortOfDeparture() == null && (stepsSinceUnlock() ?: 0L) > 0L)
         pendingUnverifiedLockAlert = scope.launch {
             val wl = acquireSafetyWakelock(UNVERIFIED_LOCK_ALERT_WAKE_MS)
             try {
@@ -667,8 +681,11 @@ class ProximityController internal constructor(
             } finally {
                 releaseSafetyWakelock(wl)
             }
-            // A Lock or link-departure check in progress owns the outcome and raises its own alert.
-            while (lockJob?.isActive == true || linkDepartureJob?.isActive == true) delay(1_000L)
+            // A Lock or link-departure check in progress owns the outcome and raises its own alert -
+            // for a bounded time: a stuck check must never keep the car open in silence.
+            val ownerDeadline = clock.elapsedMs() + LINK_LOSS_ALERT_MAX_WAIT_MS
+            while ((lockJob?.isActive == true || linkDepartureJob?.isActive == true) &&
+                clock.elapsedMs() < ownerDeadline) delay(1_000L)
             if (linkLostAtMs == 0L || !armedUnlocked || !_state.value.running) return@launch
             val posted = alerts.show(
                 LockAlertPolicy.linkLossEvent(movedDuringLoss, departureSuspected()))
@@ -1414,6 +1431,8 @@ class ProximityController internal constructor(
         val trend = if (prev != null) smoothedD - prev else 0.0
         val receding = trend < -TREND_DEADBAND
         lostRssi = smoothed    // diagnostic only; never sufficient to lock after link loss
+        lostRssiSteps = motion.observedSteps
+        lostRssiAtMs = clock.wallMs()
 
         val now = clock.wallMs()
         var bleDepartureConfirmed = false
@@ -1881,6 +1900,10 @@ class ProximityController internal constructor(
             }
             lockJob = null
         }
+        // Plan H8: the loop waits for the session, GNSS and the cloud; with the CPU asleep those
+        // timers stop (stress F34: stuck after "sending Lock" at 80 m while the alarm waited on it).
+        val loopWl = acquireSafetyWakelock(LOCK_LOOP_WAKE_MS)
+        lockJob?.invokeOnCompletion { releaseSafetyWakelock(loopWl) }
     }
 
     private suspend fun verifyFreshLockStatus(lockStartedAtMs: Long): Boolean {
@@ -2161,12 +2184,21 @@ class ProximityController internal constructor(
         private const val SELF_LOCK_SETTLE_MS = 1_500L
         /** Plan K7: a strong reading after this long without one is the user's return. */
         private const val RETURN_GAP_MS = 10_000L
-        /** Plan K9: steps since the last strong reading at the car that mean "walked away" (~35 m). */
-        private const val WALKED_AWAY_STEPS = 50L
+        /** Plan K9: steps since the last strong reading at the car that mean "walked away" (~20 m;
+         *  50 missed a 30 m walk the hub counter counted as 44, stress F20). */
+        private const val WALKED_AWAY_STEPS = 30L
         private const val WALKED_AWAY_QUIET_MS = 45_000L
         /** Plan K8: steps after a near-car link loss that mean "walking away", watched for this long. */
         private const val NEAR_LOSS_WALK_STEPS = 20L
         private const val NEAR_LOSS_STEP_WATCH_MS = 5 * 60_000L
+        /** Plan H8: longest wakelock for one Lock loop (BLE attempts, GNSS check, cloud, status). */
+        private const val LOCK_LOOP_WAKE_MS = 3 * 60_000L
+        /** A running Lock or departure check may hold the link-loss alert back at most this long. */
+        private const val LINK_LOSS_ALERT_MAX_WAIT_MS = 120_000L
+        /** Steps since the last reading after which a link loss is no longer "at the car", ... */
+        private const val LOSS_NEAR_MAX_STEPS_SINCE_READING = 8L
+        /** ... or any step once that reading is this old (the hub counter withholds the first steps). */
+        private const val LOSS_NEAR_STALE_READING_MS = 10_000L
         /** Level assumed for a veto without any reading: a new BLE proof is then out of reach. */
         private const val VETO_UNKNOWN_LEVEL_RSSI = -100
         /** Plan K1: fewer steps than this since the car veto an automatic Lock (~9 m of walking). */
