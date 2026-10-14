@@ -55,14 +55,24 @@ class LockAlertPolicyTest {
         assertTrue("link down counts as away", LockAlertPolicy.departureAlarmDue(true, true, null, -82))
     }
 
-    @Test fun oneAlarmPerEpisode() {
+    @Test fun oneAlarmPerSituationAndAReminderAtMostEveryFiveMinutes() {
         // 0.1.54 part B: shadow-path alarm 19:29:19.6, watchdog alarm 19:29:41.9 -> second suppressed.
         val first = 1_000_000L
         assertTrue(LockAlertPolicy.alarmShouldSound(0L, first))
         assertFalse(LockAlertPolicy.alarmShouldSound(first, first + 22_000L))
-        assertTrue(LockAlertPolicy.alarmShouldSound(first, first + LockAlertPolicy.ALARM_EPISODE_MS))
-        // Review 0.1.55 F4: a dismissed/opened alarm does not suppress the next genuine one.
-        assertTrue(LockAlertPolicy.alarmShouldSound(first, first + 22_000L, alarmStillShowing = false))
+        // Field 06/10 (incident #20): ~12 alarms 33 s apart about the same open car. A timed-out or
+        // dismissed alarm no longer lets the next event sound at once (plan K7); a reminder does.
+        assertFalse(LockAlertPolicy.alarmShouldSound(first, first + LockAlertPolicy.ALARM_EPISODE_MS))
+        assertFalse(LockAlertPolicy.alarmShouldSound(first, first + 22_000L, alarmStillShowing = false))
+        assertTrue(LockAlertPolicy.alarmShouldSound(first, first + LockAlertPolicy.ALARM_REMINDER_MS))
+    }
+
+    @Test fun onlyAResolvedSituationStopsAnAlarm() {
+        assertTrue(LockAlertPolicy.resolvesAlarm(Event.AUTO_LOCK_CLOUD_CONFIRMED))
+        assertTrue(LockAlertPolicy.resolvesAlarm(Event.PROXIMITY_RECOVERED_BEFORE_LOCK))
+        assertFalse(LockAlertPolicy.resolvesAlarm(Event.LOCATION_REFERENCE_UNAVAILABLE))
+        assertFalse(LockAlertPolicy.resolvesAlarm(Event.DEPARTURE_CANDIDATE_UNVERIFIED))
+        assertFalse(LockAlertPolicy.resolvesAlarm(Event.LINK_LOST_STATIONARY))
     }
 
     @Test fun missingGnssReferenceIsNotNewsWhileTheBleRouteCanLock() {

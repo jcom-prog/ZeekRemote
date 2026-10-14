@@ -83,8 +83,8 @@ internal object UnverifiedLockNotifier {
                 lockButton = lockButton)
             if (sounded) alarmRaisedAtElapsedMs = now
             com.openzeekr.app.util.Logx.w("prox", "lock alarm ${if (sounded) "raised" else "unavailable"} (${event.name})")
-        } else {
-            // A newer, non-audible state (back at the car, own cloud Lock, ...) ends a sounding alarm.
+        } else if (LockAlertPolicy.resolvesAlarm(event)) {
+            // Only a resolved situation (car locked, user back at the car) ends a sounding alarm.
             silenceAlarm(context)
         }
         return posted

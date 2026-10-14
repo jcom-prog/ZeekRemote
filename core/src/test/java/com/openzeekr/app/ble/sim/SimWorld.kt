@@ -728,7 +728,7 @@ internal class SimWorld(
                 if (!LockAlertPolicy.alarmShouldSound(alarmRaisedAt, clock.elapsedMs(), showing)) return true
                 alarmRaisedAt = clock.elapsedMs(); alarmShowingUntil = now() + LockAlertPolicy.ALARM_EPISODE_MS
                 record("ALARM", event.name + if (car.locked) " (car LOCKED)" else " (car unlocked)")
-            } else silenceAlarm()
+            } else if (LockAlertPolicy.resolvesAlarm(event)) silenceAlarm()
             return notificationPermission
         }
         val alarmSounding get() = alarmShowingUntil > now()

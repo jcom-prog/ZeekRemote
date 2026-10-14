@@ -98,15 +98,32 @@ internal object LockAlertPolicy {
             stepsSinceCar >= DEPARTURE_ALARM_MIN_STEPS
 
     /**
-     * One alarm per episode: a second audible event while an alarm raised less than
-     * [ALARM_EPISODE_MS] ago is still unresolved (no Lock, no return, no new unlock) only updates
-     * the visible record (field test 0.1.54 part B: two alarms 22 s apart). Once the user has opened or
-     * dismissed the alarm, a new audible event sounds again.
+     * One alarm per unresolved situation: a second audible event while the car is still open and
+     * the user still away only updates the visible record (field test 0.1.54 part B: two alarms 22 s
+     * apart), and a reminder sounds at most every [ALARM_REMINDER_MS] - also after the alarm timed out
+     * or was dismissed (field 06/10 14:33-15:30, incident #20: ~12 alarms 33 s apart; plan K7).
+     * A resolved situation (car locked, user back at the car, new unlock) resets it: [lastAlarmAtElapsedMs] 0.
      */
+    @Suppress("UNUSED_PARAMETER")
     fun alarmShouldSound(lastAlarmAtElapsedMs: Long, nowElapsedMs: Long, alarmStillShowing: Boolean = true): Boolean =
-        !alarmStillShowing || lastAlarmAtElapsedMs == 0L || nowElapsedMs - lastAlarmAtElapsedMs >= ALARM_EPISODE_MS
+        lastAlarmAtElapsedMs == 0L || nowElapsedMs - lastAlarmAtElapsedMs >= ALARM_REMINDER_MS
 
+    /**
+     * Plan K7: only news that the situation is resolved may stop a sounding alarm - the car reports
+     * locked, or the user is back at the car. Other quiet updates (a missing GNSS reference, a
+     * shadowed departure candidate, a stationary link loss) used to silence an alarm about an open car.
+     */
+    fun resolvesAlarm(event: Event): Boolean = when (event) {
+        Event.AUTO_LOCK_CLOUD_CONFIRMED,
+        Event.AUTO_LOCK_STATE_UNVERIFIED,
+        Event.PROXIMITY_RECOVERED_BEFORE_LOCK -> true
+        else -> false
+    }
+
+    /** How long one alarm sounds (notification timeout). */
     const val ALARM_EPISODE_MS = 120_000L
+    /** The shortest interval between two alarms about the same unresolved open car. */
+    const val ALARM_REMINDER_MS = 300_000L
 
     /** False when the event says nothing the user needs to know right now. */
     fun shouldPost(event: Event, bleDepartureRouteActive: Boolean): Boolean =
