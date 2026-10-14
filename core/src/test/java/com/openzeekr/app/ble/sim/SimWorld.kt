@@ -14,6 +14,7 @@ import com.openzeekr.app.ble.ObservedVehicleStatus
 import com.openzeekr.app.ble.ProximityAlerts
 import com.openzeekr.app.ble.ProximityClock
 import com.openzeekr.app.ble.ProximityController
+import com.openzeekr.app.ble.ProximityDecisionPolicy
 import com.openzeekr.app.ble.ProximityLink
 import com.openzeekr.app.ble.ProximityMotion
 import com.openzeekr.app.ble.SafetyWakeLocks
@@ -845,7 +846,7 @@ internal class SimWorld(
             else car.cloudView().let { com.openzeekr.app.ble.CloudLockSnapshot(it.first, it.second) } },
         clock = clock, alerts = alerts, departureLocationSource = locator, wakeLocks = wakeLocks,
         stateStore = stateStore, calibrationStore = calibrationStore, selfCalibration = SELF_CAL,
-        arrivalAnchor = ARRIVAL_ANCHOR, awayReturnSteps = H2_STEPS,
+        arrivalAnchor = ARRIVAL_ANCHOR, awayReturnSteps = H2_STEPS, approachConfirm = APPROACH_CONFIRM,
     )
     var controller = newController(); private set
 
@@ -1045,5 +1046,9 @@ internal class SimWorld(
         val ARRIVAL_ANCHOR = System.getenv("SIM_ARRIVAL_ANCHOR") != "0"
         /** SIM_H2=0: the away-return after a far link loss ignores the step counter (0.3.0). */
         val H2_STEPS = System.getenv("SIM_H2") != "0"
+        /** SIM_APPROACH=unbroken|two_in_a_row|two_of_three: walking-approach confirmation (0.3.2). */
+        val APPROACH_CONFIRM: ProximityDecisionPolicy.ApproachConfirm = System.getenv("SIM_APPROACH")
+            ?.let { ProximityDecisionPolicy.ApproachConfirm.valueOf(it.uppercase()) }
+            ?: ProximityDecisionPolicy.ApproachConfirm.UNBROKEN
     }
 }

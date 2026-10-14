@@ -65,6 +65,8 @@ class ProximityController internal constructor(
     private val arrivalAnchor: Boolean = true,
     /** Plan H2: steps since a far link loss let a door-level signal count as the return. */
     private val awayReturnSteps: Boolean = true,
+    /** How a walking approach confirms the approach band (0.3.2; the simulator compares the modes). */
+    approachConfirm: ProximityDecisionPolicy.ApproachConfirm = ProximityDecisionPolicy.ApproachConfirm.UNBROKEN,
 ) {
     constructor(
         appContext: android.content.Context,
@@ -217,7 +219,7 @@ class ProximityController internal constructor(
     private var postUnlockFastUntilElapsedMs = 0L
     // Time-based evidence gate. This owns arrival/departure confirmation so neither the fast RSSI
     // path nor the periodic idle check can actuate from one noisy threshold crossing.
-    private val decisionPolicy = ProximityDecisionPolicy()
+    private val decisionPolicy = ProximityDecisionPolicy(approachConfirm)
     private val relockApproachEvidence = RelockApproachEvidence()
     // Confirmed-unlock retry loop: true while actively trying to unlock; the job is the loop itself.
     @Volatile private var needToUnlock = false

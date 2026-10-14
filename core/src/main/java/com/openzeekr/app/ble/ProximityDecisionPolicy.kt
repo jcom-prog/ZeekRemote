@@ -7,14 +7,29 @@ package com.openzeekr.app.ble
  * the evidence needed to distinguish an actual journey from body-shadow/multipath bounce. It has no
  * Android or BLE dependencies, so captured field traces can be replayed in local unit tests.
  */
-internal class ProximityDecisionPolicy {
+internal class ProximityDecisionPolicy(
+    private val approachConfirm: ApproachConfirm = ApproachConfirm.UNBROKEN,
+) {
     enum class ArmedDecision { NONE, ARRIVAL_CONFIRMED, LOCK }
+
+    /**
+     * How the walking approach route confirms the approach band (0.3.2). [UNBROKEN] holds it for
+     * [APPROACH_CONFIRM_MS] without a single reading below it: at the 200 ms walking cadence three
+     * readings in a row. Field 14/10 18:31 (S24+ in the front trouser pocket, the usual carry): over
+     * the last ~10 m the smoothed signal sat at the band edge and reached it twice for two readings,
+     * each time followed by a 1-2 dB dip, so the car opened only at the door. [TWO_IN_A_ROW] and
+     * [TWO_OF_THREE] (two of the latest three readings, without a FAR reading in between) accept that.
+     */
+    enum class ApproachConfirm { UNBROKEN, TWO_IN_A_ROW, TWO_OF_THREE }
 
     private var sawStrongNearWhileLocked = false
     private var departureObserved = false
     private var farSinceMs = UNSET_MS
     private var farQualified = false
     private var nearCandidateSinceMs = UNSET_MS
+    // The latest readings of the walking approach (bit 0 = newest, 1 = inside the approach band).
+    private var approachHits = 0
+    private var approachLastHitAtMs = UNSET_MS
     private var unlockQualifiedAtMs = UNSET_MS
 
     // An offloaded presence hit is the earliest reliable proof that a sleeping phone entered the
@@ -105,7 +120,7 @@ internal class ProximityDecisionPolicy {
         farSinceMs = UNSET_MS
         farQualified = false
         farFloorRssi = 0; stillApproachSinceMs = UNSET_MS
-        nearCandidateSinceMs = UNSET_MS
+        nearCandidateSinceMs = UNSET_MS; clearApproachReadings()
         unlockQualifiedAtMs = UNSET_MS
         clearPresenceApproach()
         unlockConfirmedAtMs = UNSET_MS
@@ -198,7 +213,7 @@ internal class ProximityDecisionPolicy {
             // The floor of the latest FAR episode (review 0.1.63: not the lowest reading ever).
             farFloorRssi = if (farSinceMs == nowMs) rssi else minOf(farFloorRssi, rssi)
             stillApproachSinceMs = UNSET_MS
-            nearCandidateSinceMs = UNSET_MS
+            nearCandidateSinceMs = UNSET_MS; clearApproachReadings()
             unlockQualifiedAtMs = UNSET_MS
             return false
         }
@@ -218,14 +233,20 @@ internal class ProximityDecisionPolicy {
             rssi >= unlockThreshold + STILL_APPROACH_MARGIN_DB && rssi >= farFloorRssi + STILL_APPROACH_RISE_DB
         if (stillApproach) {
             if (stillApproachSinceMs == UNSET_MS) stillApproachSinceMs = nowMs
-            if (nowMs - stillApproachSinceMs >= STILL_APPROACH_CONFIRM_MS && unlockQualifiedAtMs == UNSET_MS)
+            if (nowMs - stillApproachSinceMs >= STILL_APPROACH_CONFIRM_MS && unlockQualifiedAtMs == UNSET_MS) {
                 unlockQualifiedAtMs = nowMs; unlockRoute = "still"
+            }
         } else stillApproachSinceMs = UNSET_MS
-        if (qualifiedApproach || freshDoorSession) {
+        val unbrokenApproach = qualifiedApproach && approachConfirm == ApproachConfirm.UNBROKEN
+        if (approachConfirm != ApproachConfirm.UNBROKEN &&
+            approachReadingsConfirm(nowMs, qualifiedApproach) && unlockQualifiedAtMs == UNSET_MS) {
+            unlockQualifiedAtMs = nowMs; unlockRoute = "approach"
+        }
+        if (unbrokenApproach || freshDoorSession) {
             if (nearCandidateSinceMs == UNSET_MS) nearCandidateSinceMs = nowMs
-            val holdMs = if (qualifiedApproach) APPROACH_CONFIRM_MS else DOOR_CONFIRM_MS
+            val holdMs = if (unbrokenApproach) APPROACH_CONFIRM_MS else DOOR_CONFIRM_MS
             if (nowMs - nearCandidateSinceMs >= holdMs && unlockQualifiedAtMs == UNSET_MS) {
-                unlockQualifiedAtMs = nowMs; unlockRoute = if (qualifiedApproach) "approach" else "door"
+                unlockQualifiedAtMs = nowMs; unlockRoute = if (unbrokenApproach) "approach" else "door"
             }
         } else {
             nearCandidateSinceMs = UNSET_MS
@@ -278,7 +299,7 @@ internal class ProximityDecisionPolicy {
         farSinceMs = UNSET_MS
         farQualified = false
         farFloorRssi = 0; stillApproachSinceMs = UNSET_MS
-        nearCandidateSinceMs = UNSET_MS
+        nearCandidateSinceMs = UNSET_MS; clearApproachReadings()
         unlockQualifiedAtMs = UNSET_MS
         clearPresenceApproach()
         resetWalkAwayCandidate()
@@ -340,7 +361,7 @@ internal class ProximityDecisionPolicy {
             farSinceMs = UNSET_MS
             farQualified = false
             farFloorRssi = 0; stillApproachSinceMs = UNSET_MS
-            nearCandidateSinceMs = UNSET_MS
+            nearCandidateSinceMs = UNSET_MS; clearApproachReadings()
             unlockQualifiedAtMs = UNSET_MS
         }
     }
@@ -699,7 +720,7 @@ internal class ProximityDecisionPolicy {
         departureObserved = false
         farSinceMs = UNSET_MS
         farQualified = true
-        nearCandidateSinceMs = UNSET_MS
+        nearCandidateSinceMs = UNSET_MS; clearApproachReadings()
         unlockQualifiedAtMs = UNSET_MS
     }
 
@@ -894,6 +915,26 @@ internal class ProximityDecisionPolicy {
     private fun isEligiblePresenceEntry(rssi: Int, moving: Boolean): Boolean =
         moving && rssi < STRONG_NEAR_RSSI
 
+    /**
+     * One walking-approach reading ([hit] = inside the approach band). True on a hit that makes two
+     * hits among the latest two ([ApproachConfirm.TWO_IN_A_ROW]) or three readings; a FAR reading
+     * clears the history (see [clearApproachReadings]), so a dip may only stay near the band.
+     */
+    private fun approachReadingsConfirm(nowMs: Long, hit: Boolean): Boolean {
+        approachHits = ((approachHits shl 1) or (if (hit) 1 else 0)) and 0b111
+        if (!hit) return false
+        val previousHitAtMs = approachLastHitAtMs
+        approachLastHitAtMs = nowMs
+        val window = if (approachConfirm == ApproachConfirm.TWO_IN_A_ROW) 0b011 else 0b111
+        return Integer.bitCount(approachHits and window) >= 2 &&
+            previousHitAtMs != UNSET_MS && nowMs - previousHitAtMs >= APPROACH_MIN_HIT_GAP_MS
+    }
+
+    private fun clearApproachReadings() {
+        approachHits = 0
+        approachLastHitAtMs = UNSET_MS
+    }
+
     private companion object {
         const val UNSET_MS = -1L
         const val STRONG_NEAR_RSSI = -72
@@ -902,6 +943,8 @@ internal class ProximityDecisionPolicy {
         const val UNLOCK_MARGIN_DB = 1
         const val FAR_BASELINE_MS = 2_500L
         const val APPROACH_CONFIRM_MS = 400L
+        /** Two approach hits are separate readings, never one sample seen twice (cadence is 200 ms). */
+        const val APPROACH_MIN_HIT_GAP_MS = 150L
         const val DOOR_CONFIRM_MS = 1_200L
         const val UNLOCK_EVIDENCE_TTL_MS = 5_000L
         // The offloaded presence hit + real motion + a rising signal already prove an approach.

@@ -2,6 +2,7 @@ package com.openzeekr.app.ble
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -1041,5 +1042,53 @@ class ManualLockDeepFarReturnTest {
         // Walked, but the signal is a 10 m signal (-88): stays locked.
         val tenMetres = lockedAndGoneFar(stepsAtLoss = 100L)
         assertFalse((0 until 8).any { i -> tenMetres.shouldUnlock(60_000L + i * 1_000L, -88, false, -86, 140L) })
+    }
+
+    // ---- 0.3.2: a walking approach that sits at the edge of the approach band ----
+
+    /** Walks in from a FAR baseline (-93 for 3 s) and returns the index of the reading that qualified. */
+    private fun approachQualifiesAt(
+        mode: ProximityDecisionPolicy.ApproachConfirm, readings: List<Int>, moving: Boolean = true,
+    ): Int? {
+        val policy = ProximityDecisionPolicy(mode)
+        var now = 0L
+        repeat(15) { assertFalse(policy.shouldUnlock(now, -93, true, -86)); now += 200 }
+        readings.forEachIndexed { i, rssi ->
+            if (policy.shouldUnlock(now, rssi, moving, -86)) return i
+            now += 200
+        }
+        return null
+    }
+
+    @Test fun anApproachAtTheBandEdgeOpensOnTwoReadingsInsteadOfThreeInARow() {
+        // Synthetic: the smoothed signal touches the band (-85) between 1 dB dips, then rises late.
+        val walk = listOf(-86, -85, -86, -85, -86, -87, -84, -84, -80)
+        assertEquals(8, approachQualifiesAt(ProximityDecisionPolicy.ApproachConfirm.UNBROKEN, walk))
+        assertEquals(7, approachQualifiesAt(ProximityDecisionPolicy.ApproachConfirm.TWO_IN_A_ROW, walk))
+        assertEquals(3, approachQualifiesAt(ProximityDecisionPolicy.ApproachConfirm.TWO_OF_THREE, walk))
+    }
+
+    @Test fun singleBandEdgeReadingsAndFarReadingsInBetweenNeverOpen() {
+        // One hit at a time, and a FAR reading (-88) between two hits: no mode opens.
+        val noise = listOf(-86, -85, -87, -86, -87, -85, -88, -85, -86, -86, -87, -85, -87, -88, -85, -88)
+        ProximityDecisionPolicy.ApproachConfirm.values().forEach { mode ->
+            assertNull(mode.name, approachQualifiesAt(mode, noise))
+        }
+    }
+
+    @Test fun theTwoReadingApproachStillNeedsTheWalk() {
+        // Standing at 10 m with the signal at the band: the walking route never applies.
+        val standing = List(20) { -84 }
+        assertNull(approachQualifiesAt(ProximityDecisionPolicy.ApproachConfirm.TWO_OF_THREE, standing, moving = false))
+        assertNull(approachQualifiesAt(ProximityDecisionPolicy.ApproachConfirm.TWO_IN_A_ROW, standing, moving = false))
+    }
+
+    @Test fun twoHitsMustBeSeparateReadings() {
+        val policy = ProximityDecisionPolicy(ProximityDecisionPolicy.ApproachConfirm.TWO_OF_THREE)
+        var now = 0L
+        repeat(15) { policy.shouldUnlock(now, -93, true, -86); now += 200 }
+        assertFalse(policy.shouldUnlock(now, -85, true, -86))
+        assertFalse(policy.shouldUnlock(now + 50, -85, true, -86))   // the same moment seen twice
+        assertTrue(policy.shouldUnlock(now + 250, -85, true, -86))
     }
 }

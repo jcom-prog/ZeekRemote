@@ -18,6 +18,7 @@ import java.io.File
  *   SIM_LEARN_VISITS  0.3.1: ordinary visits in the same world before each run (self-calibration
  *                     learning period; the phone's carry varies per visit). Default 0.
  *   SIM_SELF_CAL=0 / SIM_ARRIVAL_ANCHOR=0 / SIM_H2=0  switch a phase-2 rule off (comparison runs)
+ *   SIM_APPROACH  unbroken (0.3.1) | two_in_a_row | two_of_three - walking-approach confirmation (0.3.2)
  *   SIM_KEEP_LEARN_LOG=1  keep the learning period in events and traces (debugging)
  */
 class WholeAppSimulationTest {
