@@ -223,6 +223,39 @@ internal class SimWorld(
     private val rGnss = stream(5)
     private val rCar = stream(6)
     private val rCloud = stream(7)
+    /**
+     * Time-keyed noise (0.3.2, from the simulation audit; SIM_KEYED=0 restores the sequential streams):
+     * the slow fade has its own stream, and the read noise, link delays and GNSS noise come from
+     * generators keyed by (seed, 100 ms tick, draw index in that tick, purpose). Two app versions then
+     * meet the same noise at the same moment however often they read, so a before/after comparison on
+     * the same seeds differs only where decisions differ (sequential draws re-rolled ~35 far unlocks
+     * each way on unrelated families).
+     */
+    private val rFade = if (KEYED) stream(9) else null
+    private var keyedTick = -1L
+    private val keyedIdx = IntArray(8)
+    private fun keyed(salt: Int): SimRandom {
+        val tick = now() / TICK_MS
+        if (tick != keyedTick) { keyedTick = tick; keyedIdx.fill(0) }
+        val i = keyedIdx[salt]++
+        return SimRandom(mix(mix(seed + 0x632BE59BD9B4E019L * salt) + tick * 0x9E3779B97F4A7C15uL.toLong() + i))
+    }
+    private fun mix(z0: Long): Long {
+        var z = z0 + 0x9E3779B97F4A7C15uL.toLong()
+        z = (z xor (z ushr 30)) * 0xBF58476D1CE4E5B9uL.toLong()
+        z = (z xor (z ushr 27)) * 0x94D049BB133111EBuL.toLong()
+        return z xor (z ushr 31)
+    }
+    private fun rRead() = if (KEYED) keyed(1) else rRadio
+    private fun rLinkNow() = if (KEYED) keyed(2) else rLink
+    /** SIM_KEYED: the GNSS multipath bias and jumps evolve once a second as a world process. */
+    private val rGnssWorld = stream(10)
+    private var worldGnssBias = 0.0; private var worldGnssJumpLeft = 0; private var worldGnssJump = 0.0
+    private fun stepWorldGnss() {
+        worldGnssBias = 0.9 * worldGnssBias + 1.5 * rGnssWorld.gaussian()
+        if (worldGnssJumpLeft > 0) worldGnssJumpLeft-- else if (rGnssWorld.chance(0.01)) {
+            worldGnssJumpLeft = 3 + (rGnssWorld.nextDouble() * 5).toInt(); worldGnssJump = rGnssWorld.uniform(10.0, 25.0) }
+    }
     private val rPlateau = stream(8)
     /** The flat final approach of the current walk (see [SimPhysics.approachPlateauP]): cap and start. */
     private var plateauCapDb: Double? = null
@@ -275,7 +308,7 @@ internal class SimWorld(
     var trueRssi = -120.0; private set
     private fun updateRadio() {
         // Field (03/10 18:20:31-42, standing at ~16 m): raw readings -87..-91, one -94 dip.
-        fade = 0.95 * fade + sqrt(1 - 0.9025) * physics.fadeSigmaDb * rRadio.gaussian()
+        fade = 0.95 * fade + sqrt(1 - 0.9025) * physics.fadeSigmaDb * (rFade ?: rRadio).gaussian()
         val d = max(distanceM, 0.7)
         // Fitted on the field pocket readings: ~-79 at 2.5 m, -83 at 5 m, -85 at 7 m (approach ARM),
         // -87 at 10 m, -88..-90 facing at 15 m, -92..-98 walking away at 15-20 m (03/10 logs).
@@ -283,8 +316,9 @@ internal class SimWorld(
         plateauCapDb?.let { cap -> if (distanceM in 1.0..plateauFromM) trueRssi = minOf(trueRssi, cap + fade) }
     }
     fun readRssi(): Int {
-        var v = trueRssi + 1.0 * rRadio.gaussian()
-        if (rRadio.chance(0.02)) v += rRadio.uniform(-8.0, 3.0)
+        val rr = rRead()
+        var v = trueRssi + 1.0 * rr.gaussian()
+        if (rr.chance(0.02)) v += rr.uniform(-8.0, 3.0)
         return v.toInt().coerceAtMost(-30)
     }
 
@@ -476,7 +510,7 @@ internal class SimWorld(
             // 988-1018 ms apart, so a span of two readings is just as often 995 ms as 1005 ms.
             linkOps++
             try {
-                delay(rLink.uniform(25.0, 55.0).toLong())
+                delay(rLinkNow().uniform(25.0, 55.0).toLong())
                 return if (_state.value == DkBleManager.State.SESSION_READY || _state.value == DkBleManager.State.CONNECTED) readRssi() else null
             } finally { linkOps-- }
         }
@@ -508,21 +542,22 @@ internal class SimWorld(
                 _state.value == DkBleManager.State.CONNECTED) return
             if (service.keySleeping && now() >= service.sleepGraceUntilMs) return
             _state.value = DkBleManager.State.SCANNING
+            val rc = rLinkNow()
             connectJob = scope.launch {
                 // A foreground scan finds the car only in range; give up after 10 s.
                 var waited = 0L
                 while (trueRssi < CONNECT_MIN_RSSI && waited < 10_000L) { delay(200); waited += 200 }
                 if (trueRssi < CONNECT_MIN_RSSI) { _state.value = DkBleManager.State.IDLE; return@launch }
                 _state.value = DkBleManager.State.CONNECTING
-                delay(rLink.uniform(250.0, 700.0).toLong())
+                delay(rc.uniform(250.0, 700.0).toLong())
                 _state.value = DkBleManager.State.CONNECTED
                 lastNonIdleMs = now()
-                delay(rLink.uniform(2_600.0, 3_600.0).toLong())   // GATT + DK handshake (field ~3.4 s)
+                delay(rc.uniform(2_600.0, 3_600.0).toLong())   // GATT + DK handshake (field ~3.4 s)
                 if (trueRssi < DROP_RSSI) { _state.value = DkBleManager.State.IDLE; return@launch }
                 generation++
                 _state.value = DkBleManager.State.SESSION_READY
                 record("LINK_READY")
-                delay(rLink.uniform(300.0, 5_000.0).toLong())
+                delay(rc.uniform(300.0, 5_000.0).toLong())
                 // The car pushes its status early in a new session. SIM_FIRST_STATUS_LOST=1 replays
                 // 0.2.6, which dropped that push (it arrives before "established").
                 if (System.getenv("SIM_FIRST_STATUS_LOST") != "1") pushStatus()
@@ -776,6 +811,12 @@ internal class SimWorld(
             val base = gnssAccuracyM ?: return null
             if (indoor) return null
             if (now() - requestStartMs < physics.gnssTtffMs) return null
+            if (KEYED) {
+                val rg = keyed(3)
+                val acc = physics.gnssAccMedianM?.let { (it * kotlin.math.exp(physics.gnssAccSpread * rg.gaussian())).toFloat() } ?: base
+                val noise = acc / 2.0 * rg.gaussian() + worldGnssBias + if (worldGnssJumpLeft > 0) worldGnssJump else 0.0
+                return DepartureFix(52.0 + (distanceM + noise) / 111_000.0, 5.0, acc, clock.elapsedMs())
+            }
             val acc = physics.gnssAccMedianM?.let { (it * kotlin.math.exp(physics.gnssAccSpread * rGnss.gaussian())).toFloat() } ?: base
             bias = 0.9 * bias + 1.5 * rGnss.gaussian()
             if (jumpLeft > 0) jumpLeft-- else if (rGnss.chance(0.01)) { jumpLeft = 3 + (rGnss.nextDouble() * 5).toInt(); jump = rGnss.uniform(10.0, 25.0) }
@@ -924,6 +965,7 @@ internal class SimWorld(
             appScheduler.runCurrent()
             appAdvancing = false
             onTick?.invoke(now())
+            if (KEYED && now() % 1_000L < dt) stepWorldGnss()
             if (now() % 1_000L < dt) samples += Sample(now(), distanceM, car.locked, walking,
                 appBelievesUnlocked = appAlive && controller.believesCarUnlocked, cpuAwake = awake, gnssOn = gnssActive > 0,
                 linkUp = link.state.value == DkBleManager.State.SESSION_READY, appAlive = appAlive)
@@ -1047,6 +1089,8 @@ internal class SimWorld(
 
     companion object {
         const val TICK_MS = 100L
+        /** Time-keyed noise for paired comparisons (default on; SIM_KEYED=0 = the sequential streams). */
+        val KEYED = System.getenv("SIM_KEYED") != "0"
         const val CONNECT_MIN_RSSI = -96.0
         val PRESENCE_EDGE = System.getenv("SIM_PRESENCE_EDGE") == "1"
         val WEAK_GATE = System.getenv("SIM_WEAK_GATE") != "0"

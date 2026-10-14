@@ -145,4 +145,19 @@ class PhoneCalibrationTest {
         frozenWalk(cal, Walker(cal), List(10) { 100L } + List(120) { 102L })
         assertTrue(notes.toString(), notes.any { it.startsWith("stop: signal rose") && it.endsWith("only 2 steps were counted") })
     }
+
+    @Test fun aFadeAtTheEndOfAWalkAwayIsNoArrival() {
+        // Stress F37: walking away to 30 m, a fade lifts the level 9 dB at the stop; the rise looks
+        // like the last metres to the car, but -84 is no level at the car.
+        val cal = PhoneCalibration(Memory())
+        val notes = mutableListOf<String>()
+        cal.onDecision = { notes += it }
+        val w = Walker(cal)
+        w.distanceM = 1.0
+        w.walkTo(30.0)
+        var t = w.t
+        repeat(40) { t += 500; cal.observe(t, w.rssi(30.0) + 9, w.steps) }
+        assertTrue(cal.profile.approach.isEmpty())
+        assertTrue(notes.toString(), notes.any { it.startsWith("stop: level") })
+    }
 }

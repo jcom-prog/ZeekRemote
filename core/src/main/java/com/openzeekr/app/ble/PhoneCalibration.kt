@@ -153,6 +153,10 @@ internal class PhoneCalibration(
         val approach = meanAround(approachAtMs) ?: run { note("stop: no reading $APPROACH_STEPS steps before"); return }
         val atCar = meanBetween(stopAtMs + 500L, stopAtMs + 3_500L) ?: run { note("stop: no reading after the stop"); return }
         if (atCar - approach < MIN_RISE_DB) { note("stop: rise %.0f dB, not at the car".format(atCar - approach)); return }
+        // 0.3.2: a fade at the end of a walk AWAY also rises 7 dB; at the car itself a pocket reads
+        // -60..-78 (simulator stress F37: an "arrival" at 30 m at -82 re-anchored the departure proof
+        // there, and the open car stayed silent).
+        if (atCar < MIN_CAR_DB) { note("stop: level %.0f dB, not at the car".format(atCar)); return }
         arrivalSteps = steps; arrivalAtMs = stopAtMs
         departBaseSteps = null; departDone = false
         record(approach = approach, atCar = atCar)
@@ -265,6 +269,8 @@ internal class PhoneCalibration(
         const val DEPART_STEPS = 25L
         const val MIN_BOUT_STEPS = 16L
         const val MIN_RISE_DB = 7.0
+        /** The level at the car must be at least this (raw); a weak phone in a back pocket may not learn. */
+        const val MIN_CAR_DB = -80.0
         const val MIN_FALL_DB = 8.0
         const val MIN_LOST_STEPS = 10L
         const val MIN_SAMPLES = 5
