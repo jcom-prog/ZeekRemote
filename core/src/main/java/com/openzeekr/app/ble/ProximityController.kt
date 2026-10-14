@@ -187,7 +187,7 @@ class ProximityController internal constructor(
         route.arrivalObserved(normalized(arrival.carLevelDb.roundToInt()))
         val strongAfterArrival = lastStrongNearAtMs != 0L &&
             clock.wallMs() - lastStrongNearAtMs < clock.elapsedMs() - arrival.atMs
-        if (!strongAfterArrival) stepsAtLastStrongNear = arrival.stepsAtCar
+        if (!strongAfterArrival) { stepsAtLastStrongNear = arrival.stepsAtCar; counterAtLastStrongNear = null }
         Logx.d("prox", "proven arrival at the car (steps + rise) -> departure anchor")
     }
 
@@ -271,11 +271,18 @@ class ProximityController internal constructor(
     private var bleDepartureReasonLoggedAtMs = 0L
     private var unlockObservedAtMs = 0L
     private var stepsAtUnlock: Long? = null
+    private var counterAtUnlock: Long? = null
     private var strongestRssiSinceUnlock = Int.MIN_VALUE
     private var lastStrongNearAtMs = 0L
-        set(value) { field = value; stepsAtLastStrongNear = motion.observedSteps }
+        set(value) { field = value; stepsAtLastStrongNear = motion.observedSteps; counterAtLastStrongNear = motion.counterSteps }
     // Step count at the latest strong at-the-car reading (null without a step source).
     private var stepsAtLastStrongNear: Long? = null
+    // The hub counter's own total at that reading: a baseline per source (0.3.2, simulation audit C).
+    private var counterAtLastStrongNear: Long? = null
+    // Walking and stopping from the step total, for the BLE departure proof (0.3.2).
+    private val departureSteps = DepartureStepWatch()
+    // A walk-away verification ended because the signal came back above the lock threshold.
+    private var walkAwayRecovered = false
     private var lastShadowDepartureAtMs = 0L
     private var shadowDepartureWarned = false
     // Latest moving walk-away candidate in this unlock (wall clock); with no strong reading after
@@ -336,6 +343,7 @@ class ProximityController internal constructor(
     private var lostRssi: Int? = null
     // Step count and time when [lostRssi] was read: steps since then = the phone moved on.
     private var lostRssiSteps: Long? = null
+    private var lostRssiCounter: Long? = null
     private var lostRssiAtMs = 0L
     private var pendingUnverifiedLockAlert: Job? = null
     private var unverifiedLockAlertRaised = false
@@ -364,7 +372,7 @@ class ProximityController internal constructor(
         inCarSinceMs = 0L; steadyRef = null; steadySinceMs = 0L; lastCadence = ""
         rssiNullStreak = 0; pingJob?.cancel(); pingJob = null
         pingInFlight = false; pingFailStreak = 0; lastPingMs = 0L
-        linkLostAtMs = 0L; lostRssi = null; lostRssiSteps = null; lostRssiAtMs = 0L
+        linkLostAtMs = 0L; lostRssi = null; lostRssiSteps = null; lostRssiCounter = null; lostRssiAtMs = 0L
         relockRecoveryPending = false; relockProbeJob?.cancel(); relockProbeJob = null
         departureAnchorJob?.cancel(); departureAnchorJob = null; departureAnchor = null
         linkDepartureJob?.cancel(); linkDepartureJob = null
@@ -681,6 +689,7 @@ class ProximityController internal constructor(
             }
         }
         stepsAtUnlock = motion.observedSteps
+        counterAtUnlock = motion.counterSteps
         strongestRssiSinceUnlock = Int.MIN_VALUE
         lastStrongNearAtMs = 0L
         lastShadowDepartureAtMs = 0L
@@ -714,7 +723,7 @@ class ProximityController internal constructor(
             // Near the car only if the last reading was taken here: steps since it mean the phone
             // has moved on (stress F22/F42: the last reading -83 was 10 m and 17 s back, the loss
             // at 22 m counted as "near the car" and the alarm stayed silent).
-            val stepsSinceReading = lostRssiSteps?.let { at -> motion.observedSteps?.let { it - at } }
+            val stepsSinceReading = if (lostRssiSteps != null) stepsSince(lostRssiSteps, lostRssiCounter) else null
             val readingAgeMs = if (lostRssiAtMs == 0L) Long.MAX_VALUE else clock.wallMs() - lostRssiAtMs
             val movedSinceLastReading = stepsSinceReading != null &&
                 (stepsSinceReading >= LOSS_NEAR_MAX_STEPS_SINCE_READING ||
@@ -832,8 +841,7 @@ class ProximityController internal constructor(
             // 100 s (simulator F22: the late alarm). A disconnect beside the car (Bluetooth off, a
             // weak back pocket) keeps the 100 s: an early alarm at the car would use up the alarm of
             // the departure that follows (the 5-min reminder rule).
-            val stepsSinceCarAtLoss = (stepsAtLastStrongNear ?: stepsAtUnlock)
-                ?.let { base -> motion.observedSteps?.let { it - base } } ?: 0L
+            val stepsSinceCarAtLoss = stepsAwayFromCar() ?: 0L
             val stationaryCheckMs = if (stepsSinceCarAtLoss >= LOSS_NEAR_MAX_STEPS_SINCE_READING)
                 STATIONARY_LINK_LOSS_EARLY_CHECK_MS else STATIONARY_LINK_LOSS_CHECK_MS
             val checkInMs = (linkLostAtMs + stationaryCheckMs - clock.wallMs()).coerceAtLeast(0L)
@@ -842,8 +850,9 @@ class ProximityController internal constructor(
             // Plan K8: the S24 with the screen off reports STILL during a whole walk away (field
             // 09/10 13:30); the hardware step counter still counts. Steps since the loss = walking.
             val stepsAtLoss = motion.observedSteps
+            val counterAtLoss = motion.counterSteps
             fun walkingNow(): Boolean = (motion.state.value == MotionMonitor.Motion.MOVING ||
-                (stepsAtLoss != null && (motion.observedSteps ?: stepsAtLoss) - stepsAtLoss >= NEAR_LOSS_WALK_STEPS)) &&
+                (stepsAtLoss != null && (stepsSince(stepsAtLoss, counterAtLoss) ?: 0L) >= NEAR_LOSS_WALK_STEPS)) &&
                 !com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value
             val walkedEarly = try {
                 withTimeoutOrNull(if (outOfRangeLoss) checkInMs else NEAR_LOSS_STEP_WATCH_MS) {
@@ -974,10 +983,26 @@ class ProximityController internal constructor(
      */
     private fun stepsShortOfDeparture(): String? {
         if ((stepsSinceUnlock() ?: 0L) <= 0L) return null
-        val sinceCar = (stepsAtLastStrongNear ?: stepsAtUnlock)?.let { base -> motion.observedSteps?.let { it - base } }
-            ?: return null
+        val sinceCar = stepsAwayFromCar() ?: return null
         return if (sinceCar < LOCK_MIN_STEPS_SINCE_CAR) "only $sinceCar steps since the car (${motion.stepSummary})" else null
     }
+
+    /**
+     * Steps since a baseline pair: the larger of the merged total's and the hub counter's own
+     * increment (0.3.2, simulation audit C). The merged total is the larger of two running totals;
+     * once the detector is ahead, counter steps taken while the CPU slept do not show in it (stress
+     * F22: 22 m walked, "3 steps since the unlock").
+     */
+    private fun stepsSince(mergedBase: Long?, counterBase: Long?): Long? {
+        val merged = mergedBase?.let { base -> motion.observedSteps?.let { it - base } }
+        val counter = counterBase?.let { base -> motion.counterSteps?.let { it - base } }
+        return listOfNotNull(merged, counter).maxOrNull()
+    }
+
+    /** Steps since the latest strong reading at the car, else since the unlock (null without steps). */
+    private fun stepsAwayFromCar(): Long? =
+        if (stepsAtLastStrongNear != null) stepsSince(stepsAtLastStrongNear, counterAtLastStrongNear)
+        else stepsSince(stepsAtUnlock, counterAtUnlock)
 
     private fun departureSuspected(): Boolean =
         LockAlertPolicy.departureSuspected(lastWalkAwayCandidateAtMs, lastStrongNearAtMs) ||
@@ -992,10 +1017,9 @@ class ProximityController internal constructor(
      */
     private fun walkedAwayBySteps(): Boolean {
         if (!armedUnlocked) return false
-        val base = stepsAtLastStrongNear ?: stepsAtUnlock ?: return false
-        val steps = motion.observedSteps ?: return false
+        val steps = stepsAwayFromCar() ?: return false
         val since = if (lastStrongNearAtMs != 0L) lastStrongNearAtMs else unlockObservedAtMs
-        return steps - base >= WALKED_AWAY_STEPS && clock.wallMs() - since >= WALKED_AWAY_QUIET_MS
+        return steps >= WALKED_AWAY_STEPS && clock.wallMs() - since >= WALKED_AWAY_QUIET_MS
     }
 
     /** Plan K9: start the departure alarm clock once a step-proven walk-away is under way. */
@@ -1201,7 +1225,7 @@ class ProximityController internal constructor(
             // (simulator 03/10, loading the boot). Where steps are counted, a real departure has
             // walked clearly further than that; hold the alarm and look again. The 60 s far watch
             // and the link-loss alarm stay as the backstop.
-            val stepsSinceCar = stepsAtLastStrongNear?.let { base -> motion.observedSteps?.let { it - base } }
+            val stepsSinceCar = if (stepsAtLastStrongNear != null) stepsSince(stepsAtLastStrongNear, counterAtLastStrongNear) else null
             if (departureAlarmHolds < DEPARTURE_ALARM_MAX_HOLDS &&
                 !LockAlertPolicy.departureWalkedFarEnough(stepsSinceCar, stepsSinceUnlock())) {
                 // Bounded: a step counter that stops delivering (screen off) must not hold it forever.
@@ -1437,8 +1461,17 @@ class ProximityController internal constructor(
     /** Feeds one fresh GATT reading to this epoch's BLE departure route; true when confirmed. */
     private fun observeBleDeparture(rawRssi: Int, smoothedRssi: Int): Boolean {
         val route = bleRoute ?: return false
-        val authorized = route.observe(clock.elapsedMs(), rawRssi, smoothedRssi,
-            motion.state.value == MotionMonitor.Motion.MOVING, stepsSinceUnlock())
+        val now = clock.elapsedMs()
+        departureSteps.observe(now, motion.observedSteps)
+        // 0.3.2 (simulation audit C): a rising step total is walking, whatever the motion state says
+        // (s24-off: no MOVING for a whole walk away, the car stayed open until the alarm). Close to
+        // the car a stop in the step stream ends the walk at once: Activity Recognition says MOVING
+        // for 3-10 s more, and the proof completed during a stop 5 m from the car (stress F04).
+        val stoppedNearCar = departureSteps.stopped(now) &&
+            (stepsAwayFromCar()?.let { it < STOP_RULE_MAX_STEPS_FROM_CAR } ?: true)
+        val moving = (motion.state.value == MotionMonitor.Motion.MOVING || departureSteps.walking(now)) &&
+            !stoppedNearCar
+        val authorized = route.observe(now, rawRssi, smoothedRssi, moving, stepsSinceUnlock())
         logBleRouteRevocation(route)
         if (route.evidenceReason != bleDepartureLoggedReason) {
             val nowWall = clock.wallMs()
@@ -1510,6 +1543,7 @@ class ProximityController internal constructor(
                 }
                 WalkAwayLockConfirmation.Decision.CANCEL -> {
                     Logx.d("prox", "walk-away: signal recovered ($rssi), retaining unlock")
+                    walkAwayRecovered = true
                     return false
                 }
                 WalkAwayLockConfirmation.Decision.WAIT -> Unit
@@ -1540,7 +1574,11 @@ class ProximityController internal constructor(
         fun sameSession(): Boolean = armedUnlocked && unlockObservedAtMs == observedUnlockAt &&
             _state.value.running && config().proximityEnabled && departureAnchor === anchor
         val confirmed = departureLocationSource.confirmsDeparture(anchor, steps = {
-            stepsAtUnlock?.let { baseline ->
+            // 0.3.2 (simulation audit C): counted from the car (the latest strong reading), not from
+            // the unlock - approach steps after an unlock at 9 m, or steps before a long stay, are no
+            // evidence of leaving (calibrated F05: a location jump "proved" a departure at 1 m).
+            if (stepsAtLastStrongNear != null) stepsSince(stepsAtLastStrongNear, counterAtLastStrongNear)?.coerceAtLeast(0L)
+            else stepsAtUnlock?.let { baseline ->
                 motion.observedSteps?.let { (it - baseline).coerceAtLeast(0L) }
             }
         }, enabled = ::sameSession, bleCorroborated = ::departureBleCorroborated) && sameSession()
@@ -1559,6 +1597,7 @@ class ProximityController internal constructor(
             return
         }
         lockConfirmationJob = scope.launch {
+            walkAwayRecovered = false
             if (confirmWalkAway() && armedUnlocked && _state.value.running &&
                 config().proximityEnabled) {
                 when (autoLockGate.onVerifiedDeparture()) {
@@ -1607,8 +1646,11 @@ class ProximityController internal constructor(
             } else {
                 decisionPolicy.onWalkAwayVerificationFailed()
                 // Stopping after the walk can cancel RSSI confirmation. It cannot erase two fresh
-                // positions outside the conservative clearance; check them independently.
-                scheduleLinkDepartureCheck()
+                // positions outside the conservative clearance; check them independently - unless the
+                // signal came back above the lock threshold: that is evidence of nearness, and the
+                // 75 s location search after it "proved" a departure at 4 m (0.3.2, simulator F25).
+                if (walkAwayRecovered) Logx.d("prox", "walk-away: signal recovered -> no location check")
+                else scheduleLinkDepartureCheck()
             }
             lockConfirmationJob = null
         }
@@ -1678,6 +1720,7 @@ class ProximityController internal constructor(
         val receding = trend < -TREND_DEADBAND
         lostRssi = smoothed    // diagnostic only; never sufficient to lock after link loss
         lostRssiSteps = motion.observedSteps
+        lostRssiCounter = motion.counterSteps
         lostRssiAtMs = clock.wallMs()
 
         val now = clock.wallMs()
@@ -1799,7 +1842,10 @@ class ProximityController internal constructor(
                 }
                 else -> {
                     // Sensor says still (or the backstop expired): drop the wakelock and sleep until it fires.
-                    _wakeLockNeeded.value = false; farAsleep = true
+                    // Not while the car is open: the armed loop owns the wakelock there (the 10-min still
+                    // rule). A pocket at the car reads -79..-83, "6-9 m" by the display formula; the CPU
+                    // slept through the walk away and no alarm came (0.3.2, simulator stress F22/F15).
+                    if (!armedUnlocked) { _wakeLockNeeded.value = false; farAsleep = true }
                     farApproachDeadline = 0L; farApproachRefDist = Double.MAX_VALUE
                 }
             }
@@ -2061,8 +2107,11 @@ class ProximityController internal constructor(
                 // link the key will not get through: go to the cloud while the proof is fresh.
                 val fr = lastFreshRssi
                 // The cloud path below re-verifies the departure before its request, whatever the route.
-                if (fr != null && fr <= FAR_LINK_CLOUD_RSSI &&
-                    (r == ControlResult.NO_RESPONSE || r == ControlResult.WRITE_FAILED)) {
+                // 0.3.2 (simulator F27): deep far (lock - 8 dB) or a link already gone counts as the edge;
+                // five link resets there took ~27 s and the car locked at 54-57 m.
+                val atEdge = (fr != null && (fr <= FAR_LINK_CLOUD_RSSI || fr <= config().sensitivityLockRssi - EDGE_CLOUD_MARGIN_DB)) ||
+                    ble.state.value != DkBleManager.State.SESSION_READY
+                if (atEdge && (r == ControlResult.NO_RESPONSE || r == ControlResult.WRITE_FAILED)) {
                     Logx.w("prox", "$reason: key Lock unanswered at the edge of the link (rssi=$fr) -> cloud now")
                     break
                 }
@@ -2193,8 +2242,18 @@ class ProximityController internal constructor(
         val wl = acquireSafetyWakelock()
         // The level when the first request went out: a later request needs the user still away.
         var levelAtFirstRequest: Double? = null
+        var firstRequestSentAtMs = 0L
+        var firstRequestAcceptedSentAtMs = 0L
         try {
             repeat(CLOUD_LOCK_MAX_REQUESTS) { requestIndex ->
+                // 0.3.2 (simulator stress F32/F02): the first request was accepted but the status
+                // still said "unlocked" - the cloud reports a lock seconds to tens of seconds late.
+                // Look for that report before a second request (or the alarm).
+                if (requestIndex > 0 && firstRequestAcceptedSentAtMs != 0L &&
+                    verifyFreshLockStatus(firstRequestAcceptedSentAtMs)) {
+                    Logx.d("prox", "$reason: late cloud status confirms the first request")
+                    return true
+                }
                 val accepted = DepartureCheckedLockAttempt.send(
                     enabled = { armedUnlocked && _state.value.running &&
                         config().proximityEnabled },
@@ -2223,12 +2282,15 @@ class ProximityController internal constructor(
                             return@departure false
                         }
                         if (requestIndex == 0) levelAtFirstRequest = level
-                        val bleProofFresh = bleProofAtMs != 0L && clock.wallMs() - bleProofAtMs <= BLE_PROOF_CLOUD_MS &&
-                            lastStrongNearAtMs < bleProofAtMs
+                        // Only the first request: a later one went out 20-30 s after the proof, while
+                        // the user may be walking back (stress F32/F02: executed at 6-12 m).
+                        val bleProofFresh = requestIndex == 0 && bleProofAtMs != 0L &&
+                            clock.wallMs() - bleProofAtMs <= BLE_PROOF_CLOUD_MS && lastStrongNearAtMs < bleProofAtMs
                         if (bleProofFresh) Logx.d("prox", "$reason: cloud Lock backed by a fresh BLE departure proof")
                         bleProofFresh || confirmPhysicalDeparture()
                     },
                     command = {
+                        if (requestIndex == 0) firstRequestSentAtMs = clock.wallMs()
                         try { cloudLock() }
                         catch (cancelled: CancellationException) { throw cancelled }
                         catch (_: Exception) { false }
@@ -2242,6 +2304,7 @@ class ProximityController internal constructor(
                 Logx.d("prox", "$reason: cloud lock request #${requestIndex + 1} " +
                     if (accepted) "accepted; checking vehicle status" else "rejected")
                 if (!accepted) return@repeat
+                if (requestIndex == 0) firstRequestAcceptedSentAtMs = firstRequestSentAtMs
                 var consecutiveLocked = 0
                 repeat(CLOUD_LOCK_STATUS_POLLS) {
                     delay(CLOUD_LOCK_STATUS_POLL_MS)
@@ -2518,6 +2581,10 @@ class ProximityController internal constructor(
         private const val BLE_PROOF_CLOUD_MS = 30_000L
         /** A key Lock left unanswered at or below this fresh reading goes to the cloud at once. */
         private const val FAR_LINK_CLOUD_RSSI = -98
+        /** An unanswered key Lock this far below the lock threshold goes to the cloud at once (0.3.2). */
+        private const val EDGE_CLOUD_MARGIN_DB = 8
+        /** The stop-in-the-step-stream rule for the departure proof applies this close to the car. */
+        private const val STOP_RULE_MAX_STEPS_FROM_CAR = 15L
         /** A self-lock this soon after our approach unlock may be undone by walking up to the door. */
         private const val SELF_LOCK_REOPEN_AFTER_UNLOCK_MS = 180_000L
         /** A link gap after which the car's lock state counts as unknown. */

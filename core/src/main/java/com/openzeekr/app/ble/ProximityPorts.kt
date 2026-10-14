@@ -42,6 +42,9 @@ interface ProximityMotion {
     val observedSteps: Long?
     /** Diagnostic: the step sources behind [observedSteps] (no positions, no identifiers). */
     val stepSummary: String get() = ""
+    /** The hub step counter's own running total (null without one); [observedSteps] is the larger of
+     *  it and the detector, which hides counter steps once the detector is ahead. */
+    val counterSteps: Long? get() = null
     var onMovingEdge: (() -> Unit)?
     fun start()
     fun stop()

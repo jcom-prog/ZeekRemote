@@ -32,6 +32,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlin.math.cos
@@ -329,7 +331,9 @@ internal class SimWorld(
     val logLines = ArrayList<String>()
     data class Sample(val atMs: Long, val distanceM: Double, val carLocked: Boolean, val moving: Boolean,
                       val appBelievesUnlocked: Boolean = false, val cpuAwake: Boolean = false, val gnssOn: Boolean = false,
-                      val linkUp: Boolean = false, val appAlive: Boolean = true)
+                      val linkUp: Boolean = false, val appAlive: Boolean = true,
+                      /** Diagnostics only: the true RSSI, the motion state and the steps the app sees. */
+                      val trueRssi: Double = 0.0, val motionState: String = "", val steps: Long? = null)
     val samples = ArrayList<Sample>()
 
     // ---------------- car ----------------
@@ -383,6 +387,7 @@ internal class SimWorld(
             if (!motionProfile.hasStepDetector) null
             else if (STEP_COUNTER) maxOf(steps, hubSeen) else steps
         override val stepSummary: String get() = "detector=$steps counter=${if (STEP_COUNTER) hubSeen.toString() else "none"}"
+        override val counterSteps: Long? get() = if (motionProfile.hasStepDetector && STEP_COUNTER) hubSeen else null
         override var onMovingEdge: (() -> Unit)? = null
         private var running = false
         override fun start() { running = true; if (_state.value == MotionMonitor.Motion.UNKNOWN) setStill() }
@@ -504,7 +509,11 @@ internal class SimWorld(
             statusFlow.tryEmit(ObservedVehicleStatus(generation, if (car.locked) 3 else 1))
             lastInboundMs = clock.wallMs(); onInboundActivity?.invoke()
         }
-        override suspend fun pollRemoteRssi(): Int? {
+        /** Reads are serialised like DkBleManager's rssiPollLock (0.3.2, simulation audit C: two reads
+         *  finishing at the same virtual millisecond revoked fresh departure proofs as time_not_advancing). */
+        private val rssiPollLock = Mutex()
+        override suspend fun pollRemoteRssi(): Int? = rssiPollLock.withLock { pollRemoteRssiNow() }
+        private suspend fun pollRemoteRssiNow(): Int? {
             if (_state.value != DkBleManager.State.SESSION_READY && _state.value != DkBleManager.State.CONNECTED) return null
             // A real GATT RSSI read takes 25-55 ms: field 03/10 19:57 (0.1.63) the 1 s cadence ran
             // 988-1018 ms apart, so a span of two readings is just as often 995 ms as 1005 ms.
@@ -968,7 +977,8 @@ internal class SimWorld(
             if (KEYED && now() % 1_000L < dt) stepWorldGnss()
             if (now() % 1_000L < dt) samples += Sample(now(), distanceM, car.locked, walking,
                 appBelievesUnlocked = appAlive && controller.believesCarUnlocked, cpuAwake = awake, gnssOn = gnssActive > 0,
-                linkUp = link.state.value == DkBleManager.State.SESSION_READY, appAlive = appAlive)
+                linkUp = link.state.value == DkBleManager.State.SESSION_READY, appAlive = appAlive,
+                trueRssi = trueRssi, motionState = motion.state.value.name, steps = motion.observedSteps)
             left -= dt
         }
     }

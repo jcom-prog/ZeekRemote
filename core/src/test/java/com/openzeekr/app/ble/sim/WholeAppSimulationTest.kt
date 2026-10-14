@@ -266,10 +266,11 @@ internal object SimReport {
             appendLine("--- events"); r.world.events.forEach { appendLine("%8.1f d=%5.1f %s %s".format(it.atMs / 1000.0, it.distanceM, it.kind, it.detail)) }
             appendLine("--- log"); r.world.logLines.forEach { appendLine(it) }
             if (System.getenv("SIM_TRACE_SAMPLES") == "1") {
-                appendLine("--- samples (t d locked moving appOpen link cpu)")
-                r.world.samples.forEach { s -> appendLine("%8.1f d=%5.1f %s %s %s %s %s".format(s.atMs / 1000.0, s.distanceM,
+                appendLine("--- samples (t d locked walking appOpen link cpu gnss trueRssi motion steps)")
+                r.world.samples.forEach { s -> appendLine("%8.1f d=%5.1f %s %s %s %s %s %s %6.1f %s %s".format(s.atMs / 1000.0, s.distanceM,
                     if (s.carLocked) "L" else "U", if (s.moving) "mov" else "---", if (s.appBelievesUnlocked) "open" else "lckd",
-                    if (s.linkUp) "link" else "----", if (s.cpuAwake) "cpu" else "zzz")) }
+                    if (s.linkUp) "link" else "----", if (s.cpuAwake) "cpu" else "zzz", if (s.gnssOn) "gnss" else "----",
+                    s.trueRssi, s.motionState, s.steps ?: "-")) }
             }
         }
     }

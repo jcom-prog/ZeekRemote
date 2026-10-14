@@ -108,6 +108,7 @@ class MotionMonitor(context: Context) : ProximityMotion {
         return tally.total(detectorAvailable)
     }
     override val stepSummary: String get() = tally.summary()
+    override val counterSteps: Long? get() = if (stepCounterActive) tally.counterSteps() else null
 
     /** Invoked once on each STILL→MOVING edge (any source). Lets the caller cancel a long idle sleep. */
     @Volatile override var onMovingEdge: (() -> Unit)? = null
