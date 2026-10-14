@@ -107,4 +107,47 @@ class BleDepartureRouteTest {
         assertFalse(w.route.freshBleLockAuthorized(w.t, -94))
         assertEquals("time_not_advancing", w.route.revokedReason)
     }
+
+    // ---- perspective 4: direction, not only depth (0.3.0) ----
+
+    @Test fun aVetoedLockSpendsTheProofAndANewOneMustRecedeFromTheVetoLevel() {
+        val w = departed()
+        w.route.vetoed(-92)
+        assertEquals("vetoed", w.route.revokedReason)
+        assertFalse(w.route.hasProof)
+        w.authorizedAt = null
+        // Walking back with the same flat, deep signal (stress F08/F32): never re-issued.
+        w.run(30_000, -92)
+        assertNull(w.authorizedAt)
+        // Walking on: 6 dB below the level at the veto is a new departure.
+        w.run(20_000, -98)
+        assertNotNull(w.authorizedAt)
+    }
+
+    @Test fun theFirstReadingAfterTheLinkCameBackIsTheReference() {
+        val w = Walk(BleDepartureRoute.forLockThreshold(-82)!!)
+        w.run(2_000, -62, moving = false)
+        w.run(4_000, -80)
+        // Out of range for 20 s, then back in range walking with a flat deep signal (stress F32).
+        w.route.linkRestored()
+        w.t += 20_000
+        w.run(30_000, -93)
+        assertNull("coming back into range is no departure", w.authorizedAt)
+        w.run(20_000, -100)
+        assertNotNull("receding from the reconnect level is", w.authorizedAt)
+    }
+
+    @Test fun aRisingSignalIsNoDepartureAndAFallingOneIs() {
+        fun walk(dbPerSecond: Int): Walk {
+            val w = Walk(BleDepartureRoute.forLockThreshold(-82)!!)
+            w.run(2_000, -62, moving = false)
+            w.run(4_000, -100)
+            // 8 s later the level has moved by 8 x [dbPerSecond]; the walk stays deep-far (<= -85).
+            for (i in 1..7) w.run(1_000, -100 + i * dbPerSecond)
+            w.run(6_000, -100 + 7 * dbPerSecond)
+            return w
+        }
+        assertNull("walking back towards the car (+2 dB/s)", walk(2).authorizedAt)
+        assertNotNull("walking on (-1 dB/s)", walk(-1).authorizedAt)
+    }
 }

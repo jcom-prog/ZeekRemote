@@ -69,6 +69,23 @@ internal class BleDepartureRoute private constructor(lockThreshold: Int) {
         return ledger.authorizesBleLock(nowMs)
     }
 
+    /**
+     * A Lock was vetoed because the phone may be at or walking back to the car (0.3.0, stress
+     * F08/F32): the proof is spent, and a new one must show the signal receding from the level
+     * at the veto. Without this the unchanged evidence re-issued the proof seconds later, when
+     * the veto no longer held, and locked the car in front of the returning user.
+     */
+    fun vetoed(smoothedRssi: Int) {
+        newlyConfirmed = false
+        val hadProof = ledger.hasProof
+        ledger.spend("vetoed")
+        revokedReason = if (hadProof) "vetoed" else null
+        evidence.vetoed(smoothedRssi)
+    }
+
+    /** The link is back after a loss: recession counts from the first reading of the new session. */
+    fun linkRestored() = evidence.linkRestored()
+
     private fun revokeIfContradicted(nowMs: Long, rawRssi: Int, smoothedRssi: Int) {
         revokedReason = null
         val hadProof = ledger.hasProof

@@ -326,6 +326,9 @@ class ProximityController internal constructor(
                                     "BLE restored · vehicle lock still unverified")
                             }
                             deepFarAtLinkLossMs = 0L
+                            // Back in radio range: possibly walking back. A BLE departure proof now
+                            // has to recede from the first reading of this session (0.3.0, stress F32).
+                            bleRoute?.linkRestored()
                             Logx.d("prox", "link restored; proximity monitoring resumed")
                             val gapMs = clock.wallMs() - lostAt
                             if (!armedUnlocked && wasNearCar && gapMs >= LOCK_STATE_GAP_MS)
@@ -785,12 +788,37 @@ class ProximityController internal constructor(
     private fun lockVeto(fresh: Int?): String? {
         val now = clock.wallMs()
         if (fresh != null && fresh >= STRONG_NEAR_DIAGNOSTIC_RSSI) return "fresh reading $fresh dBm at the car"
+        // Back inside the lock range: the smoothed signal, including the fresh reading, is above the
+        // lock threshold (calibrated F28: a GNSS proof completed with the user walking back at 3 m).
+        if (fresh != null) {
+            val level = gattEma?.let { it + ALPHA_FAST * (fresh - it) } ?: fresh.toDouble()
+            if (level > config().sensitivityLockRssi) return "signal back in the lock range (${level.toInt()} dBm)"
+        }
+        stepsShortOfDeparture()?.let { return it }
         if (lastStrongNearAtMs != 0L && now - lastStrongNearAtMs <= LOCK_VETO_RECENT_STRONG_MS)
             return "strong reading ${(now - lastStrongNearAtMs) / 100 / 10.0} s ago"
         val earlier = recentReadings.filter { now - it.first in LOCK_VETO_RISE_FROM_MS..LOCK_VETO_RISE_TO_MS }.maxOfOrNull { it.second }
         if (fresh != null && earlier != null && fresh >= config().sensitivityUnlockRssi && fresh >= earlier + LOCK_VETO_RISE_DB)
             return "walking back ($earlier -> $fresh dBm)"
+        // Not vetoed: a rise far away (-96 -> -91 at 30 m). Standing still and turning to face the
+        // car gives the same +4..6 dB as walking back (calibrated F23: the cloud Lock was refused
+        // and the car stayed open), so far from the car a rise is no evidence of a return.
         return null
+    }
+
+    /**
+     * A body-shadowed phone beside the car reads like 40 m (stress F06: back pocket, -98..-104 at
+     * 4 m). Where steps are counted in this unlock, a departure beyond the lock range has walked
+     * at least [LOCK_MIN_STEPS_SINCE_CAR] steps since the car. The hub counter can lag the walk (it
+     * may hold back the first steps of a walk), so the threshold stays low (calibrated F28: 15
+     * counted at 19 m). Known limit: a slow walker has made that many steps at ~5 m (stress F04,
+     * with an 8 s deep fade there).
+     */
+    private fun stepsShortOfDeparture(): String? {
+        if ((stepsSinceUnlock() ?: 0L) <= 0L) return null
+        val sinceCar = (stepsAtLastStrongNear ?: stepsAtUnlock)?.let { base -> motion.observedSteps?.let { it - base } }
+            ?: return null
+        return if (sinceCar < LOCK_MIN_STEPS_SINCE_CAR) "only $sinceCar steps since the car (${motion.stepSummary})" else null
     }
 
     private fun departureSuspected(): Boolean =
@@ -1176,6 +1204,18 @@ class ProximityController internal constructor(
     private fun revokeBleDeparture(rawRssi: Int) {
         val route = bleRoute ?: return
         route.revokeOnly(clock.elapsedMs(), rawRssi, rawRssi)
+        logBleRouteRevocation(route)
+    }
+
+    /**
+     * A vetoed Lock spends the BLE departure proof (0.3.0), so the next sample cannot simply
+     * re-issue it when the veto no longer holds (stress F08: vetoed at 9 m, re-issued on the walk
+     * back, locked at 2.9 m). The new proof must also recede from the level here: with only "a
+     * complete new window" the walk back re-confirmed it (stress F08, locked at 5.1 m).
+     */
+    private fun spendBleProof(fresh: Int?) {
+        val route = bleRoute ?: return
+        route.vetoed(gattEma?.toInt() ?: fresh ?: VETO_UNKNOWN_LEVEL_RSSI)
         logBleRouteRevocation(route)
     }
 
@@ -1703,6 +1743,7 @@ class ProximityController internal constructor(
                     }
                 }
                 lockVeto(lastFreshRssi.takeIf { ble.state.value == DkBleManager.State.SESSION_READY })?.let { why ->
+                    spendBleProof(lastFreshRssi)
                     val posted = alerts.show(LockAlertPolicy.Event.PROXIMITY_RECOVERED_BEFORE_LOCK)
                     Logx.w("prox", "$reason: Lock vetoed - $why; user at the car; NO LOCK SENT; reminderPosted=$posted")
                     lockJob = null
@@ -1885,6 +1926,7 @@ class ProximityController internal constructor(
                         val fresh = if (ble.state.value == DkBleManager.State.SESSION_READY)
                             ble.pollRemoteRssi()?.also { noteFreshReading(it) } else null
                         lockVeto(fresh)?.let { why ->
+                            spendBleProof(fresh)
                             Logx.w("prox", "$reason: cloud Lock vetoed - $why")
                             return@departure false
                         }
@@ -2125,6 +2167,10 @@ class ProximityController internal constructor(
         /** Plan K8: steps after a near-car link loss that mean "walking away", watched for this long. */
         private const val NEAR_LOSS_WALK_STEPS = 20L
         private const val NEAR_LOSS_STEP_WATCH_MS = 5 * 60_000L
+        /** Level assumed for a veto without any reading: a new BLE proof is then out of reach. */
+        private const val VETO_UNKNOWN_LEVEL_RSSI = -100
+        /** Plan K1: fewer steps than this since the car veto an automatic Lock (~9 m of walking). */
+        private const val LOCK_MIN_STEPS_SINCE_CAR = 12L
         /** Plan K1: a strong reading this recent vetoes an automatic Lock. */
         private const val LOCK_VETO_RECENT_STRONG_MS = 6_000L
         /** Plan K1: a rise of this much over the readings 4-8 s earlier = walking back to the car. */

@@ -15,6 +15,13 @@ package com.openzeekr.app.ble
  *    while MOVING, at least [minSteps] new steps since the clear period started, and a signal
  *    that has RECEDED by at least [minRecessionDb] from the level at the last strong-near
  *    sample. Mere absence of strong samples is not departure.
+ *  - (0.3.0) the direction counts, not only the depth: no confirmation while the smoothed signal
+ *    is [maxRiseDb] or more above the lowest level of the confirming window, and after
+ *    a turn point - a vetoed Lock, or the link coming back after it was lost - the signal must
+ *    recede from the level at that point, not from the at-the-car level. Walking back to the car
+ *    with a flat deep signal (stress F08/F32) otherwise reads exactly like leaving. A stop alone
+ *    is no turn point: the motion sensor reports walking up to 18 s late, so a 4.5 s stop at a
+ *    garden gate would look like one (calibrated F22).
  *
  * The strong-near boundary is never weaker than [minStrongGapDb] above the lock threshold, so a
  * preset whose lock threshold sits close to -72 dBm still has a meaningful near band.
@@ -40,6 +47,7 @@ internal class BleDepartureEvidence(
     private val veryDeepStillToleranceMs: Long = VERY_DEEP_STILL_TOLERANCE_MS,
     private val stillDeepMarginDb: Int = STILL_DEEP_MARGIN_DB,
     private val gradualDescentMs: Long = GRADUAL_DESCENT_MS,
+    private val maxRiseDb: Int = MAX_RISE_DB,
 ) {
     /** Which proof confirmed the latest departure (categorical, for the log and the journal). */
     var confirmKind: String = "none"
@@ -62,6 +70,14 @@ internal class BleDepartureEvidence(
     private var descentMs = UNSET
     private var stillDeepSinceMs = UNSET
     private var confirmedAtMs = UNSET
+    // Lowest smoothed level in each confirming window (the rising check).
+    private var weakMin = 0
+    private var veryDeepMin = 0
+    private var stillDeepMin = 0
+    // Smoothed level where the user may have turned back; null until a turn point (or after a
+    // strong-near sample: back at the car, the at-the-car reference applies again).
+    private var turnRefSmoothed: Int? = null
+    private var turnAtNextSample = false
 
     /** Categorical reason for the latest decision; never contains a position. */
     var reason: String = "no_samples"
@@ -92,6 +108,10 @@ internal class BleDepartureEvidence(
         }
         lastSampleAtMs = nowMs
         val gap = previous != UNSET && nowMs - previous > maxGapMs
+        if (turnAtNextSample) {
+            turnAtNextSample = false
+            if (rawRssi < strongNearRssi && smoothedRssi <= lockThreshold) turnRefSmoothed = smoothedRssi
+        }
 
         // Very deep far alone, without steps or an observed arrival (field 05/10, 0.2.2/0.2.3):
         // with the screen off the S24+ step detector reported 2 steps for a whole walk away
@@ -113,8 +133,10 @@ internal class BleDepartureEvidence(
             gap || veryDeepSinceMs == UNSET -> nowMs   // unobserved time is not evidence
             else -> veryDeepSinceMs
         }
+        veryDeepMin = if (veryDeepSinceMs == nowMs) smoothedRssi else minOf(veryDeepMin, smoothedRssi)
         // Confirmed only while walking again, never during a stop.
-        if (moving && veryDeepSinceMs != UNSET && nowMs - veryDeepSinceMs >= veryDeepMs) {
+        if (moving && veryDeepSinceMs != UNSET && nowMs - veryDeepSinceMs >= veryDeepMs &&
+            !rising(smoothedRssi, veryDeepMin) && recededFromTurn(smoothedRssi)) {
             if (confirmedAtMs == UNSET) confirmedAtMs = nowMs
             confirmKind = "very_deep"
             return decide("confirmed")
@@ -140,7 +162,9 @@ internal class BleDepartureEvidence(
             stillDeepSinceMs == UNSET -> nowMs
             else -> stillDeepSinceMs
         }
-        if (stillDeepSinceMs != UNSET && nowMs - stillDeepSinceMs >= veryDeepMs) {
+        stillDeepMin = if (stillDeepSinceMs == nowMs) smoothedRssi else minOf(stillDeepMin, smoothedRssi)
+        if (stillDeepSinceMs != UNSET && nowMs - stillDeepSinceMs >= veryDeepMs &&
+            !rising(smoothedRssi, stillDeepMin)) {
             if (confirmedAtMs == UNSET) confirmedAtMs = nowMs
             confirmKind = "very_deep_gradual"
             return decide("confirmed")
@@ -153,6 +177,7 @@ internal class BleDepartureEvidence(
             clearStartSteps = stepsSinceUnlock
             clearStartSmoothed = smoothedRssi
             strongRefSmoothed = smoothedRssi
+            turnRefSmoothed = null
             weakSinceMs = UNSET
             return decide("strong_near")
         }
@@ -192,7 +217,8 @@ internal class BleDepartureEvidence(
             weakSinceMs = UNSET
             return decide("not_deep_far")
         }
-        if (weakSinceMs == UNSET) weakSinceMs = nowMs
+        if (weakSinceMs == UNSET) { weakSinceMs = nowMs; weakMin = smoothedRssi }
+        else weakMin = minOf(weakMin, smoothedRssi)
 
         return when {
             nowMs - clearSinceMs < minClearMs -> decide("clear_too_short")
@@ -202,6 +228,8 @@ internal class BleDepartureEvidence(
             // from the last at-the-car level (strong reference) by a clear margin.
             smoothedRssi > (strongRefSmoothed ?: clearStartSmoothed) - minRecessionDb ->
                 decide("not_receding")
+            rising(smoothedRssi, weakMin) -> decide("rising")
+            !recededFromTurn(smoothedRssi) -> decide("not_receding_from_turn")
             else -> {
                 if (confirmedAtMs == UNSET) confirmedAtMs = nowMs
                 confirmKind = "walk"
@@ -221,6 +249,27 @@ internal class BleDepartureEvidence(
         restartObservation()
         reason = "restarted"
     }
+
+    /**
+     * A Lock this evidence authorized was vetoed (the phone may be at or walking back to the car):
+     * everything restarts and a new confirmation must recede from the level at the veto.
+     */
+    fun vetoed(smoothedRssi: Int) {
+        restart()
+        turnRefSmoothed = smoothedRssi
+        reason = "vetoed"
+    }
+
+    /**
+     * The link is back after it was lost (the phone came back into radio range, or a reconnect at
+     * the edge): the first reading of the new session is a turn point.
+     */
+    fun linkRestored() { turnAtNextSample = true }
+
+    private fun rising(smoothedRssi: Int, windowMin: Int) = smoothedRssi >= windowMin + maxRiseDb
+
+    private fun recededFromTurn(smoothedRssi: Int) =
+        turnRefSmoothed?.let { smoothedRssi <= it - minRecessionDb } ?: true
 
     private fun restartObservation() {
         clearSinceMs = UNSET
@@ -255,5 +304,7 @@ internal class BleDepartureEvidence(
         const val STILL_DEEP_MARGIN_DB = 18
         const val GRADUAL_DESCENT_MS = 10_000L
         const val MAX_DESCENT_GAP_MS = 8_000L
+        /** 0.3.0: a smoothed rise above the window's lowest level that means "coming back". */
+        const val MAX_RISE_DB = 5
     }
 }

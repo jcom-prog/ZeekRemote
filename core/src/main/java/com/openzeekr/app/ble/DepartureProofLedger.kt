@@ -63,6 +63,9 @@ internal class DepartureProofLedger(
 
     fun authorizesBleLock(nowMs: Long): Boolean = held(nowMs)
 
+    /** The Lock this proof authorized was vetoed: the proof is spent (0.3.0). */
+    fun spend(reason: String) = revoke(reason)
+
     fun authorizesCloudLock(nowMs: Long): Boolean =
         held(nowMs) && linkLostAfterProofAtMs != UNSET
 
