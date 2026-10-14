@@ -22,9 +22,12 @@ object KeySleepPolicy {
      * Whether the key may sleep now. [stillFor] answers "still for at least this long".
      * Leaving the car restarts the 2 min: the phone taken from the car and carried away while
      * Activity Recognition still says STILL (S24 screen off) must not lose its key at once - the
-     * departure is watched over that very link.
+     * departure is watched over that very link. So does a counted step ([sinceStepMs], 0.3.2).
      */
-    fun maySleep(stillFor: (Long) -> Boolean, atCar: Boolean, sinceAtCarMs: Long?): Boolean =
+    fun maySleep(stillFor: (Long) -> Boolean, atCar: Boolean, sinceAtCarMs: Long?, sinceStepMs: Long? = null): Boolean =
         if (atCar) stillFor(AT_CAR_MAX_AWAKE_MS)
-        else stillFor(SLEEP_AFTER_STILL_MS) && (sinceAtCarMs == null || sinceAtCarMs >= SLEEP_AFTER_STILL_MS)
+        else stillFor(SLEEP_AFTER_STILL_MS) && (sinceAtCarMs == null || sinceAtCarMs >= SLEEP_AFTER_STILL_MS) &&
+            // 0.3.2: the hardware step counter counted a step within the stillness window - the S24
+            // with the screen off reports STILL during whole walks; a walking phone keeps its key.
+            (sinceStepMs == null || sinceStepMs >= SLEEP_AFTER_STILL_MS)
 }

@@ -20,6 +20,7 @@ import java.io.File
  *   SIM_SELF_CAL=0 / SIM_ARRIVAL_ANCHOR=0 / SIM_H2=0  switch a phase-2 rule off (comparison runs)
  *   SIM_APPROACH  unbroken (0.3.1) | two_in_a_row | two_of_three - walking-approach confirmation (0.3.2)
  *   SIM_KEEP_LEARN_LOG=1  keep the learning period in events and traces (debugging)
+ *   SIM_TRACE_CODES=A,B   traces only for these finding codes; SIM_TRACE_SAMPLES=1 adds the 1 s samples
  */
 class WholeAppSimulationTest {
     @Test fun scenarioMatrix() {
@@ -237,12 +238,14 @@ internal object SimReport {
     class TraceWriter(private val outDir: File, private val everySeed: Boolean) {
         private val traced = HashSet<String>()
         private val all = System.getenv("SIM_TRACE_ALL") == "1"
+        /** SIM_TRACE_CODES=A,B: only these finding codes produce traces (default all). */
+        private val codes = System.getenv("SIM_TRACE_CODES")?.split(",")?.toSet()
         fun accept(r: SimResult) {
             if (all) {
                 val name = (r.suite + "_" + r.scenario.family + "_" + r.carry + "_" + r.profile.name + "_" + r.seed).replace(Regex("[^A-Za-z0-9_+-]"), "_")
                 File(outDir, "run_$name.txt").writeText(body(r, "findings=${r.findings.joinToString { it.code }}"))
             }
-            r.findings.forEach { f ->
+            r.findings.filter { codes == null || it.code in codes }.forEach { f ->
                 val perSeed = if (everySeed) "_${r.seed}" else ""
                 val key = "${r.suite}|${r.scenario.family}|${f.code}|${r.carry}|${r.profile.name}$perSeed"
                 if (traced.add(key)) {
@@ -260,6 +263,12 @@ internal object SimReport {
             appendLine(head)
             appendLine("--- events"); r.world.events.forEach { appendLine("%8.1f d=%5.1f %s %s".format(it.atMs / 1000.0, it.distanceM, it.kind, it.detail)) }
             appendLine("--- log"); r.world.logLines.forEach { appendLine(it) }
+            if (System.getenv("SIM_TRACE_SAMPLES") == "1") {
+                appendLine("--- samples (t d locked moving appOpen link cpu)")
+                r.world.samples.forEach { s -> appendLine("%8.1f d=%5.1f %s %s %s %s %s".format(s.atMs / 1000.0, s.distanceM,
+                    if (s.carLocked) "L" else "U", if (s.moving) "mov" else "---", if (s.appBelievesUnlocked) "open" else "lckd",
+                    if (s.linkUp) "link" else "----", if (s.cpuAwake) "cpu" else "zzz")) }
+            }
         }
     }
 }

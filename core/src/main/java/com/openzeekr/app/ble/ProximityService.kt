@@ -85,6 +85,9 @@ class ProximityService : Service() {
     @Volatile private var keySleeping = false
     /** Last time the phone was at or in the car with a live key session ([KeySleepPolicy]). */
     private var lastAtCarElapsedMs = 0L
+    /** Key sleep (0.3.2): the last step count seen and when it last changed (elapsed realtime). */
+    private var lastStepsSeen: Long? = null
+    private var lastStepChangeElapsedMs = 0L
     private var sleepDisconnectGraceUntilMs = 0L
 
     private val wakeReceiver = object : BroadcastReceiver() {
@@ -539,7 +542,14 @@ class ProximityService : Service() {
             val nowElapsed = android.os.SystemClock.elapsedRealtime()
             if (atCar) lastAtCarElapsedMs = nowElapsed
             val sinceAtCar = lastAtCarElapsedMs.takeIf { it != 0L }?.let { nowElapsed - it }
-            if (!keySleeping && eligible && KeySleepPolicy.maySleep(deps.motion::isStillFor, atCar, sinceAtCar)) {
+            // 0.3.2: when the step count last moved (the hub counter counts with the screen off).
+            val stepsNow = deps.motion.observedSteps
+            if (stepsNow != null && stepsNow != lastStepsSeen) {
+                if (lastStepsSeen != null) lastStepChangeElapsedMs = nowElapsed
+                lastStepsSeen = stepsNow
+            }
+            val sinceStep = lastStepChangeElapsedMs.takeIf { it != 0L }?.let { nowElapsed - it }
+            if (!keySleeping && eligible && KeySleepPolicy.maySleep(deps.motion::isStillFor, atCar, sinceAtCar, sinceStep)) {
                 keySleeping = true
                 // Allow the existing controller a bounded window to finish a walk-away lock if the
                 // car had just been auto-unlocked. No new presence event can start an unlock now.

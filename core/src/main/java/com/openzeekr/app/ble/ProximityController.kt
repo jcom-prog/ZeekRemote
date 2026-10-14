@@ -54,7 +54,7 @@ class ProximityController internal constructor(
     /** Vehicle-reported lock state with its own update time, for a new arrival after a lost link. */
     private val cloudLockSnapshot: suspend () -> CloudLockSnapshot? = { null },
     private val clock: ProximityClock = SystemProximityClock,
-    private val alerts: ProximityAlerts,
+    alerts: ProximityAlerts,
     private val departureLocationSource: DepartureLocator,
     private val wakeLocks: SafetyWakeLocks,
     private val stateStore: ProximityStateStore = ProximityStateStore.None,
@@ -99,6 +99,22 @@ class ProximityController internal constructor(
         val diagnostics: String = "",
         val error: String? = null,
     )
+
+    /**
+     * Every audible alarm about this unlock starts a bounded cloud watch (0.3.2): a car that was
+     * locked while the key link could not see it - its own relock two minutes after a pass-by
+     * unlock, a fob, the handle - ends the alarm (simulator F33/F11/F40: the alarm sounded its full
+     * two minutes, or sounded at all, for a car that was already locked).
+     */
+    private val alerts: ProximityAlerts = alerts.let { port ->
+        object : ProximityAlerts {
+            override fun show(event: LockAlertPolicy.Event, bleDepartureRouteActive: Boolean): Boolean =
+                port.show(event, bleDepartureRouteActive).also { if (LockAlertPolicy.audible(event)) startAlarmCloudWatch() }
+            override fun clear() = port.clear()
+            override fun silenceAlarm() = port.silenceAlarm()
+            override fun carLocked() = port.carLocked()
+        }
+    }
 
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state
@@ -783,11 +799,16 @@ class ProximityController internal constructor(
             // A Lock or link-departure check in progress owns the outcome and raises its own alert -
             // for a bounded time: a stuck check must never keep the car open in silence.
             val ownerDeadline = clock.elapsedMs() + LINK_LOSS_ALERT_MAX_WAIT_MS
-            while ((lockJob?.isActive == true || linkDepartureJob?.isActive == true) &&
-                clock.elapsedMs() < ownerDeadline) delay(1_000L)
+            // A link-departure check (GNSS) raises nothing when it fails: it may hold the alert for
+            // one location window, not for all three (0.3.2; simulator F22: ~90 s indoors without a
+            // fix, then the alarm came 94-110 s after the user passed 15 m).
+            val checkDeadline = clock.elapsedMs() + LINK_DEPARTURE_ALERT_HOLD_MS
+            while ((lockJob?.isActive == true && clock.elapsedMs() < ownerDeadline) ||
+                (linkDepartureJob?.isActive == true && clock.elapsedMs() < minOf(ownerDeadline, checkDeadline))) delay(1_000L)
             if (linkLostAtMs == 0L || !armedUnlocked || !_state.value.running) return@launch
-            val posted = alerts.show(
-                LockAlertPolicy.linkLossEvent(movedDuringLoss, departureSuspected()))
+            val lossEvent = LockAlertPolicy.linkLossEvent(movedDuringLoss, departureSuspected())
+            if (LockAlertPolicy.audible(lossEvent) && cloudConfirmsLockedSinceUnlock("link-loss alarm")) return@launch
+            val posted = alerts.show(lossEvent)
             unverifiedLockAlertRaised = true
             _state.value = _state.value.copy(lastAction =
                 if (posted) "BLE lost · vehicle lock unverified; check notification"
@@ -803,7 +824,15 @@ class ProximityController internal constructor(
             // [STATIONARY_LINK_LOSS_CHECK_MS] after the loss is checked with the cloud: car still
             // open -> alarm. A phone beside the car reconnects within seconds.
             val outOfRangeLoss = !linkLostNearCar
-            val checkInMs = (linkLostAtMs + STATIONARY_LINK_LOSS_CHECK_MS - clock.wallMs()).coerceAtLeast(0L)
+            // 0.3.2: after a step-counted walk away from the car the cloud is asked after 60 s, not
+            // 100 s (simulator F22: the late alarm). A disconnect beside the car (Bluetooth off, a
+            // weak back pocket) keeps the 100 s: an early alarm at the car would use up the alarm of
+            // the departure that follows (the 5-min reminder rule).
+            val stepsSinceCarAtLoss = (stepsAtLastStrongNear ?: stepsAtUnlock)
+                ?.let { base -> motion.observedSteps?.let { it - base } } ?: 0L
+            val stationaryCheckMs = if (stepsSinceCarAtLoss >= LOSS_NEAR_MAX_STEPS_SINCE_READING)
+                STATIONARY_LINK_LOSS_EARLY_CHECK_MS else STATIONARY_LINK_LOSS_CHECK_MS
+            val checkInMs = (linkLostAtMs + stationaryCheckMs - clock.wallMs()).coerceAtLeast(0L)
             val checkWl = acquireSafetyWakelock(
                 (if (outOfRangeLoss) checkInMs else NEAR_LOSS_STEP_WATCH_MS) + 30_000L)
             // Plan K8: the S24 with the screen off reports STILL during a whole walk away (field
@@ -824,7 +853,15 @@ class ProximityController internal constructor(
                 releaseSafetyWakelock(checkWl)
             }
             if (linkLostAtMs == 0L || !armedUnlocked || !_state.value.running) return@launch
+            if (walkedEarly && !outOfRangeLoss) {
+                // A loss beside the car (Bluetooth off, key asleep, hand-over) followed by the first
+                // steps: the link usually returns within seconds (simulator F39: restored 0.8 s after
+                // the motion edge). A restored link hands over to the departure watch.
+                delay(NEAR_LOSS_WALK_CONFIRM_MS)
+                if (linkLostAtMs == 0L || !armedUnlocked || !_state.value.running) return@launch
+            }
             if (walkedEarly) {
+                if (cloudConfirmsLockedSinceUnlock("link-loss alarm (walking)")) return@launch
                 alerts.show(LockAlertPolicy.Event.LINK_LOST_WHILE_UNLOCKED)
                 Logx.w("prox", "BLE still down and walking; vehicle lock unverified -> alarm")
                 return@launch
@@ -833,13 +870,13 @@ class ProximityController internal constructor(
             val snapshot = runCatching { cloudLockSnapshot() }.getOrNull()
             if (linkLostAtMs == 0L || !armedUnlocked || !_state.value.running) return@launch
             when {
-                snapshot == null -> Logx.d("prox", "BLE down ${STATIONARY_LINK_LOSS_CHECK_MS / 1000} s after an " +
+                snapshot == null -> Logx.d("prox", "BLE down ${stationaryCheckMs / 1000} s after an " +
                     "out-of-range loss; cloud state unavailable -> still waiting for a walk")
-                snapshot.locked -> Logx.d("prox", "BLE down ${STATIONARY_LINK_LOSS_CHECK_MS / 1000} s after an " +
+                snapshot.locked -> Logx.d("prox", "BLE down ${stationaryCheckMs / 1000} s after an " +
                     "out-of-range loss; cloud says locked -> no alarm")
                 else -> {
                     alerts.show(LockAlertPolicy.Event.LINK_LOST_WHILE_UNLOCKED)
-                    Logx.w("prox", "BLE down ${STATIONARY_LINK_LOSS_CHECK_MS / 1000} s after an out-of-range " +
+                    Logx.w("prox", "BLE down ${stationaryCheckMs / 1000} s after an out-of-range " +
                         "loss and the cloud says unlocked -> alarm")
                     return@launch
                 }
@@ -849,6 +886,7 @@ class ProximityController internal constructor(
                     !com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value }
             } != null
             if (walkedLater && linkLostAtMs != 0L && armedUnlocked && _state.value.running) {
+                if (cloudConfirmsLockedSinceUnlock("link-loss alarm (walked later)")) return@launch
                 alerts.show(LockAlertPolicy.Event.LINK_LOST_WHILE_UNLOCKED)
                 Logx.w("prox", "BLE still down and walking; vehicle lock unverified -> alarm")
             }
@@ -1169,6 +1207,10 @@ class ProximityController internal constructor(
                 armDepartureAlarm()
                 return@launch
             }
+            // No key link to report the car's state: ask the cloud first (0.3.2; simulator F40: the
+            // car was locked by hand while Bluetooth was off and the alarm sounded anyway).
+            if (ble.state.value != DkBleManager.State.SESSION_READY &&
+                cloudConfirmsLockedSinceUnlock("departure alarm")) return@launch
             val posted = alerts.show(LockAlertPolicy.Event.DEPARTURE_UNVERIFIED)
             unverifiedLockAlertRaised = true
             _state.value = _state.value.copy(lastAction = "Walked away · car not locked; Lock manually")
@@ -1229,6 +1271,8 @@ class ProximityController internal constructor(
                 val cooling = lastTriggerMs != 0L &&
                     clock.wallMs() - lastTriggerMs < ACTION_COOLDOWN_MS
                 rssi?.let(::noteFreshReading)
+                if (rssi != null && smoothed != null)
+                    _state.value = _state.value.copy(rawRssi = rssi, smoothedRssi = smoothed)
                 // Diagnostics (field 05/10 20:43): these readings were invisible in the log.
                 if (rssi != null && clock.elapsedMs() - verifyLogAtMs >= 1_000L) {
                     verifyLogAtMs = clock.elapsedMs()
@@ -1269,6 +1313,9 @@ class ProximityController internal constructor(
             // Sparse idle reads must never build BLE departure evidence (a raw spike would also
             // become the "at the car" reference), but they must REVOKE a held proof on return.
             if (rssi != null) { revokeBleDeparture(rssi); noteFreshReading(rssi) }
+            // 0.3.2: keep the published level fresh while idle - the key-sleep rule reads it, and a
+            // stale body-shadowed value put the key to sleep beside the open car (simulator F05).
+            if (rssi != null) publishIdleReading(rssi)
             // Plan H4: standing still at the car after the unlock must still yield the GNSS anchor's
             // "at the car" evidence (it was only fed by the fast samples; the anchor then expired).
             if (rssi != null && ble.state.value == DkBleManager.State.SESSION_READY)
@@ -1310,6 +1357,73 @@ class ProximityController internal constructor(
         else if (++rssiNullStreak >= RSSI_NULL_RECONNECT) { rssiNullStreak = 0; forceReconnect() }
         delay((MONITOR_FAST_MS - (clock.elapsedMs() - pollStartedAtMs))
             .coerceAtLeast(0L))
+    }
+
+    /**
+     * 0.3.2: two cloud snapshots agree that the car locked after this unlock (its own relock, a fob,
+     * the handle, another phone) while the key link could not report it. The car is locked: latch it
+     * like a lock seen at the start of a new key session (plan H1) and raise no alarm.
+     */
+    private suspend fun cloudConfirmsLockedSinceUnlock(why: String): Boolean {
+        val epoch = unlockObservedAtMs
+        if (!armedUnlocked || epoch == 0L) return false
+        val first = runCatching { cloudLockSnapshot() }.getOrNull() ?: return false
+        if (!first.locked) return false
+        delay(CLOUD_SNAPSHOT_RECHECK_MS)
+        val second = runCatching { cloudLockSnapshot() }.getOrNull()
+        if (!armedUnlocked || unlockObservedAtMs != epoch || lockJob?.isActive == true) return false
+        if (!RelockRecoveryEvidence.confirmsRelock(first, second, epoch, clock.wallMs())) return false
+        if (ble.state.value == DkBleManager.State.SESSION_READY) {
+            // A live key session reports the car's own lock itself (CarSelfLockDetector, which also
+            // arms the walk-up reopen): only a status push the key missed is news here.
+            delay(SELF_LOCK_SETTLE_MS + 2_000L)
+            if (!armedUnlocked || unlockObservedAtMs != epoch || lockJob?.isActive == true || !_state.value.running) return false
+            Logx.w("prox", "$why: the cloud reports the car locked after our unlock; the key session missed it " +
+                "-> handled as the car's own lock")
+            handleCarSelfLock(ObservedVehicleStatus(-1L, CarSelfLockDetector.LOCKED))
+            return true
+        }
+        departureAlarmJob?.cancel(); departureAlarmJob = null
+        lockConfirmationJob?.cancel(); lockConfirmationJob = null
+        Logx.w("prox", "$why: the cloud reports the car locked after our unlock (not seen over the key link) " +
+            "-> treated as locked; no alarm")
+        onManualLockAcknowledged("car locked while unseen (cloud)", bleConfirmed = true, away = true)
+        return true
+    }
+
+    /** Two cloud snapshots newer than this unlock say locked (the lock loop's check; no side effects). */
+    private suspend fun cloudLockedSinceUnlockSnapshot(): Boolean {
+        val epoch = unlockObservedAtMs
+        if (epoch == 0L) return false
+        val first = runCatching { cloudLockSnapshot() }.getOrNull() ?: return false
+        if (!first.locked) return false
+        delay(CLOUD_SNAPSHOT_RECHECK_MS)
+        val second = runCatching { cloudLockSnapshot() }.getOrNull()
+        return RelockRecoveryEvidence.confirmsRelock(first, second, epoch, clock.wallMs())
+    }
+
+    private var alarmCloudWatchJob: Job? = null
+
+    /** While an alarm about this unlock is up, ask the cloud now and then whether the car locked (0.3.2). */
+    private fun startAlarmCloudWatch() {
+        if (!armedUnlocked || alarmCloudWatchJob?.isActive == true) return
+        val epoch = unlockObservedAtMs
+        alarmCloudWatchJob = scope.launch {
+            val deadline = clock.elapsedMs() + ALARM_CLOUD_WATCH_MS
+            while (clock.elapsedMs() < deadline) {
+                delay(ALARM_CLOUD_POLL_MS)
+                if (!armedUnlocked || unlockObservedAtMs != epoch || !_state.value.running) return@launch
+                if (lockJob?.isActive == true) continue
+                if (cloudConfirmsLockedSinceUnlock("alarm cloud watch")) return@launch
+            }
+        }
+    }
+
+    /** An armed idle read refreshes the published level only; it never feeds [gattEma]. */
+    private fun publishIdleReading(rssi: Int) {
+        val prev = _state.value.smoothedRssi
+        val smoothed = prev?.let { (it + ALPHA_FAST * (rssi - it)).roundToInt() } ?: rssi
+        _state.value = _state.value.copy(rawRssi = rssi, smoothedRssi = smoothed, distanceM = rssiToDistance(smoothed))
     }
 
     private fun stepsSinceUnlock(): Long? = stepsAtUnlock?.let { baseline ->
@@ -1982,7 +2096,10 @@ class ProximityController internal constructor(
                 // was already locked (fob, handle) before this cloud Lock (simulator F40: a false
                 // "not locked" alarm because the cloud had nothing newer than this Lock to report).
                 val freshCloudLocked = reportedLocked || cloudStatusLocked && verifyFreshLockStatus(
-                    if (unlockObservedAtMs > 0L) minOf(unlockObservedAtMs, lockStartedAtMs) else lockStartedAtMs)
+                    if (unlockObservedAtMs > 0L) minOf(unlockObservedAtMs, lockStartedAtMs) else lockStartedAtMs) ||
+                    // 0.3.2: no request went out (vetoed / unverified), but the cloud already reports
+                    // a lock after our unlock (fob, handle, the car's own relock while the link was down).
+                    (!cloudStatusLocked && cloudLockedSinceUnlockSnapshot())
                 // This outcome is the warning for this Lock; a waiting link-loss alert must not
                 // override it (it would sound after a cloud-confirmed Lock, or sound twice).
                 pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
@@ -2300,6 +2417,17 @@ class ProximityController internal constructor(
         private const val UNVERIFIED_LOCK_ESCALATION_MS = 30 * 60_000L
         /** Out-of-range link loss with the phone still: check the cloud this long after the loss (0.2.16). */
         private const val STATIONARY_LINK_LOSS_CHECK_MS = 100_000L
+        /** ... and this long after it when the step counter shows a walk away from the car (0.3.2). */
+        private const val STATIONARY_LINK_LOSS_EARLY_CHECK_MS = 60_000L
+        /** A failed link-departure (GNSS) check raises nothing: it may hold the link-loss alert this long (0.3.2). */
+        private const val LINK_DEPARTURE_ALERT_HOLD_MS = 30_000L
+        /** First steps after a loss beside the car: the link usually returns within this time (0.3.2). */
+        private const val NEAR_LOSS_WALK_CONFIRM_MS = 10_000L
+        /** While an alarm is up the cloud is asked this often, for at most this long, whether the car locked. */
+        private const val ALARM_CLOUD_POLL_MS = 8_000L
+        private const val ALARM_CLOUD_WATCH_MS = 10 * 60_000L
+        /** Two cloud snapshots this far apart must agree before "locked since our unlock" counts. */
+        private const val CLOUD_SNAPSHOT_RECHECK_MS = 400L
         private const val SHADOW_RECHECK_MS = 5_000L
         private const val DEPARTURE_ALARM_READS = 3
         private const val SHADOW_REARM_MS = 15_000L

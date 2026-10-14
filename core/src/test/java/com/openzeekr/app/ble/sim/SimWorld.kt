@@ -560,12 +560,15 @@ internal class SimWorld(
     inner class SimService {
         /** A new process: all of the service's in-memory state starts over. */
         fun reset() {
-            keySleeping = false; lastAtCarMs = -1L; sleepGraceUntilMs = 0L; disarm()
+            keySleeping = false; lastAtCarMs = -1L; sleepGraceUntilMs = 0L; disarm(); lastStepsSeen = null; lastStepChangeMs = -1L
             earlyUntilMs = 0L; savedEarlyRssi = null; fastPresenceUntilMs = 0L; recoveryUntilMs = 0L
             lastEngagedMs = -1L; initialProbe = false; lastWakeProbeMs = -1L; nextKeepAliveMs = 0L; nextSleepPollMs = 0L
         }
         var keySleeping = false; private set
         private var lastAtCarMs = -1L
+        /** ProximityService (0.3.2): the last step count seen and when it last changed. */
+        private var lastStepsSeen: Long? = null
+        private var lastStepChangeMs = -1L
         var sleepGraceUntilMs = 0L; private set
         var presenceArmed = false; private set
         private var presenceMode = 0 // 0 low power, 1 balanced (approach), 2 low latency
@@ -653,7 +656,10 @@ internal class SimWorld(
                     controller.state.value.smoothedRssi)
             if (atCar) lastAtCarMs = now()
             val sinceAtCar = if (lastAtCarMs >= 0) now() - lastAtCarMs else null
-            if (!keySleeping && com.openzeekr.app.ble.KeySleepPolicy.maySleep(motion::isStillFor, atCar, sinceAtCar)) {
+            val stepsNow = motion.observedSteps
+            if (stepsNow != null && stepsNow != lastStepsSeen) { if (lastStepsSeen != null) lastStepChangeMs = now(); lastStepsSeen = stepsNow }
+            val sinceStep = if (lastStepChangeMs >= 0) now() - lastStepChangeMs else null
+            if (!keySleeping && com.openzeekr.app.ble.KeySleepPolicy.maySleep(motion::isStillFor, atCar, sinceAtCar, sinceStep)) {
                 keySleeping = true; sleepGraceUntilMs = now() + KEY_SLEEP_LOCK_GRACE_MS
                 disarm(); link.disconnect()
                 log('D', "svc", "security sleep: stationary — BLE session/presence disabled")
