@@ -53,6 +53,7 @@ on:
       - zeekremote-0.2.16-edge-of-range
       - zeekremote-0.2.17-step-counter
       - zeekremote-0.3.0-safety
+      - zeekremote-0.3.1-calibration
 
 permissions:
   contents: read
@@ -162,8 +163,8 @@ jobs:
           grep -Fq '!bleLockAuthorized() && !confirmPhysicalDeparture()' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'const val MIN_WEAK_MS = 8_000L' core/src/main/java/com/openzeekr/app/ble/BleDepartureEvidence.kt
           grep -Fq 'const val WALK_AWAY_CONFIRM_MS = 1_200L' core/src/main/java/com/openzeekr/app/ble/ProximityDecisionPolicy.kt
-          grep -Fq 'unlockRoute = "away_return"' core/src/main/java/com/openzeekr/app/ble/ProximityDecisionPolicy.kt
-          grep -Fq 'decisionPolicy.onFarLinkLossWhileLocked()' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'unlockRoute = if (rssi >= STRONG_NEAR_RSSI) "away_return" else "away_return_steps"' core/src/main/java/com/openzeekr/app/ble/ProximityDecisionPolicy.kt
+          grep -Fq 'decisionPolicy.onFarLinkLossWhileLocked(motion.observedSteps)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'ownKey.decide(name) == OwnKeyNameFilter.Decision.SKIP_OTHER_CAR' core/src/main/java/com/openzeekr/app/ble/DkBleManager.kt
           grep -Fq 'const val FORGET_AFTER_TIMEOUTS = 3' core/src/main/java/com/openzeekr/app/ble/OwnKeyNameFilter.kt
           grep -Fq 'const val CONNECT_FLOOR_RSSI = -94' core/src/main/java/com/openzeekr/app/ble/WeakConnectGate.kt
@@ -183,6 +184,25 @@ jobs:
           grep -Fq 'const val MAX_HOLD_MS = 30_000L' core/src/main/java/com/openzeekr/app/ble/rpa/RpaController.kt
           grep -Fq 'object LockAlarmHealth' core/src/main/java/com/openzeekr/app/ble/LockAlarmHealth.kt
           grep -Fq 'edge (plan H10, 0.3.0)' core/src/main/java/com/openzeekr/app/util/DiagnosticExport.kt
+          grep -Fq 'object AppBranding' core/src/main/java/com/openzeekr/app/util/AppBranding.kt
+          grep -Fq '.setSmallIcon(AppBranding.statusIcon(context))' core/src/main/java/com/openzeekr/app/ble/UnverifiedLockNotifier.kt
+          grep -Fq 'internal class PhoneCalibration(' core/src/main/java/com/openzeekr/app/ble/PhoneCalibration.kt
+          grep -Fq 'const val REF_APPROACH_DB = -84.7' core/src/main/java/com/openzeekr/app/ble/PhoneCalibration.kt
+          grep -Fq 'private val ble: ProximityLink = calibratedLink(ble)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'fun arrivalObserved(smoothedLevel: Int)' core/src/main/java/com/openzeekr/app/ble/BleDepartureEvidence.kt
+          grep -Fq 'const val ANCHORED_MIN_STEPS = 20L' core/src/main/java/com/openzeekr/app/ble/BleDepartureEvidence.kt
+          grep -Fq 'const val AWAY_RETURN_MIN_STEPS = 15L' core/src/main/java/com/openzeekr/app/ble/ProximityDecisionPolicy.kt
+          grep -Fq 'object SteadyClock' core/src/main/java/com/openzeekr/app/util/SteadyClock.kt
+          grep -Fq 'override fun wallMs(): Long = com.openzeekr.app.util.SteadyClock.wallMs()' core/src/main/java/com/openzeekr/app/ble/ProximityPorts.kt
+          grep -Fq 'internal class FailedHandshakeDeferral' core/src/main/java/com/openzeekr/app/ble/FailedHandshakeDeferral.kt
+          grep -Fq 'internal class ScanStartLimiter' core/src/main/java/com/openzeekr/app/ble/ScanStartLimiter.kt
+          grep -Fq 'private fun acquireBridgeWakeLock(timeoutMs: Long)' core/src/main/java/com/openzeekr/app/ble/ProximityService.kt
+          grep -Fq 'private const val SETUP_STUCK_MS = 90_000L' core/src/main/java/com/openzeekr/app/ble/ProximityService.kt
+          grep -Fq 'val filters = if (screenOn) null else carScanFilters()' core/src/main/java/com/openzeekr/app/ble/DkBleManager.kt
+          grep -Fq 'private const val MAX_GNSS_WINDOWS_PER_EPOCH = 6' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'private const val ARMED_STILL_WAKE_MAX_MS = 10 * 60_000L' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'since the first request (walking back)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'CardTitle("Zelfkalibratie")' app/src/main/java/com/openzeekr/app/ui/SettingsScreen.kt
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -204,7 +224,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='124' versionName='0.3.0-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='125' versionName='0.3.1-work'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
           sha256sum "$APK"
