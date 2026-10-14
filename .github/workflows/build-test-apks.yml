@@ -54,6 +54,7 @@ on:
       - zeekremote-0.2.17-step-counter
       - zeekremote-0.3.0-safety
       - zeekremote-0.3.1-calibration
+      - zeekremote-0.3.2-approach
 
 permissions:
   contents: read
@@ -206,6 +207,29 @@ jobs:
           grep -Fq 'private const val ARMED_STILL_WAKE_MAX_MS = 10 * 60_000L' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'since the first request (walking back)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'CardTitle("Zelfkalibratie")' app/src/main/java/com/openzeekr/app/ui/SettingsScreen.kt
+          # 0.3.2: the rules from the simulation audit (step evidence, walk-back return, alarm and cloud checks).
+          grep -Fq 'internal class DepartureStepWatch' core/src/main/java/com/openzeekr/app/ble/DepartureStepWatch.kt
+          grep -Fq 'internal class StepStallGate(' core/src/main/java/com/openzeekr/app/ble/StepStallGate.kt
+          grep -Fq 'internal class StepDeliveryTrace' core/src/main/java/com/openzeekr/app/ble/StepDeliveryTrace.kt
+          grep -Fq 'private fun walkedBackToTheCar(' core/src/main/java/com/openzeekr/app/ble/ProximityDecisionPolicy.kt
+          grep -Fq 'const val WALK_BACK_AWAY_ALLOWANCE_STEPS = 12L' core/src/main/java/com/openzeekr/app/ble/ProximityDecisionPolicy.kt
+          grep -Fq 'const val PRESENCE_NEAR_ENTRY_MARGIN_DB = 8' core/src/main/java/com/openzeekr/app/ble/ProximityDecisionPolicy.kt
+          grep -Fq 'const val STILL_APPROACH_STEP_STALL_WINDOW_MS = 10_000L' core/src/main/java/com/openzeekr/app/ble/ProximityDecisionPolicy.kt
+          grep -Fq 'const val MAX_SHALLOW_RUN_MS = 2_000L' core/src/main/java/com/openzeekr/app/ble/UnlockedSafetyNets.kt
+          grep -Fq 'private suspend fun cloudConfirmsLockedSinceUnlock(' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'if (!armedUnlocked) { _wakeLockNeeded.value = false; farAsleep = true }' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'val bleProofFresh = requestIndex == 0 && bleProofAtMs != 0L &&' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'verifyFreshLockStatus(firstRequestAcceptedSentAtMs)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'if (walkAwayRecovered) Logx.d("prox", "walk-away: signal recovered -> no location check")' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'private const val STOP_RULE_MAX_STEPS_FROM_CAR = 15L' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'private const val EDGE_CLOUD_MARGIN_DB = 8' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'private const val LINK_DEPARTURE_ALERT_HOLD_MS = 30_000L' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'private const val STATIONARY_LINK_LOSS_EARLY_CHECK_MS = 60_000L' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'val counterSteps: Long? get() = null' core/src/main/java/com/openzeekr/app/ble/ProximityPorts.kt
+          grep -Fq 'sinceStepMs: Long? = null' core/src/main/java/com/openzeekr/app/ble/KeySleepPolicy.kt
+          grep -Fq 'const val MIN_CAR_DB = -80.0' core/src/main/java/com/openzeekr/app/ble/PhoneCalibration.kt
+          grep -Fq 'screenOn = { (appContext.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager)?.isInteractive })' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'walk_back|none)' core/src/main/java/com/openzeekr/app/util/ProximityDiagnosticJournal.kt
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -227,7 +251,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='125' versionName='0.3.1-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='126' versionName='0.3.2-work'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
           sha256sum "$APK"
