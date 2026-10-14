@@ -9,6 +9,8 @@ package com.openzeekr.app.ble
  */
 internal class ProximityDecisionPolicy(
     private val approachConfirm: ApproachConfirm = ApproachConfirm.UNBROKEN,
+    /** The walk-back return at the ordinary approach level after a proven departure (0.3.2). */
+    private val walkBackReturn: Boolean = true,
 ) {
     enum class ArmedDecision { NONE, ARRIVAL_CONFIRMED, LOCK }
 
@@ -88,6 +90,18 @@ internal class ProximityDecisionPolicy(
     private var deepReturnNeedsRecession = false
     /** After a signal-recognised return the unlock may be re-qualified until this time (no motion needed). */
     private var deepReturnUnlockUntilMs = UNSET_MS
+    // Walk-back return (0.3.2, simulation audit B): the hold at the approach level, the weakest
+    // reading since the Lock, the step total at the last reading near that floor (the turn: the
+    // walk back rises out of it) and the step total at the car before the departure.
+    private var walkBackSinceMs = UNSET_MS
+    private var walkBackFloorRssi = Int.MAX_VALUE
+    private var stepsAtWalkBackFloor: Long? = null
+    private var stepsAtDepartureStart: Long? = null
+    // Per reading (set by [shouldUnlock]): the step total and "counted steps are rising now".
+    private var readingSteps: Long? = null
+    private var readingStepsRising = false
+    /** Which signal return qualified (deep_return or walk_back). */
+    private var signalReturnRoute = "deep_return"
     /** The current arrival epoch replaced a Lock's departure latch (see [onPresenceMatch]). */
     private var arrivalEpochAfterLock = false
     private var selfLockReopenAtMs = UNSET_MS
@@ -178,7 +192,10 @@ internal class ProximityDecisionPolicy(
         walkingConfirmed: Boolean = true,
         /** Milliseconds since a live step count last advanced (0 while walking or unknown). */
         stepStallAgeMs: Long = 0L,
+        /** Counted steps are rising now (at least 2 in the last 3 s; false without a step source). */
+        stepsRising: Boolean = false,
     ): Boolean {
+        readingSteps = steps; readingStepsRising = stepsRising
         if (departureLatched &&
             !tryRearmSameLinkReturn(nowMs, rssi, moving, unlockThreshold) &&
             !(awayRoundTripPending && tryRearmAwayReturn(nowMs, rssi, moving, unlockThreshold, steps))) {
@@ -191,7 +208,7 @@ internal class ProximityDecisionPolicy(
         if (!departureLatched && arrivalEpochAfterLock && tryRearmManualDeepFarReturn(nowMs, rssi, unlockThreshold)) {
             finishSameLinkReturn()
             arrivalEpochAfterLock = false
-            unlockQualifiedAtMs = nowMs; unlockRoute = "deep_return"
+            unlockQualifiedAtMs = nowMs; unlockRoute = signalReturnRoute
             deepReturnUnlockUntilMs = nowMs + DEEP_RETURN_UNLOCK_WINDOW_MS
             deepFarReturnRearmed = true
         }
@@ -299,8 +316,12 @@ internal class ProximityDecisionPolicy(
         awayRoundTripPending = false
     }
 
-    /** Suppress every unlock decision from the moment walk-away locking starts. */
-    fun onDepartureLockStarted() {
+    /**
+     * Suppress every unlock decision from the moment walk-away locking starts. [stepsAtCar]: the step
+     * total at the car before this departure (the walk-back return measures the way back against it).
+     */
+    fun onDepartureLockStarted(stepsAtCar: Long? = null) {
+        stepsAtDepartureStart = stepsAtCar
         pendingUnlockFarSinceMs = UNSET_MS
         arrivalEpochAfterLock = false
         awayRoundTripPending = false
@@ -355,8 +376,8 @@ internal class ProximityDecisionPolicy(
     fun onLockedWhileAway() = resetLocked()
 
     /** Confirmed manual lock shares the departure latch. */
-    fun onManualLockConfirmed() {
-        onDepartureLockStarted()
+    fun onManualLockConfirmed(stepsAtCar: Long? = null) {
+        onDepartureLockStarted(stepsAtCar)
         manualDeparture = true
     }
 
@@ -445,7 +466,7 @@ internal class ProximityDecisionPolicy(
         if (tryRearmManualDeepFarReturn(nowMs, rssi, unlockThreshold)) {
             finishSameLinkReturn()
             // The sustained strong return is itself the approach proof: no motion edge needed.
-            unlockQualifiedAtMs = nowMs; unlockRoute = "deep_return"
+            unlockQualifiedAtMs = nowMs; unlockRoute = signalReturnRoute
             deepReturnUnlockUntilMs = nowMs + DEEP_RETURN_UNLOCK_WINDOW_MS
             deepFarReturnRearmed = true
             return true
@@ -636,10 +657,13 @@ internal class ProximityDecisionPolicy(
      * stronger than the unlock threshold (an ordinary approach unlocks around the threshold).
      */
     private fun tryRearmManualDeepFarReturn(nowMs: Long, rssi: Int, unlockThreshold: Int): Boolean {
+        signalReturnRoute = "deep_return"
         // Readings must be dense: across a far-sleep gap nothing is known, so a gap restarts every
         // run (review 0.1.61: two isolated dips 30 s apart must never prove a departure).
         val gap = manualDeepLastReadingAtMs != UNSET_MS && nowMs - manualDeepLastReadingAtMs > MANUAL_DEEP_MAX_GAP_MS
         manualDeepLastReadingAtMs = nowMs
+        if (rssi < walkBackFloorRssi) walkBackFloorRssi = rssi
+        if (rssi <= walkBackFloorRssi + WALK_BACK_FLOOR_BAND_DB) stepsAtWalkBackFloor = readingSteps
         val deep = rssi <= unlockThreshold - MANUAL_DEEP_FAR_MARGIN_DB
         // The Lock fired around the lock threshold; noise at 8-10 m must not reopen at once
         // (review 0.1.63): a reading clearly outside the unlock band first, then the usual return.
@@ -672,6 +696,10 @@ internal class ProximityDecisionPolicy(
             }
             return false
         }
+        if (walkBackReturn && walkedBackToTheCar(nowMs, rssi, unlockThreshold, gap)) {
+            signalReturnRoute = "walk_back"
+            return true
+        }
         val returnMargin = if (deepReturnNeedsRecession) AUTO_LOCK_NEAR_RETURN_MARGIN_DB else MANUAL_DEEP_RETURN_MARGIN_DB
         if (rssi < unlockThreshold + returnMargin) {
             manualDeepReturnSinceMs = UNSET_MS
@@ -685,6 +713,34 @@ internal class ProximityDecisionPolicy(
         // opened only at the door. The span is "about a second", not "at least 1000 ms".
         return manualDeepReturnReadings >= MANUAL_DEEP_RETURN_MIN_READINGS &&
             nowMs - manualDeepReturnSinceMs >= MANUAL_DEEP_RETURN_CONFIRM_MS - SAMPLE_JITTER_MS
+    }
+
+    /**
+     * Walk-back return (0.3.2, simulation audit B): after a proven departure the walk back opens at
+     * the ordinary approach level ([UNLOCK_MARGIN_DB] above the threshold) instead of
+     * [MANUAL_DEEP_RETURN_MARGIN_DB] - a front pocket rarely reaches -82 before the door (simulator:
+     * 110 front-pocket returns late). It needs counted steps rising on every reading (Activity
+     * Recognition lingers on MOVING after a stop), [WALK_BACK_HOLD_MS] at that level (longer than the
+     * field's 1.5 s post-lock multipath peak), a rise of [WALK_BACK_RISE_DB] over the weakest reading
+     * since the Lock, and step odometry: since the last reading near that floor (the turn) at least
+     * [WALK_BACK_STEP_SHARE_PCT] % of the steps from the car to it (a strong phone reads the approach
+     * level 16-29 m out; on a 40 m errand the walker has then done a quarter of the way back). Both
+     * odometry errors (a floor late on the way back, a turn inside the floor band) only delay it; the
+     * deep return stays. No step source: no walk-back return.
+     */
+    private fun walkedBackToTheCar(nowMs: Long, rssi: Int, unlockThreshold: Int, gap: Boolean): Boolean {
+        val away = stepsAtWalkBackFloor?.let { floor -> stepsAtDepartureStart?.let { floor - it } }
+        val back = readingSteps?.let { now -> stepsAtWalkBackFloor?.let { now - it } }
+        val walkedBack = away != null && back != null && away > 0 && back * 100 >= away * WALK_BACK_STEP_SHARE_PCT
+        if (!(readingStepsRising && !deepReturnNeedsRecession && walkedBack &&
+                rssi >= unlockThreshold + UNLOCK_MARGIN_DB && rssi >= walkBackFloorRssi + WALK_BACK_RISE_DB)) {
+            walkBackSinceMs = UNSET_MS
+            return false
+        }
+        if (walkBackSinceMs == UNSET_MS || gap) walkBackSinceMs = nowMs
+        if (nowMs - walkBackSinceMs < WALK_BACK_HOLD_MS) return false
+        walkBackSinceMs = UNSET_MS
+        return true
     }
 
     private fun tryRearmManualWeakSleep(
@@ -742,6 +798,9 @@ internal class ProximityDecisionPolicy(
     }
 
     private fun resetSameLinkReturn() {
+        walkBackSinceMs = UNSET_MS
+        walkBackFloorRssi = Int.MAX_VALUE
+        stepsAtWalkBackFloor = null
         selfLockReopenAtMs = UNSET_MS
         selfLockReopenReadings = 0
         departureSameLinkFarSinceMs = UNSET_MS
@@ -1008,6 +1067,11 @@ internal class ProximityDecisionPolicy(
         const val MANUAL_DEEP_FAR_MIN_READINGS = 2
         const val MANUAL_DEEP_FAR_CONFIRM_MS = 4_000L
         const val MANUAL_DEEP_RETURN_MARGIN_DB = 4
+        /** Walk-back return (0.3.2): hold at the approach level, rise over the far point, share of the way back. */
+        const val WALK_BACK_HOLD_MS = 2_000L
+        const val WALK_BACK_RISE_DB = 6
+        const val WALK_BACK_STEP_SHARE_PCT = 60L
+        const val WALK_BACK_FLOOR_BAND_DB = 2
         const val MANUAL_DEEP_RETURN_CONFIRM_MS = 1_000L
         const val MANUAL_DEEP_RETURN_MIN_READINGS = 2
         /** Spread of the RSSI sampling cadence (GATT read time); see [tryRearmManualDeepFarReturn]. */

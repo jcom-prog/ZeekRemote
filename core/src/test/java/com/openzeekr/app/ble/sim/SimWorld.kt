@@ -915,6 +915,7 @@ internal class SimWorld(
         clock = clock, alerts = alerts, departureLocationSource = locator, wakeLocks = wakeLocks,
         stateStore = stateStore, calibrationStore = calibrationStore, selfCalibration = SELF_CAL,
         arrivalAnchor = ARRIVAL_ANCHOR, awayReturnSteps = H2_STEPS, approachConfirm = APPROACH_CONFIRM,
+        walkBackReturn = WALK_BACK,
     )
     var controller = newController(); private set
 
@@ -1125,6 +1126,8 @@ internal class SimWorld(
         val ARRIVAL_ANCHOR = System.getenv("SIM_ARRIVAL_ANCHOR") != "0"
         /** SIM_H2=0: the away-return after a far link loss ignores the step counter (0.3.0). */
         val H2_STEPS = System.getenv("SIM_H2") != "0"
+        /** SIM_WALK_BACK=0: no walk-back return at the approach level after a Lock (0.3.1 behaviour). */
+        val WALK_BACK = System.getenv("SIM_WALK_BACK") != "0"
         /** SIM_APPROACH=unbroken|two_in_a_row|two_of_three: walking-approach confirmation (0.3.2). */
         val APPROACH_CONFIRM: ProximityDecisionPolicy.ApproachConfirm = System.getenv("SIM_APPROACH")
             ?.let { ProximityDecisionPolicy.ApproachConfirm.valueOf(it.uppercase()) }

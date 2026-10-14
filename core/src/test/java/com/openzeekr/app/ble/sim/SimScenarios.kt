@@ -261,6 +261,8 @@ internal object SimOracle {
     val SAFETY = setOf("LOCK_WHILE_NEAR", "LOCK_WHILE_RETURNING", "UNWANTED_LOCK_NEAR", "UNLOCK_WHILE_FAR",
         "UNWANTED_UNLOCK", "UNLOCK_WHILE_LOITERING", "DEPARTURE_NO_LOCK_SILENT", "OPEN_FAR_NO_ALARM", "GONE_BUT_UNLOCKED")
     fun tier(code: String) = if (code in SAFETY) "SAFETY" else "COMFORT"
+    /** After a stop mark, a key command this soon still belongs to the walk up (see expect-stay-locked). */
+    const val STOP_GRACE_MS = 2_500L
 
     fun check(w: SimWorld): List<Finding> {
         val out = mutableListOf<Finding>()
@@ -361,7 +363,10 @@ internal object SimOracle {
             val seg = ev.filter { it.atMs >= m.atMs && it.atMs < endAt }
             val segSamples = samples.filter { it.atMs >= m.atMs && it.atMs < endAt }
             when (m.detail) {
-                "expect-unlock" -> {
+                // The car is already open at the mark and stays so: nothing to open. The finding that
+                // left it open is counted where it happened (simulation audit B: 30 calibrated and 92
+                // stress NO_UNLOCK segments were this).
+                "expect-unlock" -> if (!(unlockedAtMark && seg.none { it.kind == "CAR_LOCKED" })) {
                     // An unlock just after the segment (user already at the door) is late, not missing.
                     val u = seg.firstOrNull { it.kind == "CAR_UNLOCKED" }
                         ?: ev.firstOrNull { it.kind == "CAR_UNLOCKED" && it.atMs in endAt..plus(endAt, 5_000) && it.distanceM <= 2.0 }
@@ -397,8 +402,15 @@ internal object SimOracle {
                     out += Finding("DEPARTURE_NO_LOCK_SILENT", m.atMs, m.distanceM, "car could not be locked and no alarm")
                 "expect-stay-unlocked" -> seg.firstOrNull { it.kind == "KEY_LOCK_CMD" || it.kind == "CLOUD_LOCK_CMD" }?.let {
                     out += f("UNWANTED_LOCK_NEAR", it, "Lock at %.1f m while staying near".format(it.distanceM)) }
-                "expect-stay-locked" -> seg.firstOrNull { it.kind == "KEY_UNLOCK_CMD" }?.let {
-                    out += f("UNWANTED_UNLOCK", it, "unlock at %.1f m where the car should stay locked".format(it.distanceM)) }
+                "expect-stay-locked" -> {
+                    // A walk that stops at the mark (F13, F31): a command decided while still walking up,
+                    // or in the first seconds after the stop, is part of the approach - no sensor shows a
+                    // stop that soon (simulation audit A, C0/C1).
+                    val walkingAtMark = samples.lastOrNull { it.atMs <= m.atMs }?.moving == true
+                    val from = if (walkingAtMark) plus(m.atMs, STOP_GRACE_MS) else m.atMs
+                    seg.firstOrNull { it.kind == "KEY_UNLOCK_CMD" && it.atMs >= from }?.let {
+                        out += f("UNWANTED_UNLOCK", it, "unlock at %.1f m where the car should stay locked".format(it.distanceM)) }
+                }
                 "expect-unlocked-by-end" -> segSamples.lastOrNull()?.let { if (it.carLocked && everUnlockedBefore)
                     out += Finding("BACK_AT_CAR_BUT_LOCKED", it.atMs, it.distanceM, "user back at the car, car locked") }
                 "expect-locked-by-end" -> segSamples.lastOrNull()?.let { if (!it.carLocked)

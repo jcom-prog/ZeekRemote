@@ -67,6 +67,8 @@ class ProximityController internal constructor(
     private val awayReturnSteps: Boolean = true,
     /** How a walking approach confirms the approach band (0.3.2; the simulator compares the modes). */
     approachConfirm: ProximityDecisionPolicy.ApproachConfirm = ProximityDecisionPolicy.ApproachConfirm.UNBROKEN,
+    /** The walk-back return after a Lock at the ordinary approach level (0.3.2; the simulator compares). */
+    walkBackReturn: Boolean = true,
 ) {
     constructor(
         appContext: android.content.Context,
@@ -242,7 +244,9 @@ class ProximityController internal constructor(
     private var postUnlockFastUntilElapsedMs = 0L
     // Time-based evidence gate. This owns arrival/departure confirmation so neither the fast RSSI
     // path nor the periodic idle check can actuate from one noisy threshold crossing.
-    private val decisionPolicy = ProximityDecisionPolicy(approachConfirm)
+    private val decisionPolicy = ProximityDecisionPolicy(approachConfirm, walkBackReturn)
+    // Step totals of the last [STEPS_RISING_WINDOW_MS] (wall ms, steps): "counted steps rising now".
+    private val recentSteps = ArrayDeque<Pair<Long, Long>>()
     private val relockApproachEvidence = RelockApproachEvidence()
     // Confirmed-unlock retry loop: true while actively trying to unlock; the job is the loop itself.
     @Volatile private var needToUnlock = false
@@ -613,7 +617,7 @@ class ProximityController internal constructor(
                 unlockJob = null
                 armedUnlocked = false
                 resetLinkedWatch()
-                decisionPolicy.onManualLockConfirmed()
+                decisionPolicy.onManualLockConfirmed(stepsAtLastStrongNear ?: motion.observedSteps)
                 if (away) decisionPolicy.onLockedWhileAway()
                 if (selfLockReopenPending && source == "car self-lock") {
                     decisionPolicy.armSelfLockReopen(clock.wallMs(), (gattEma ?: -100.0).toInt())
@@ -997,6 +1001,15 @@ class ProximityController internal constructor(
         val merged = mergedBase?.let { base -> motion.observedSteps?.let { it - base } }
         val counter = counterBase?.let { base -> motion.counterSteps?.let { it - base } }
         return listOfNotNull(merged, counter).maxOrNull()
+    }
+
+    /** At least [STEPS_RISING_MIN] counted steps within the last [STEPS_RISING_WINDOW_MS] (false without steps). */
+    private fun stepsRisingNow(nowMs: Long, steps: Long?): Boolean {
+        val s = steps ?: return false
+        if (recentSteps.lastOrNull()?.let { nowMs < it.first || s < it.second } == true) recentSteps.clear()
+        recentSteps.addLast(nowMs to s)
+        while (recentSteps.isNotEmpty() && nowMs - recentSteps.first().first > STEPS_RISING_WINDOW_MS) recentSteps.removeFirst()
+        return recentSteps.size >= 2 && s - recentSteps.first().second >= STEPS_RISING_MIN
     }
 
     /** Steps since the latest strong reading at the car, else since the unlock (null without steps). */
@@ -1752,6 +1765,7 @@ class ProximityController internal constructor(
         val unlockQualified = !armedUnlocked && !needToUnlock && decisionPolicy.shouldUnlock(
             now, smoothed, motion.state.value == MotionMonitor.Motion.MOVING, unlockThresh,
             if (awayReturnSteps) stepsNow else null, walkingBySteps, stepStall.stalledForMs,
+            stepsRising = stepsRisingNow(now, stepsNow),
         )
         if (!walkingBySteps && !stepStallLogged) {
             stepStallLogged = true
@@ -2008,7 +2022,7 @@ class ProximityController internal constructor(
         needToUnlock = false; unlockJob?.cancel(); unlockJob = null
         // Terminal for this BLE session: a post-lock RSSI rebound must never emit CTRL_UNLOCK.
         // A genuine later arrival is rearmed only by link-down + a fresh hardware presence hit.
-        decisionPolicy.onDepartureLockStarted()
+        decisionPolicy.onDepartureLockStarted(stepsAtLastStrongNear ?: motion.observedSteps)
         lockJob = scope.launch {
             val lockStartedAtMs = clock.wallMs()
             lastTriggerMs = lockStartedAtMs   // start the action cooldown
@@ -2585,6 +2599,9 @@ class ProximityController internal constructor(
         private const val EDGE_CLOUD_MARGIN_DB = 8
         /** The stop-in-the-step-stream rule for the departure proof applies this close to the car. */
         private const val STOP_RULE_MAX_STEPS_FROM_CAR = 15L
+        /** "Counted steps rising now" for the walk-back return: this many within this window. */
+        private const val STEPS_RISING_MIN = 2L
+        private const val STEPS_RISING_WINDOW_MS = 3_000L
         /** A self-lock this soon after our approach unlock may be undone by walking up to the door. */
         private const val SELF_LOCK_REOPEN_AFTER_UNLOCK_MS = 180_000L
         /** A link gap after which the car's lock state counts as unknown. */
