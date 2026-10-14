@@ -101,6 +101,7 @@ fun ControlsScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
         contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        item { LockAlarmHealthBanner() }
         item { SectionHeader("Quick actions") }
         item {
             Row(
@@ -382,6 +383,46 @@ private fun ProximityCard(deps: Deps) {
             )
 
             BatteryOptimizationRow(context)
+        }
+    }
+}
+
+/**
+ * Plan K5 (0.3.0): the "car not locked" warning cannot reach the user (notifications off, alarm
+ * channel muted). Says so on the first screen and opens the right settings; re-checked on return.
+ */
+@Composable
+private fun LockAlarmHealthBanner() {
+    val context = LocalContext.current
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    var problems by remember { mutableStateOf(com.openzeekr.app.ble.LockAlarmHealth.problems(context)) }
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME)
+                problems = com.openzeekr.app.ble.LockAlarmHealth.problems(context)
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    if (problems.isEmpty()) return
+    Card(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("The car-not-locked alarm cannot reach you", fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onErrorContainer)
+            problems.forEach {
+                Text(it.text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
+            }
+            Text("Until this is fixed the app plays the alarm tone itself, without a notification.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
+            androidx.compose.material3.TextButton(onClick = {
+                val intent = android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                runCatching { context.startActivity(intent) }
+            }) { Text("Open notification settings") }
         }
     }
 }

@@ -20,15 +20,21 @@ object DiagnosticExport {
     private val BLE_SAFE = listOf("onConnectionStateChange", "presence scan", "presence MATCH", "connectGatt",
         "DK session READY", "services discovered", "starting DK handshake",
         "skip other Zeekr", "own key module", "weak advert")
-    /** Any line mentioning one of these is dropped whole. */
+    /**
+     * Any line mentioning one of these is dropped whole. Identifier words are matched at a word
+     * edge (plan H10, 0.3.0): as bare substrings "vin" hit MOVING, driving and preserving, and
+     * "cert" hit uncertain, which silently removed most decision lines from the report. A
+     * "position" in a decision line is a word, not a place; numbers that look like coordinates
+     * are masked by [redact].
+     */
     private val DENY = Regex(
-        "(?i)vin|token|passw|secret|bearer|cert|cmac|digitalkey|dkid|phoneid|deviceid|userid|e-?mail|" +
-            "rnd|hex=|der head|factor|\\bsig\\b|key=|keys=|\\blat\\b|\\blon\\b|latitude|longitude|" +
-            "address|position|coord|broadcastrnd")
+        "(?i)\\bvin|vin\\b|token|passw|secret|bearer|\\bcert|cmac|digitalkey|dkid|phoneid|deviceid|userid|" +
+            "e-?mail|\\brnd|rnd\\b|hex=|der head|factor|\\bsig\\b|key=|keys=|\\blat\\b|\\blon\\b|" +
+            "latitude|longitude|address|coord")
     private val LINE = Regex("^(\\S+) ([VDIWE])/([a-z]+)\\s+(.*)$")
     private val MAC = Regex("(?i)\\b[0-9a-f]{2}(:[0-9a-f]{2}){5}\\b")
     private val HEX = Regex("(?i)\\b[0-9a-f]{12,}\\b")
-    private val COORD = Regex("-?\\d{1,3}[.,]\\d{5,}")
+    private val COORD = Regex("-?\\d{1,3}[.,]\\d{4,}")
 
     private val LOGCAT = Regex("^\\d\\d-\\d\\d (\\S+)\\s+\\d+\\s+\\d+ ([VDIWE]) openzeekr\\s*: \\[([a-z]+)\\] (.*)$")
 

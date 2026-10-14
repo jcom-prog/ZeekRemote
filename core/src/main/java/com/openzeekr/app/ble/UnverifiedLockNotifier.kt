@@ -81,8 +81,10 @@ internal object UnverifiedLockNotifier {
             }
             val sounded = post(context, ALARM_CHANNEL_ID, ALARM_NOTIFICATION_ID, title, message, alarm = true,
                 lockButton = lockButton)
-            if (sounded) alarmRaisedAtElapsedMs = now
-            com.openzeekr.app.util.Logx.w("prox", "lock alarm ${if (sounded) "raised" else "unavailable"} (${event.name})")
+            val fallback = soundFallbackIfMuted(context, sounded)
+            if (sounded || fallback) alarmRaisedAtElapsedMs = now
+            com.openzeekr.app.util.Logx.w("prox", "lock alarm ${if (sounded) "raised" else "unavailable"}" +
+                "${if (fallback) " + fallback sound (notifications muted)" else ""} (${event.name})")
         } else if (LockAlertPolicy.resolvesAlarm(event)) {
             // Only a resolved situation (car locked, user back at the car) ends a sounding alarm.
             silenceAlarm(context)
@@ -96,6 +98,7 @@ internal object UnverifiedLockNotifier {
      * held until the outcome ([NotificationLockGuard]).
      */
     fun onUserLockStarted(context: Context) {
+        FallbackAlarmSound.stop()
         runCatching { NotificationManagerCompat.from(context).cancel(ALARM_NOTIFICATION_ID) }
         post(context, CHANNEL_ID, NOTIFICATION_ID, LOCK_SENDING_TITLE, LOCK_SENDING_TEXT, alarm = false, lockButton = true)
     }
@@ -108,8 +111,29 @@ internal object UnverifiedLockNotifier {
         post(context, CHANNEL_ID, NOTIFICATION_ID, LOCK_FAILED_TITLE, LOCK_FAILED_TEXT, alarm = false, lockButton = true)
         val sounded = post(context, ALARM_CHANNEL_ID, ALARM_NOTIFICATION_ID, LOCK_FAILED_TITLE, LOCK_FAILED_TEXT,
             alarm = true, lockButton = true)
-        if (sounded) alarmRaisedAtElapsedMs = android.os.SystemClock.elapsedRealtime()
-        com.openzeekr.app.util.Logx.w("prox", "lock alarm ${if (sounded) "raised" else "unavailable"} (notification Lock failed)")
+        val fallback = soundFallbackIfMuted(context, sounded)
+        if (sounded || fallback) alarmRaisedAtElapsedMs = android.os.SystemClock.elapsedRealtime()
+        com.openzeekr.app.util.Logx.w("prox", "lock alarm ${if (sounded) "raised" else "unavailable"}" +
+            "${if (fallback) " + fallback sound" else ""} (notification Lock failed)")
+    }
+
+    /**
+     * Plan K5: notifications off or the alarm channel muted - the alarm would be silent. Sounds the
+     * alarm tone directly instead; true when it did.
+     */
+    private fun soundFallbackIfMuted(context: Context, posted: Boolean): Boolean {
+        if (posted && LockAlarmHealth.alarmAudible(context)) return false
+        FallbackAlarmSound.play(context)
+        return true
+    }
+
+    /** Importance of the warning and alarm channels (null before they exist), for [LockAlarmHealth]. */
+    internal fun channelImportances(context: Context): Pair<Int?, Int?> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return null to null
+        val system = context.getSystemService(NotificationManager::class.java) ?: return null to null
+        runCatching { ensureChannels(system) }
+        return system.getNotificationChannel(CHANNEL_ID)?.importance to
+            system.getNotificationChannel(ALARM_CHANNEL_ID)?.importance
     }
 
     private fun ensureChannels(system: NotificationManager) {
@@ -201,12 +225,14 @@ internal object UnverifiedLockNotifier {
     /** Stops a sounding alarm but keeps the visible record (e.g. the user is back in range). */
     fun silenceAlarm(context: Context) {
         alarmRaisedAtElapsedMs = 0L
+        FallbackAlarmSound.stop()
         runCatching { NotificationManagerCompat.from(context).cancel(ALARM_NOTIFICATION_ID) }
     }
 
     /** Clear only when a new unlock starts, or an explicit BLE/manual lock was confirmed. */
     fun clear(context: Context) {
         alarmRaisedAtElapsedMs = 0L
+        FallbackAlarmSound.stop()
         runCatching {
             val manager = NotificationManagerCompat.from(context)
             manager.cancel(ALARM_NOTIFICATION_ID)

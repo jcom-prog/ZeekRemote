@@ -65,12 +65,18 @@ class AuthRepository(private val store: ConfigStore, private val client: ApiClie
     }
 }
 
-class RemoteControlRepository(private val store: ConfigStore, private val client: ApiClient) {
+class RemoteControlRepository(
+    private val store: ConfigStore,
+    private val client: ApiClient,
+    /** Plan K3: tells the user that the shared car was deactivated in this app (a notification). */
+    private val onSharedCarRemoved: () -> Unit = {},
+    private val nowMs: () -> Long = { System.currentTimeMillis() },
+) {
 
     /** Last status key-structure we logged; used to dump the schema only when it changes (not per poll). */
     private var lastStatusKeyTree: String? = null
     private var lastChargeRaw: String? = null
-    private var missingActiveVinCount = 0
+    private val sharedVinRemoval = SharedVinRemovalPolicy()
 
     /** Fire a catalog command. Physical-actuation ids (RDU_2/RDL_2/RDO/RDC) route through
      *  the ecarx device-api transport (System B); everything else through /ms-remote-control. */
@@ -208,20 +214,23 @@ class RemoteControlRepository(private val store: ConfigStore, private val client
             val response = client.api.vehicleList(needSharedCar = true)
             val all = VehicleGarage.parseAll(response.data)
             val info = all.firstOrNull { it.vin == cfg.vin } ?: all.firstOrNull()
-            // Single-car policy: never silently switch to another VIN. If the active shared car
-            // disappeared from a successful non-empty list, its share ended; deactivate it locally.
+            // Single-car policy: never silently switch to another VIN. If the active SHARED car is
+            // missing from successful non-empty lists 10 min apart, its share ended; deactivate it
+            // locally and tell the user (plan K3: an empty list twice in a row used to wipe any VIN).
             val listSucceeded = response.success || response.code == null || response.code == "000000"
-            if (cfg.vin.isNotBlank() && listSucceeded && all.none { it.vin == cfg.vin }) {
-                missingActiveVinCount++
-                // Require two independent successful refreshes: a single transient empty cloud reply
-                // must never disable a valid key, while a genuinely ended share is removed promptly.
-                if (missingActiveVinCount >= 2) {
+            when (sharedVinRemoval.observe(cfg.vin, cfg.isOwner, listSucceeded, all.map { it.vin }, nowMs())) {
+                SharedVinRemovalPolicy.Decision.DEACTIVATE -> {
                     store.update { it.copy(vin = "", isOwner = false) }
-                    com.openzeekr.app.util.Logx.w("veh", "active shared car absent twice - VIN deactivated")
+                    com.openzeekr.app.util.Logx.w("veh", "active shared car absent from two lists 10 min apart - deactivated")
+                    onSharedCarRemoved()
+                    return@guarded null
                 }
-                return@guarded null
+                SharedVinRemovalPolicy.Decision.MISSING_ONCE, SharedVinRemovalPolicy.Decision.MISSING_TOO_SOON ->
+                    return@guarded null
+                SharedVinRemovalPolicy.Decision.NO_EVIDENCE ->
+                    if (cfg.vin.isNotBlank() && all.none { it.vin == cfg.vin }) return@guarded null
+                SharedVinRemovalPolicy.Decision.PRESENT -> Unit
             }
-            missingActiveVinCount = 0
             info?.also { info ->
                 if (info.isOwner != store.current().isOwner) store.update { it.copy(isOwner = info.isOwner) }
             }

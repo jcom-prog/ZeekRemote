@@ -69,7 +69,13 @@ class Deps(context: Context) {
         com.openzeekr.app.net.TokenExpirySignal.listener = { renewer.onTokenExpired() }
         renewer.maybeRenewAhead()
     }
-    val control = RemoteControlRepository(config, apiClient)
+    val control = RemoteControlRepository(config, apiClient, onSharedCarRemoved = {
+        com.openzeekr.app.util.CarNotifier.notify(appCtx, com.openzeekr.app.net.model.InboxMessage(
+            id = "shared-car-removed", title = "Shared car no longer available",
+            body = "The shared car is no longer in your Zeekr account, so its digital key in this app was " +
+                "switched off. Wrong? Tap Settings > Refresh sign-in (do not sign out).",
+            category = null, redirectUrl = null, imageUrl = null, timeMs = System.currentTimeMillis(), read = false))
+    })
     val sentry = SentryRepository(config, apiClient)
     /** Journey log: trip history (distance / energy / duration) with CSV export. */
     val journey = JourneyRepository(config, apiClient)

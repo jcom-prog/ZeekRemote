@@ -158,6 +158,18 @@ private fun RemoteParkingControls(rpa: RpaController, state: RpaController.UiSta
     val connecting = phase == RpaController.Phase.CONNECTING
     val canConnect = phase == RpaController.Phase.IDLE || phase == RpaController.Phase.ERROR || phase == RpaController.Phase.DONE
     val active = phase != RpaController.Phase.IDLE && phase != RpaController.Phase.ERROR && phase != RpaController.Phase.DONE
+    // Plan K4: leaving the screen or the app (screen off, another app on top) ends a hold-to-move.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, rpa) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP && rpa.state.value.phase == RpaController.Phase.MOVING) rpa.releaseMove()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            if (rpa.state.value.phase == RpaController.Phase.MOVING) rpa.releaseMove()
+        }
+    }
 
     Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -207,7 +219,8 @@ private fun RemoteParkingControls(rpa: RpaController, state: RpaController.UiSta
         }
 
         SectionHeader("Hold to move")
-        Text("Press and hold; release stops instantly (the car halts the moment the 500 ms heartbeat drops).",
+        Text("Press and hold; release stops instantly (the car halts the moment the 500 ms heartbeat drops). " +
+            "A hold ends by itself after ${RpaController.MAX_HOLD_MS / 1000} s, and when you leave this screen.",
             color = Brand.muted, fontSize = 12.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             HoldPad("Forward", Icons.Filled.ArrowUpward, Modifier.weight(1f), onHold = { rpa.holdMove(true) }, onRelease = { rpa.releaseMove() })
@@ -257,7 +270,8 @@ private fun Chip(label: String, onClick: () -> Unit) {
 private fun HoldPad(label: String, icon: ImageVector, modifier: Modifier, onHold: () -> Unit, onRelease: () -> Unit) {
     Column(
         modifier.height(100.dp).clip(RoundedCornerShape(16.dp)).background(Brand.accent.copy(alpha = 0.14f))
-            .pointerInput(Unit) { detectTapGestures(onPress = { onHold(); tryAwaitRelease(); onRelease() }) },
+            // Plan K4: the release runs even when the gesture is cancelled (finally), not only on finger-up.
+            .pointerInput(Unit) { detectTapGestures(onPress = { onHold(); try { tryAwaitRelease() } finally { onRelease() } }) },
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
     ) {
         Box(Modifier.size(40.dp).clip(CircleShape).background(Brand.accent.copy(alpha = 0.22f)), contentAlignment = Alignment.Center) {

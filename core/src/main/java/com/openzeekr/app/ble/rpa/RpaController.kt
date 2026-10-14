@@ -46,6 +46,8 @@ class RpaController(
 
     private var heartbeat: Job? = null
     private var rssiJob: Job? = null
+    /** The RSSI stream was started by a hold (not by [begin]): the release stops it again. */
+    private var rssiStartedByHold = false
     private var reqModeJob: Job? = null
     /** Current move direction (rspaControl), echoed as the challenge-answer gesture. */
     @Volatile private var gesture: Byte = 0
@@ -173,7 +175,7 @@ class RpaController(
     fun undo() = oneShot(RpaReq.CMD_RPA_UNDO, Phase.READY)
 
     fun stop() {
-        stopHeartbeat(); stopRssiStream(); stopReqModePoll(); gesture = 0
+        stopHeartbeat(); stopRssiStream(); stopReqModePoll(); gesture = 0; rssiStartedByHold = false
         oneShot(RpaReq.CMD_RPA_STOP, Phase.READY)
     }
 
@@ -192,28 +194,42 @@ class RpaController(
 
     // ---- RSPA hold-to-move (dead-man's switch) ----
 
-    /** Press-and-hold: begins the 500 ms heartbeat with rspaControl = FORWARD/BACKWARD. */
+    /**
+     * Press-and-hold: begins the 500 ms heartbeat with rspaControl = FORWARD/BACKWARD. The hold
+     * ends by itself after [MAX_HOLD_MS] (plan K4: a finger-up that never reaches us - a gesture
+     * cancelled by the system, a frozen UI - must not leave the car moving).
+     */
     fun holdMove(forward: Boolean) {
         if (heartbeat?.isActive == true) return
         val rspa = if (forward) RpaReq.CMD_RSPA_FORWARD else RpaReq.CMD_RSPA_BACKWARD
         gesture = rspa
-        _state.value = _state.value.copy(phase = Phase.MOVING)
+        _state.value = _state.value.copy(phase = Phase.MOVING, message = null)
+        rssiStartedByHold = rssiJob?.isActive != true
         startRssiStream()
         heartbeat = scope.launch {
+            var beats = 0L
             while (isActive) {
+                if (beats >= MAX_HOLD_MS / RpaConst.HEARTBEAT_MS) {
+                    com.openzeekr.app.util.Logx.w("dk", "RPA hold reached ${MAX_HOLD_MS / 1000} s - released")
+                    releaseMove("Released after ${MAX_HOLD_MS / 1000} s (safety limit) - press again to continue")
+                    return@launch
+                }
                 runCatching {
                     session.sendFrame(DkOpcodes.CMD_A2V_RPA_REQ,
                         block(rpaCtrl = RpaReq.CMD_NONE, rspaCtrl = rspa))
                 }.onFailure { fail(it); return@launch }
+                beats++
                 delay(RpaConst.HEARTBEAT_MS)
             }
         }
     }
 
     /** Finger-up: send BOTTOM_RELEASE and cancel the heartbeat (car halts). */
-    fun releaseMove() {
+    fun releaseMove(message: String? = null) {
         stopHeartbeat()
         gesture = 0
+        if (rssiStartedByHold) { stopRssiStream(); rssiStartedByHold = false }
+        if (message != null) _state.value = _state.value.copy(message = message)
         scope.launch {
             runCatching {
                 session.sendFrame(DkOpcodes.CMD_A2V_RPA_REQ,
@@ -313,17 +329,19 @@ class RpaController(
     private fun stopHeartbeat() { heartbeat?.cancel(); heartbeat = null }
 
     private fun fail(t: Throwable) {
-        stopHeartbeat(); stopRssiStream(); stopReqModePoll()
+        stopHeartbeat(); stopRssiStream(); stopReqModePoll(); rssiStartedByHold = false
         _state.value = _state.value.copy(phase = Phase.ERROR, message = t.message)
     }
 
     private fun intToBytes(v: Int): ByteArray =
         byteArrayOf((v ushr 24).toByte(), (v ushr 16).toByte(), (v ushr 8).toByte(), v.toByte())
 
-    private companion object {
+    companion object {
+        /** Longest single hold-to-move; then the app releases by itself (plan K4). */
+        const val MAX_HOLD_MS = 30_000L
         /** REQ_MODE poll cadence while opening (matches stock BleConnectDialog 1 Hz). */
-        const val REQ_MODE_POLL_MS = 1000L
+        private const val REQ_MODE_POLL_MS = 1000L
         /** Give up "connecting" after this long with no 0x0117 SYNC from the car. */
-        const val CONNECT_TIMEOUT_MS = 20_000L
+        private const val CONNECT_TIMEOUT_MS = 20_000L
     }
 }

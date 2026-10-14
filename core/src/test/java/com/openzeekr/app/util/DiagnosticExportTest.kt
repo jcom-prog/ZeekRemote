@@ -33,6 +33,31 @@ class DiagnosticExportTest {
         ), out)
     }
 
+    @Test fun ordinaryDecisionLinesSurviveTheIdentifierFilter() {
+        // Plan H10 (0.3.0): "vin" and "cert" as bare substrings dropped these whole.
+        val decision = listOf(
+            l("prox", "rssi=-91 ema=-90 ~17.4m trend=-0.5 zone=FAR armed=true motion=MOVING next=200ms"),
+            l("motion", "-> MOVING"),
+            l("svc", "status 133: hardware presence re-armed; preserving arrival epoch"),
+            l("prox", "departure position unverified; NO LOCK SENT; manual Lock required"),
+            l("prox", "pending departure corroborated by position; sending Lock"),
+            l("prox", "lock state uncertain after reconnect -> cloud check"),
+            l("svc", "driving: IN_VEHICLE -> keep-alive paused"),
+        )
+        assertEquals(decision, DiagnosticExport.filterAppLog(decision))
+        // ...while identifiers in any spelling still drop the line.
+        val ids = listOf(
+            l("prox", "vin=LTESTVIN000000001"), l("prox", "carVin=X"), l("prox", "vinCode=X"),
+            l("prox", "VIN LTESTVIN000000001"), l("prox", "cert chain ok"), l("prox", "certificate expired"),
+            l("prox", "broadcastRnd=1e81"), l("prox", "rnd=1e81"), l("prox", "macAddress=60:27"),
+            l("prox", "token refresh failed"),
+        )
+        assertEquals(emptyList<String>(), DiagnosticExport.filterAppLog(ids))
+        // Coordinates with four decimals (~10 m) are masked too.
+        assertEquals(listOf(l("prox", "anchor <num>,<num>")),
+            DiagnosticExport.filterAppLog(listOf(l("prox", "anchor 51.4123,5.4012"))))
+    }
+
     @Test fun reportHasHeaderJournalAndFilteredLog() {
         val text = DiagnosticExport.build("0.2.12-work", "2026-10-10 20:30",
             "2026-10-10 16:44:02.713 UNLOCK_STARTED approach -82\n",
