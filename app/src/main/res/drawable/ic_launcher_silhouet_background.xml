@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated from the 7GT render by branding/icons/icons.py; do not edit by hand. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path
+        android:pathData="M0,0 L108,0 L108,108 L0,108 Z">
+        <aapt:attr name="android:fillColor">
+          <gradient android:type="linear" android:startX="0" android:startY="0" android:endX="108" android:endY="108">
+            <item android:offset="0" android:color="#FF1C4FB0" />
+            <item android:offset="1" android:color="#FF5AA9FF" />
+          </gradient>
+        </aapt:attr>
+    </path>
+    <path
+        android:pathData="M0,0 L108,0 L108,108 L0,108 Z">
+        <aapt:attr name="android:fillColor">
+          <gradient android:type="radial" android:centerX="54" android:centerY="62" android:gradientRadius="52">
+            <item android:offset="0" android:color="#33FFFFFF" />
+            <item android:offset="1" android:color="#00FFFFFF" />
+          </gradient>
+        </aapt:attr>
+    </path>
+</vector>

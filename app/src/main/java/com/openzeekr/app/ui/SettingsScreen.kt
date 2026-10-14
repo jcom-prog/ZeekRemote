@@ -2,6 +2,7 @@ package com.openzeekr.app.ui
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -45,6 +46,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -54,6 +56,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toBitmap
 import com.openzeekr.app.Deps
 import com.openzeekr.app.config.SecretsConfig
 import com.openzeekr.app.remote.CallResult
@@ -178,6 +182,27 @@ fun SettingsScreen(deps: Deps, modifier: Modifier = Modifier) {
             UnitRow("Distance", listOf("km" to "km", "mi" to "miles"), liveCfg.distanceUnit) { v -> store.update { it.copy(distanceUnit = v) } }
             UnitRow("Tyre pressure", listOf("bar" to "bar", "psi" to "psi", "kpa" to "kPa"), liveCfg.pressureUnit) { v -> store.update { it.copy(pressureUnit = v) } }
             UnitRow("Temperature", listOf("c" to "°C", "f" to "°F"), liveCfg.tempUnit) { v -> store.update { it.copy(tempUnit = v) } }
+        }
+
+        // -------- app icon --------
+        SettingsCard {
+            CardTitle("App-icoon")
+            var chosen by remember { mutableStateOf(com.openzeekr.app.AppIcon.current(ctx)) }
+            Text("Kies het icoon op je startscherm. Na het wisselen kan het icoon op je startscherm " +
+                "even verdwijnen: zet het dan opnieuw neer vanuit de app-lijst.", color = Brand.muted, fontSize = 12.sp)
+            com.openzeekr.app.AppIcon.entries.chunked(3).forEach { row ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    row.forEach { icon ->
+                        AppIconChoice(icon, selected = icon == chosen, modifier = Modifier.weight(1f)) {
+                            if (icon != chosen) {
+                                com.openzeekr.app.AppIcon.select(ctx, icon)
+                                chosen = icon
+                                Logx.d("ui", "app icon -> ${icon.name}")
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // -------- region --------
@@ -524,6 +549,27 @@ private fun InfoRow(label: String, value: String) {
 
 @Composable
 private fun CardTitle(text: String) = Text(text, fontWeight = FontWeight.Bold, fontSize = 15.sp, modifier = Modifier.padding(bottom = 2.dp))
+
+/** One launcher-icon option, drawn with the device's own icon mask (AdaptiveIconDrawable). */
+@Composable
+private fun AppIconChoice(icon: com.openzeekr.app.AppIcon, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    val ctx = LocalContext.current
+    val image = remember(icon) {
+        ContextCompat.getDrawable(ctx, icon.iconRes)?.toBitmap(168, 168)?.asImageBitmap()
+    }
+    Column(
+        modifier.clip(RoundedCornerShape(14.dp))
+            .background(if (selected) Brand.accent.copy(alpha = 0.16f) else Color.Transparent)
+            .border(if (selected) 1.5.dp else 0.dp, if (selected) Brand.accent else Color.Transparent, RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        if (image != null) Image(image, contentDescription = icon.label, modifier = Modifier.size(56.dp))
+        Text(icon.label, fontSize = 11.5.sp, color = if (selected) Brand.accent else Brand.muted,
+            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 6.dp))
+    }
+}
 
 @Composable
 private fun SettingsCard(content: @Composable () -> Unit) {
