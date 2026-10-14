@@ -738,7 +738,33 @@ class ProximityController internal constructor(
 
     /** Any fresh reading at the car ends a suspected departure. */
     private fun noteFreshReading(rssi: Int) {
+        recordReading(rssi)
         if (rssi >= STRONG_NEAR_DIAGNOSTIC_RSSI) lastStrongNearAtMs = clock.wallMs()
+    }
+
+    /** The last few seconds of raw readings (wall ms, dBm) for the Lock veto. */
+    private val recentReadings = ArrayDeque<Pair<Long, Int>>()
+    private fun recordReading(rssi: Int) {
+        val now = clock.wallMs()
+        recentReadings.addLast(now to rssi)
+        while (recentReadings.isNotEmpty() && now - recentReadings.first().first > RECENT_READINGS_MS) recentReadings.removeFirst()
+    }
+
+    /**
+     * Plan K1: is the phone at, or walking back to, the car right now? Then no automatic Lock -
+     * whatever a (possibly drifting or late) position proof says. Stress F08: a GNSS proof arrived
+     * after the user had turned back, and the car locked at 1.0 m after -71..-77 dBm readings.
+     * A real departure has been weak for seconds by the time it is proven (locks start at ~14 m).
+     */
+    private fun lockVeto(fresh: Int?): String? {
+        val now = clock.wallMs()
+        if (fresh != null && fresh >= STRONG_NEAR_DIAGNOSTIC_RSSI) return "fresh reading $fresh dBm at the car"
+        if (lastStrongNearAtMs != 0L && now - lastStrongNearAtMs <= LOCK_VETO_RECENT_STRONG_MS)
+            return "strong reading ${(now - lastStrongNearAtMs) / 100 / 10.0} s ago"
+        val earlier = recentReadings.filter { now - it.first in LOCK_VETO_RISE_FROM_MS..LOCK_VETO_RISE_TO_MS }.maxOfOrNull { it.second }
+        if (fresh != null && earlier != null && fresh >= config().sensitivityUnlockRssi && fresh >= earlier + LOCK_VETO_RISE_DB)
+            return "walking back ($earlier -> $fresh dBm)"
+        return null
     }
 
     private fun departureSuspected(): Boolean =
@@ -1124,6 +1150,7 @@ class ProximityController internal constructor(
                 motion.state.value != MotionMonitor.Motion.MOVING) return false
             val rssi = ble.pollRemoteRssi() ?: return@repeat
             revokeBleDeparture(rssi)
+            recordReading(rssi)
             if (rssi >= STRONG_NEAR_DIAGNOSTIC_RSSI) lastStrongNearAtMs = clock.wallMs()
             // Awaiting a callback can outlive a motion transition or session shutdown.
             if (ble.state.value != DkBleManager.State.SESSION_READY ||
@@ -1232,6 +1259,7 @@ class ProximityController internal constructor(
     // ---------------- RSSI → distance → decision ----------------
 
     private fun onSample(rssi: Int) {
+        recordReading(rssi)
         val cfg = config()
         val unlockThresh = cfg.sensitivityUnlockRssi
         val lockThresh = cfg.sensitivityLockRssi
@@ -1506,8 +1534,13 @@ class ProximityController internal constructor(
         if (unlockJob?.isActive == true) return
         unlockJob = scope.launch {
             var attempt = 0
+            val loopStartedAtMs = clock.elapsedMs()
             while (isActive && needToUnlock && attempt < MAX_UNLOCK_ATTEMPTS) {
                 attempt++
+                if (clock.elapsedMs() - loopStartedAtMs > UNLOCK_LOOP_MAX_MS) {
+                    Logx.w("prox", "unlock: no confirmation within ${UNLOCK_LOOP_MAX_MS / 1000} s - stopping (no stale retry)")
+                    break
+                }
                 if (ble.state.value != DkBleManager.State.SESSION_READY) {
                     if (!awaitState(setOf(DkBleManager.State.SESSION_READY), UNLOCK_SESSION_WAIT_MS)) {
                         if (!needToUnlock) break
@@ -1515,6 +1548,16 @@ class ProximityController internal constructor(
                     }
                 }
                 if (!needToUnlock) break
+                // Plan K6: a retry (after a failed attempt, a reset or a reconnect) needs fresh
+                // evidence that the phone is still near - not a decision taken seconds ago, possibly
+                // by a user who has since turned away (a reconnect at 15 m must not open the car).
+                if (attempt > 1) {
+                    val fresh = ble.pollRemoteRssi()
+                    if (fresh == null || fresh < config().sensitivityUnlockRssi) {
+                        Logx.w("prox", "unlock retry #$attempt without a fresh near reading (rssi=${fresh ?: "none"}) - stopping")
+                        break
+                    }
+                }
                 val r = runCatching { ble.session.control(DkProtocol.CTRL_UNLOCK, UNLOCK_ACK_TIMEOUT_MS) }
                     .getOrDefault(ControlResult.WRITE_FAILED)
                 Logx.d("prox", "unlock attempt #$attempt -> $r")
@@ -1563,6 +1606,16 @@ class ProximityController internal constructor(
             val maxAttempts = if (ble.state.value == DkBleManager.State.SESSION_READY)
                 MAX_LOCK_ATTEMPTS else 1 // a lost radio should reach the cloud fallback promptly
             while (isActive && attempt < maxAttempts) {
+                // Plan H5: the car reported locked since this Lock started (its own push, a fob, a
+                // manual Lock): that is the confirmation, not a reason to retry or alarm.
+                if (lastCarLockedReportAtMs >= lockStartedAtMs) {
+                    confirmed = true
+                    Logx.d("prox", "$reason: the car reports locked (status push) -> Lock confirmed")
+                    decisionPolicy.onAutomaticLockProvenDeparture(clock.wallMs())
+                    departureAlarmJob?.cancel(); departureAlarmJob = null
+                    alerts.silenceAlarm()
+                    break
+                }
                 if (clock.wallMs() - departureProofAtMs > 5_000L &&
                     !bleLockAuthorized() && !confirmPhysicalDeparture()) {
                     val posted = alerts.show(LockAlertPolicy.Event.DEPARTURE_UNVERIFIED)
@@ -1590,9 +1643,16 @@ class ProximityController internal constructor(
                         bleProofFresh = bleRoute?.freshBleLockAuthorized(
                             clock.elapsedMs(), fresh) == true
                         bleRoute?.let(::logBleRouteRevocation)
+                        recordReading(fresh)
                         if (fresh >= STRONG_NEAR_DIAGNOSTIC_RSSI)
                             lastStrongNearAtMs = clock.wallMs()
                     }
+                }
+                lockVeto(lastFreshRssi.takeIf { ble.state.value == DkBleManager.State.SESSION_READY })?.let { why ->
+                    val posted = alerts.show(LockAlertPolicy.Event.PROXIMITY_RECOVERED_BEFORE_LOCK)
+                    Logx.w("prox", "$reason: Lock vetoed - $why; user at the car; NO LOCK SENT; reminderPosted=$posted")
+                    lockJob = null
+                    return@launch
                 }
                 // The 5 s grace only applies to GNSS-started loops: a BLE-route Lock needs the
                 // fresh confirming reading on EVERY attempt, including the first one.
@@ -1659,6 +1719,16 @@ class ProximityController internal constructor(
                 // dropped; GNSS could not confirm, so nothing locked the car).
                 val cloudStatusLocked = verifyCloudLock(reason,
                     bleProofAtMs = if (reason == "ble-departure") departureProofAtMs else 0L)
+                // Plan H5: the user's manual Lock (or the car's own, handled there) ended this epoch
+                // meanwhile: nothing left to warn about.
+                if (!armedUnlocked) {
+                    Logx.d("prox", "$reason: the epoch ended during the cloud fallback -> no warning")
+                    lockJob = null
+                    return@launch
+                }
+                // Plan H5: the car's own "locked" push since this Lock started is the confirmation
+                // (its self-lock handler stands aside while a Lock runs).
+                val reportedLocked = lastCarLockedReportAtMs >= lockStartedAtMs
                 if (reason == "ble-departure") {
                     clearBleDeparture()
                     Logx.w("prox", "ble departure route suspended for this epoch after unconfirmed Lock")
@@ -1668,7 +1738,7 @@ class ProximityController internal constructor(
                 // A "locked" report newer than our own unlock is a lock after it - also when the car
                 // was already locked (fob, handle) before this cloud Lock (simulator F40: a false
                 // "not locked" alarm because the cloud had nothing newer than this Lock to report).
-                val freshCloudLocked = cloudStatusLocked && verifyFreshLockStatus(
+                val freshCloudLocked = reportedLocked || cloudStatusLocked && verifyFreshLockStatus(
                     if (unlockObservedAtMs > 0L) minOf(unlockObservedAtMs, lockStartedAtMs) else lockStartedAtMs)
                 // This outcome is the warning for this Lock; a waiting link-loss alert must not
                 // override it (it would sound after a cloud-confirmed Lock, or sound twice).
@@ -1687,7 +1757,8 @@ class ProximityController internal constructor(
                     unverifiedLockAlertRaised = false
                     alerts.clear()
                     alerts.carLocked()
-                    Logx.w("prox", "$reason: locked via cloud; a newer cloud report confirms it")
+                    Logx.w("prox", if (reportedLocked) "$reason: locked; the car reports it (status push)"
+                        else "$reason: locked via cloud; a newer cloud report confirms it")
                     _state.value = _state.value.copy(lastAction = "$reason · locked via cloud ✓")
                 } else if (cloudLockWithheldUnverified && userBackAtCar()) {
                     // The cloud Lock was withheld because the departure no longer held, and the
@@ -1755,8 +1826,16 @@ class ProximityController internal constructor(
                     // return while the radio is down (third review F2/F4). Exception: a BLE proof
                     // of at most [BLE_PROOF_CLOUD_MS] (walking, very deep far) - too short a time
                     // to be back at the car from where the link gave out.
-                    departure = {
-                        val bleProofFresh = bleProofAtMs != 0L && clock.wallMs() - bleProofAtMs <= BLE_PROOF_CLOUD_MS
+                    departure = departure@{
+                        // Plan H6/K1: a reading at the car since the proof, or right now, vetoes it.
+                        val fresh = if (ble.state.value == DkBleManager.State.SESSION_READY)
+                            ble.pollRemoteRssi()?.also { noteFreshReading(it) } else null
+                        lockVeto(fresh)?.let { why ->
+                            Logx.w("prox", "$reason: cloud Lock vetoed - $why")
+                            return@departure false
+                        }
+                        val bleProofFresh = bleProofAtMs != 0L && clock.wallMs() - bleProofAtMs <= BLE_PROOF_CLOUD_MS &&
+                            lastStrongNearAtMs < bleProofAtMs
                         if (bleProofFresh) Logx.d("prox", "$reason: cloud Lock backed by a fresh BLE departure proof")
                         bleProofFresh || confirmPhysicalDeparture()
                     },
@@ -1984,6 +2063,15 @@ class ProximityController internal constructor(
         // walk-away lock is worth more (per the user). Was 30s, which missed the connected window.
         private const val ARMED_IDLE_MAX_MS = 3_000L
         private const val SELF_LOCK_SETTLE_MS = 1_500L
+        /** Plan K1: a strong reading this recent vetoes an automatic Lock. */
+        private const val LOCK_VETO_RECENT_STRONG_MS = 6_000L
+        /** Plan K1: a rise of this much over the readings 4-8 s earlier = walking back to the car. */
+        private const val LOCK_VETO_RISE_DB = 6
+        private const val LOCK_VETO_RISE_FROM_MS = 4_000L
+        private const val LOCK_VETO_RISE_TO_MS = 8_000L
+        private const val RECENT_READINGS_MS = 15_000L
+        /** Plan K6: an unlock loop gives up after this long (a retry needs fresh near evidence anyway). */
+        private const val UNLOCK_LOOP_MAX_MS = 20_000L
         /** A persisted "car open" record older than this is not restored (the car may be anywhere). */
         private const val RESTORE_MAX_AGE_MS = 24 * 60 * 60 * 1_000L
         private const val FAR_NO_MOTION_RETRY_MS = 60_000L
