@@ -56,6 +56,7 @@ class ProximityController internal constructor(
     private val alerts: ProximityAlerts,
     private val departureLocationSource: DepartureLocator,
     private val wakeLocks: SafetyWakeLocks,
+    private val stateStore: ProximityStateStore = ProximityStateStore.None,
 ) {
     constructor(
         appContext: android.content.Context,
@@ -69,7 +70,7 @@ class ProximityController internal constructor(
         cloudLockSnapshot: suspend () -> CloudLockSnapshot? = { null },
     ) : this(store::current, ble, motion, scope, cloudLock, cloudIsLocked, cloudLockSnapshot,
         SystemProximityClock, AndroidProximityAlerts(appContext), DepartureLocationSource(appContext),
-        AndroidSafetyWakeLocks(appContext))
+        AndroidSafetyWakeLocks(appContext), SharedPrefsProximityStateStore(appContext))
 
     enum class Zone { UNKNOWN, FAR, NEAR }
     enum class Phase { PASSIVE, CONNECTING, MONITORING }
@@ -115,9 +116,19 @@ class ProximityController internal constructor(
     private var lastPingMs = 0L
 
     // Hysteresis latch: true once the car has CONFIRMED our auto-unlock (next auto action is a lock).
-    private var armedUnlocked = false
+    // Persisted on every change (plan K2): a new process restores it, see [start].
+    private var armedUnlockedState = false
+    private var armedUnlocked: Boolean
+        get() = armedUnlockedState
+        set(value) {
+            if (armedUnlockedState == value) return
+            armedUnlockedState = value
+            runCatching { stateStore.save(ProximityStateStore.Saved(value, clock.wallMs(), lastUnlockSource)) }
+        }
     /** Read-only view for the simulator's oracles: does the app believe the car is open (armed)? */
     internal val believesCarUnlocked: Boolean get() = armedUnlocked
+    /** Wall time of the car's latest "locked" status push (any session); a Lock in flight counts it. */
+    private var lastCarLockedReportAtMs = 0L
     // A new unlock can be followed by a quiet walk-away before the car emits another status frame.
     private var postUnlockFastUntilElapsedMs = 0L
     // Time-based evidence gate. This owns arrival/departure confirmation so neither the fast RSSI
@@ -243,9 +254,11 @@ class ProximityController internal constructor(
         clearBleDeparture()
         pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
         unverifiedLockAlertRaised = false
-        // Keep armedUnlocked as-is across start/stop toggles within a session isn't meaningful;
-        // reset so a fresh monitor starts from a known state.
-        armedUnlocked = false
+        // A fresh monitor starts from a known state; a car left open by this app is restored below
+        // from the persisted latch (plan K2) - resetting here must not erase that record.
+        val restore = runCatching { stateStore.load() }.getOrNull()
+            ?.takeIf { it.armedUnlocked && clock.wallMs() - it.atWallMs in 0..RESTORE_MAX_AGE_MS }
+        armedUnlockedState = false
         resetLinkedWatch()
         postUnlockFastUntilElapsedMs = 0L
         decisionPolicy.resetLocked()
@@ -271,6 +284,16 @@ class ProximityController internal constructor(
         vehicleStatusJob?.cancel()
         vehicleStatusJob = scope.launch { ble.session.vehicleStatus.collect { onVehicleStatus(it) } }
         Logx.d("prox", "monitor start (distance+trend hysteresis; rides keep-alive session)")
+        if (restore != null) {
+            // The app (re)started while it believed the car open after its own unlock: watch the
+            // departure again. The car's first status of the next key session is the truth (a "3"
+            // ends it, see CarSelfLockDetector.LOCKED_WHILE_AWAY); without a link the link-loss
+            // checks (cloud, alarm) apply as before.
+            lastUnlockSource = restore.source
+            Logx.w("prox", "app restarted while the car was open (unlock ${(clock.wallMs() - restore.atWallMs) / 1000} s ago, " +
+                "source=${restore.source.ifBlank { "?" }}) -> departure watch restored")
+            recordUnlockConfirmed("restored after app restart", restored = true)
+        }
         monitorJob = scope.launch {
             while (isActive) {
                 farAsleep = false   // onSample sets it true only for FAR + still; cleared each tick
@@ -427,7 +450,7 @@ class ProximityController internal constructor(
     /** The cloud acknowledged the command, but physical actuation remains unknown. */
     fun onExternalCloudLockAccepted() = onManualLockAcknowledged("manual cloud control", bleConfirmed = false)
 
-    private fun onManualLockAcknowledged(source: String, bleConfirmed: Boolean) {
+    private fun onManualLockAcknowledged(source: String, bleConfirmed: Boolean, away: Boolean = false) {
         scope.launch {
             departureAnchorJob?.cancel(); departureAnchorJob = null; departureAnchor = null
             linkDepartureJob?.cancel(); linkDepartureJob = null
@@ -458,6 +481,7 @@ class ProximityController internal constructor(
                 armedUnlocked = false
                 resetLinkedWatch()
                 decisionPolicy.onManualLockConfirmed()
+                if (away) decisionPolicy.onLockedWhileAway()
                 if (selfLockReopenPending && source == "car self-lock") {
                     decisionPolicy.armSelfLockReopen(clock.wallMs(), (gattEma ?: -100.0).toInt())
                     Logx.d("prox", "car relocked soon after our unlock -> walking up to the door reopens once")
@@ -473,8 +497,8 @@ class ProximityController internal constructor(
         }
     }
 
-    private fun recordUnlockConfirmed(source: String) {
-        lastUnlockSource = source
+    private fun recordUnlockConfirmed(source: String, restored: Boolean = false) {
+        if (!restored) lastUnlockSource = source
         manualCloudLockCheck?.cancel(); manualCloudLockCheck = null
         resetLinkedWatch()
         val now = clock.wallMs()
@@ -494,8 +518,11 @@ class ProximityController internal constructor(
         relockRecoveryPending = false; relockProbeJob?.cancel(); relockProbeJob = null
         pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
         unverifiedLockAlertRaised = false
-        alerts.clear()
-        ble.noteUnlockConfirmed()
+        // A restore keeps a sounding alarm (it is about this very car) and grants no start-key window.
+        if (!restored) {
+            alerts.clear()
+            ble.noteUnlockConfirmed()
+        }
         carSelfLock.onUnlockConfirmed(unlockElapsed)
         stationaryFar.reset()
         idleFarStreak = 0; idleFastWindows = 0; deepFarAtLinkLossMs = 0L
@@ -555,6 +582,7 @@ class ProximityController internal constructor(
     private fun onSessionDown() {
         if (linkLostAtMs == 0L) {
             decisionPolicy.onLinkEnded()
+            carSelfLock.onLinkLost()
             linkLostAtMs = clock.wallMs()
             linkLostNearCar = lostRssi?.let { it >= config().sensitivityUnlockRssi } ?: false
             deepFarAtLinkLossMs = stationaryFar.deepFarForMs(linkLostAtMs)
@@ -826,6 +854,7 @@ class ProximityController internal constructor(
     private fun onVehicleStatus(status: ObservedVehicleStatus) {
         val previous = lastVehicleStatus
         lastVehicleStatus = status
+        if (status.centralLockCode == CarSelfLockDetector.LOCKED) lastCarLockedReportAtMs = clock.wallMs()
         if (previous != null && previous.sessionGeneration == status.sessionGeneration &&
             (previous.centralLockCode == 1 || previous.centralLockCode == 2) && status.centralLockCode == 3)
             alerts.carLocked()
@@ -837,6 +866,12 @@ class ProximityController internal constructor(
                 if (!armedUnlocked || lockJob?.isActive == true || !_state.value.running) return@launch
                 handleCarSelfLock(status)
             }
+            CarSelfLockDetector.Event.LOCKED_WHILE_AWAY -> scope.launch {
+                delay(SELF_LOCK_SETTLE_MS)
+                // A Lock in flight takes the report as its confirmation (lastCarLockedReportAtMs).
+                if (!armedUnlocked || lockJob?.isActive == true || !_state.value.running) return@launch
+                handleLockedWhileAway(status)
+            }
             CarSelfLockDetector.Event.REOPENED -> scope.launch {
                 // Our own Unlock's "1" also precedes its receipt: only an Unlock we did not send counts.
                 delay(SELF_LOCK_SETTLE_MS)
@@ -846,6 +881,25 @@ class ProximityController internal constructor(
                 onExternalUnlockConfirmed("car reopened")
             }
         }
+    }
+
+    /**
+     * Plan H1: the car reports locked at the start of a new key session while the app believed it
+     * open - locked by fob, handle, another phone or the car itself while the link was down. The
+     * phone at the car (strong reading) means a lock at the car: latch like a manual Lock, no reopen
+     * right away. Away from the car it is a plain locked car: the next walk up is a normal arrival.
+     */
+    private suspend fun handleLockedWhileAway(status: ObservedVehicleStatus) {
+        departureAlarmJob?.cancel(); departureAlarmJob = null
+        lockConfirmationJob?.cancel(); lockConfirmationJob = null
+        val fresh = if (ble.state.value == DkBleManager.State.SESSION_READY) ble.pollRemoteRssi() else null
+        if (!armedUnlocked) return
+        val atCar = fresh != null && fresh >= STRONG_NEAR_DIAGNOSTIC_RSSI
+        com.openzeekr.app.remote.LocalLockEvidence.onKeyConfirmed(locked = true)
+        Logx.w("prox", "car reports locked at the start of a new key session (central=${status.centralLockCode}, " +
+            "rssi=${fresh ?: "?"}) while the app believed it open -> locked while the link was down; " +
+            if (atCar) "phone at the car: manual-Lock latch" else "phone away: next walk up is a normal arrival")
+        onManualLockAcknowledged("car locked while the link was down", bleConfirmed = true, away = !atCar)
     }
 
     private fun handleCarSelfLock(status: ObservedVehicleStatus) {
@@ -1611,7 +1665,11 @@ class ProximityController internal constructor(
                 }
                 // Repeated cloud status can be cached; it cannot replace the missing BLE receipt.
                 // Only a cloud report newer than this Lock attempt keeps the warning silent.
-                val freshCloudLocked = cloudStatusLocked && verifyFreshLockStatus(lockStartedAtMs)
+                // A "locked" report newer than our own unlock is a lock after it - also when the car
+                // was already locked (fob, handle) before this cloud Lock (simulator F40: a false
+                // "not locked" alarm because the cloud had nothing newer than this Lock to report).
+                val freshCloudLocked = cloudStatusLocked && verifyFreshLockStatus(
+                    if (unlockObservedAtMs > 0L) minOf(unlockObservedAtMs, lockStartedAtMs) else lockStartedAtMs)
                 // This outcome is the warning for this Lock; a waiting link-loss alert must not
                 // override it (it would sound after a cloud-confirmed Lock, or sound twice).
                 pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
@@ -1660,9 +1718,10 @@ class ProximityController internal constructor(
     }
 
     private suspend fun verifyFreshLockStatus(lockStartedAtMs: Long): Boolean {
-        return withTimeoutOrNull(30_000L) {
-            repeat(5) {
-                delay(2_000L)
+        // The cloud reports a lock seconds to tens of seconds late: look for ~35 s before alarming.
+        return withTimeoutOrNull(45_000L) {
+            repeat(10) {
+                delay(3_000L)
                 val first = runCatching { cloudLockSnapshot() }.getOrNull()
                 delay(400L)
                 val second = runCatching { cloudLockSnapshot() }.getOrNull()
@@ -1925,6 +1984,8 @@ class ProximityController internal constructor(
         // walk-away lock is worth more (per the user). Was 30s, which missed the connected window.
         private const val ARMED_IDLE_MAX_MS = 3_000L
         private const val SELF_LOCK_SETTLE_MS = 1_500L
+        /** A persisted "car open" record older than this is not restored (the car may be anywhere). */
+        private const val RESTORE_MAX_AGE_MS = 24 * 60 * 60 * 1_000L
         private const val FAR_NO_MOTION_RETRY_MS = 60_000L
         private const val FAR_NO_MOTION_MAX_ATTEMPTS = 2
         private const val CORROBORATION_AFTER_LOSS_MS = 120_000L

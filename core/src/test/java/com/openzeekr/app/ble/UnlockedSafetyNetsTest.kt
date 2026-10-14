@@ -13,7 +13,8 @@ class UnlockedSafetyNetsTest {
         // The "1" arrives ~20 ms BEFORE the Unlock receipt and must still count.
         val d = CarSelfLockDetector()
         assertEquals(CarSelfLockDetector.Event.NONE, d.observe(s(5, 3), 999_500L))          // before our Unlock: ignored
-        assertEquals(CarSelfLockDetector.Event.NONE, d.observe(s(5, 1), 999_980L))
+        // Our own Unlock's early "1": REOPENED, which the controller ignores once its receipt arms it.
+        assertEquals(CarSelfLockDetector.Event.REOPENED, d.observe(s(5, 1), 999_980L))
         d.onUnlockConfirmed(1_000_000L)
         assertEquals(CarSelfLockDetector.Event.SELF_LOCK, d.observe(s(5, 3), 1_122_000L))
         assertEquals("only once", CarSelfLockDetector.Event.NONE, d.observe(s(5, 3), 1_123_000L))
@@ -30,11 +31,25 @@ class UnlockedSafetyNetsTest {
         assertEquals("within 2 s of the Unlock", CarSelfLockDetector.Event.NONE, e.observe(s(1, 3), 1_500L))
     }
 
-    @Test fun aNewSessionNeedsItsOwnTransition() {
+    @Test fun aLockedFirstStatusOfANewSessionMeansItWasLockedWhileTheLinkWasDown() {
+        // Plan H1 (simulator F14/F40): locked by fob/handle or by the car itself while the link was
+        // down; the app must stop believing "open" (false alarms, no approach unlock).
         val d = CarSelfLockDetector()
         d.onUnlockConfirmed(0L)
         assertEquals(CarSelfLockDetector.Event.NONE, d.observe(s(1, 1), 3_000L))
-        assertEquals("first status after reconnect", CarSelfLockDetector.Event.NONE, d.observe(s(2, 3), 60_000L))
+        d.onLinkLost()
+        assertEquals(CarSelfLockDetector.Event.LOCKED_WHILE_AWAY, d.observe(s(2, 3), 60_000L))
+        assertEquals("once", CarSelfLockDetector.Event.NONE, d.observe(s(2, 3), 61_000L))
+    }
+
+    @Test fun withoutALinkLossALockedStatusIsNotLockedWhileAway() {
+        // The session of our own Unlock (a stale 3), or a status right after the Unlock: no news.
+        val d = CarSelfLockDetector()
+        d.onUnlockConfirmed(10_000L)
+        assertEquals(CarSelfLockDetector.Event.NONE, d.observe(s(2, 3), 15_000L))
+        val e = CarSelfLockDetector()
+        e.onUnlockConfirmed(10_000L); e.onLinkLost()
+        assertEquals("within 2 s of the Unlock", CarSelfLockDetector.Event.NONE, e.observe(s(3, 3), 11_000L))
     }
 
     @Test fun ourOwnLockIsNotASelfLock() {
@@ -65,7 +80,8 @@ class UnlockedSafetyNetsTest {
         // parked 18:59:53: 2, then 1. The self-lock handling calls onLockedByUs() as well.
         val d = CarSelfLockDetector()
         d.observe(s(8, 3), 0L)
-        assertEquals(CarSelfLockDetector.Event.NONE, d.observe(s(8, 1), 400L))
+        // Our own Unlock's early "1" (REOPENED, ignored by the controller once the receipt arms it).
+        assertEquals(CarSelfLockDetector.Event.REOPENED, d.observe(s(8, 1), 400L))
         d.onUnlockConfirmed(200L)
         assertEquals(CarSelfLockDetector.Event.SELF_LOCK, d.observe(s(8, 3), 247_000L))
         d.onLockedByUs()                                   // handleCarSelfLock -> onExternalLockConfirmed
@@ -89,10 +105,16 @@ class UnlockedSafetyNetsTest {
         assertEquals(CarSelfLockDetector.Event.NONE, d.observe(s(1, 1), 60_020L))
     }
 
-    @Test fun noReopenEventWithoutAPriorSelfLock() {
+    @Test fun anUnknownStartCountsAsLockedSoACarFoundOpenReArms() {
+        // Plan K2 (simulator F37): after an app restart the car is found open -> REOPENED re-arms the
+        // departure watch. Our own Unlock's early "1" also yields REOPENED; the controller ignores it
+        // because its receipt arms the latch within the settle delay.
         val d = CarSelfLockDetector()
-        d.observe(s(1, 3), 0L)
-        assertEquals(CarSelfLockDetector.Event.NONE, d.observe(s(1, 1), 1_000L))
+        assertEquals(CarSelfLockDetector.Event.REOPENED, d.observe(s(1, 1), 0L))
+        val e = CarSelfLockDetector()
+        e.observe(s(1, 3), 0L)
+        assertEquals(CarSelfLockDetector.Event.REOPENED, e.observe(s(1, 1), 1_000L))
+        assertEquals("once", CarSelfLockDetector.Event.NONE, e.observe(s(1, 1), 2_000L))
     }
 
     @Test fun stationaryFarAlarmsOnceAfterAMinuteOfConsistentlyDeepReadings() {

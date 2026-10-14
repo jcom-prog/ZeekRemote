@@ -17,15 +17,24 @@ data class ObservedVehicleStatus(val sessionGeneration: Long, val centralLockCod
  * This only ever stops alarms/departure tracking; it never authorizes an Unlock or Lock.
  */
 internal class CarSelfLockDetector {
-    enum class Event { NONE, SELF_LOCK, REOPENED }
+    enum class Event { NONE, SELF_LOCK, REOPENED, LOCKED_WHILE_AWAY }
 
     private var generation = -1L
     private var lastCode = -1
     private var unlockAtMs = -1L
-    /** The app believes the car is locked: its own Lock or the car's self-lock (also a speed lock). */
-    private var believedLocked = false
+    /**
+     * The app believes the car is locked: its own Lock or the car's self-lock (also a speed lock).
+     * An unknown state (a new process) counts as locked, so a car found open re-arms the departure
+     * watch (plan K2, simulator F37: after an app restart the open car was never watched again).
+     */
+    private var believedLocked = true
 
-    fun onUnlockConfirmed(nowMs: Long) { unlockAtMs = nowMs; believedLocked = false }
+    /** The key link went down after our Unlock: the next session's first status is news. */
+    private var linkLostSinceUnlock = false
+
+    fun onUnlockConfirmed(nowMs: Long) { unlockAtMs = nowMs; believedLocked = false; linkLostSinceUnlock = false }
+
+    fun onLinkLost() { if (unlockAtMs >= 0L) linkLostSinceUnlock = true }
 
     fun onLockedByUs() { unlockAtMs = -1L; believedLocked = true }
 
@@ -48,6 +57,16 @@ internal class CarSelfLockDetector {
         if (believedLocked && unlockedNow && !isUnlocked(previous)) {
             believedLocked = false
             return Event.REOPENED
+        }
+        // Plan H1: the first status of a new session says LOCKED while the app believes the car is
+        // open - it was locked while the link was down (fob, handle, another phone, the car itself).
+        // Without this the app kept "open": false alarms, and no approach unlock (simulator F14, F40).
+        if (!believedLocked && linkLostSinceUnlock && previous == -1 && status.centralLockCode == LOCKED &&
+            unlockAtMs >= 0L && nowMs - unlockAtMs >= MIN_AFTER_UNLOCK_MS) {
+            unlockAtMs = -1L
+            believedLocked = true
+            linkLostSinceUnlock = false
+            return Event.LOCKED_WHILE_AWAY
         }
         if (unlockAtMs < 0L || nowMs - unlockAtMs < MIN_AFTER_UNLOCK_MS) return Event.NONE
         if (isUnlocked(previous) && status.centralLockCode == LOCKED) {

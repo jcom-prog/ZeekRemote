@@ -308,6 +308,12 @@ internal class ProximityDecisionPolicy {
         selfLockReopenReadings = 0
     }
 
+    /**
+     * Plan H1: the car was locked while the link was down and the phone is not at the car. A plain
+     * locked car with the user away: the next walk up is a normal arrival (no manual-Lock latch).
+     */
+    fun onLockedWhileAway() = resetLocked()
+
     /** Confirmed manual lock shares the departure latch. */
     fun onManualLockConfirmed() {
         onDepartureLockStarted()

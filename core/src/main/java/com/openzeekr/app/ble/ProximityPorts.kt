@@ -70,6 +70,33 @@ internal interface DepartureLocator {
                                   bleCorroborated: () -> Boolean = { false }): Boolean
 }
 
+/**
+ * Survives a process restart (plan K2): the app's belief that the car is open after an unlock.
+ * Field + simulator F37: an update, One UI or a crash restarted the app while the car was open, the
+ * new process believed "locked" and neither locked nor alarmed when the user walked away.
+ */
+interface ProximityStateStore {
+    data class Saved(val armedUnlocked: Boolean, val atWallMs: Long, val source: String)
+    fun load(): Saved?
+    fun save(saved: Saved)
+
+    object None : ProximityStateStore {
+        override fun load(): Saved? = null
+        override fun save(saved: Saved) {}
+    }
+}
+
+/** Plain app-private preferences: no secrets, written synchronously so a kill right after keeps it. */
+internal class SharedPrefsProximityStateStore(context: android.content.Context) : ProximityStateStore {
+    private val prefs = context.getSharedPreferences("proximity_state", android.content.Context.MODE_PRIVATE)
+    override fun load(): ProximityStateStore.Saved? = if (!prefs.contains("armed")) null else
+        ProximityStateStore.Saved(prefs.getBoolean("armed", false), prefs.getLong("at", 0L), prefs.getString("source", "") ?: "")
+    override fun save(saved: ProximityStateStore.Saved) {
+        prefs.edit().putBoolean("armed", saved.armedUnlocked).putLong("at", saved.atWallMs)
+            .putString("source", saved.source).commit()
+    }
+}
+
 /** Bounded partial wakelocks for safety checks. */
 interface SafetyWakeLocks {
     fun acquire(timeoutMs: Long): Any?

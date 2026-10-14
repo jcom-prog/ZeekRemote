@@ -802,6 +802,12 @@ internal class SimWorld(
     // Lock locked a car that had ignored two key Locks); it takes ~2 s and reports its status.
     var btOn = true; private set
     var appAlive = true; private set
+    /** App-private storage: survives a process restart (SharedPreferences in the app). */
+    val stateStore = object : com.openzeekr.app.ble.ProximityStateStore {
+        var saved: com.openzeekr.app.ble.ProximityStateStore.Saved? = null
+        override fun load() = saved
+        override fun save(saved: com.openzeekr.app.ble.ProximityStateStore.Saved) { this.saved = saved }
+    }
     private var appScope = CoroutineScope(SupervisorJob() + appDispatcher)
     private fun newController() = ProximityController(
         config = { config }, ble = link, motion = motion, scope = appScope,
@@ -818,6 +824,7 @@ internal class SimWorld(
         cloudLockSnapshot = { if (System.getenv("SIM_NO_CLOUD_STATUS") == "1" || cloudDown) null
             else car.cloudView().let { com.openzeekr.app.ble.CloudLockSnapshot(it.first, it.second) } },
         clock = clock, alerts = alerts, departureLocationSource = locator, wakeLocks = wakeLocks,
+        stateStore = stateStore,
     )
     var controller = newController(); private set
 
