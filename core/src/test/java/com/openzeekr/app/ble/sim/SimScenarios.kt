@@ -1,7 +1,12 @@
 package com.openzeekr.app.ble.sim
 
+import com.openzeekr.app.ble.sim.Leg.Bluetooth
+import com.openzeekr.app.ble.sim.Leg.BluetoothOff
+import com.openzeekr.app.ble.sim.Leg.CarUnlocksItself
 import com.openzeekr.app.ble.sim.Leg.Fidget
+import com.openzeekr.app.ble.sim.Leg.LockByOther
 import com.openzeekr.app.ble.sim.Leg.Mark
+import com.openzeekr.app.ble.sim.Leg.ProcessRestart
 import com.openzeekr.app.ble.sim.Leg.ManualLock
 import com.openzeekr.app.ble.sim.Leg.OpenDoor
 import com.openzeekr.app.ble.sim.Leg.ReopenByOther
@@ -19,11 +24,15 @@ import com.openzeekr.app.ble.sim.Leg.WalkPeak
  *   expect-stay-locked     after a Lock (manual or the car's own) no unlock while near / at 10 m
  *   expect-unlocked-by-end the car is open when the segment ends (user back at the car)
  *   expect-locked-by-end   the car is locked when the segment ends (user gone)
+ *   expect-alarm           the car cannot be locked (key refused, cloud down): the user must be alarmed
  * Global invariants are checked over the whole run (SimOracle).
  */
 internal data class Scenario(val family: String, val description: String, val startM: Double, val legs: List<Leg>,
                     val gnssAccuracyM: Float? = 4f, val carRefusesKeyLock: Boolean = false,
-                    val keyEdgeRssi: Double? = null)
+                    val keyEdgeRssi: Double? = null, val cloudDown: Boolean = false)
+
+/** A field incident and the simulator families that must reproduce its situation (fase 0, 14/10). */
+internal data class FieldCase(val id: String, val what: String, val families: List<String>, val note: String = "")
 
 internal object SimScenarios {
     private val F20_PEAK_DB = System.getenv("SIM_F20_PEAK_DB")?.toDouble() ?: 15.0
@@ -95,7 +104,7 @@ internal object SimScenarios {
         // short stop at the back door (~1.5 s), then inside (walls). The car must lock.
         Scenario("F22 home: stops at gate and door", "walk 14 m, gate 4.5 s, 18 m, door 1.5 s, inside", 30.0,
             approachAndOpen() + listOf(Mark("expect-lock"), Walk(14.0), Stand(4_500, Facing.AWAY), Walk(18.0),
-                Stand(1_500, Facing.AWAY), Walk(22.0), Stand(150_000, Facing.AWAY, -10.0))),
+                Stand(1_500, Facing.AWAY), Walk(22.0), Stand(150_000, Facing.AWAY, -10.0, indoor = true))),
         // Point 3 of 0.2.5: the key Lock fails and there is no GNSS (garage, indoors): only the cloud
         // Lock backed by a fresh BLE departure proof can lock the car.
         Scenario("F23 key Lock fails, no GNSS", "normal departure, car ignores key Locks, no GNSS", 30.0,
@@ -105,7 +114,7 @@ internal object SimScenarios {
         // the open with the phone in hand (+6 dB line of sight), 20 m to the garden gate ~3 m from
         // the car, gate ~25 s, then the door. No unlock at the house; open before the door.
         Scenario("F24 house door, gate, car", "inside 25 m, front door 20 s (LOS), gate at 4 m 25 s, door", 25.0,
-            listOf(Stand(150_000, Facing.SIDE, -12.0), Mark("expect-stay-locked"), Fidget(20_000, 6.0),
+            listOf(Stand(150_000, Facing.SIDE, -12.0, indoor = true), Mark("expect-stay-locked"), Fidget(20_000, 6.0),
                 Mark("expect-unlock"), Walk(4.0), Fidget(25_000), Walk(1.0), Stand(10_000))),
         // The same with a long stop at the gate (2.5 min): the car relocks itself; walking up to the
         // door must open it again (0.2.6 B).
@@ -137,6 +146,84 @@ internal object SimScenarios {
         // the alarm and the user locked from the app. The hub step counter (0.2.17) must lock it.
         Scenario("F29 walk away, wait at 20 m", "open, away 35 m, back to 20 m, stand 2 min", 30.0,
             approachAndOpen() + listOf(Mark("expect-lock"), Walk(35.0), Walk(20.0), Stand(120_000))),
+
+        // ---------------- fase 0 (14/10): situations the field showed or will show ----------------
+        Scenario("F30 errand 1 min", "open, walk 40 m, 1 min there, back to the car", 30.0,
+            approachAndOpen() + listOf(Mark("expect-lock"), Walk(40.0), Stand(60_000, Facing.AWAY),
+                Mark("expect-unlock"), Walk(1.0), Stand(10_000))),
+        Scenario("F31 wait 4 min at 10 m, then go", "car locked; wait 4 min at 10 m, then walk to the door", 30.0,
+            listOf(Walk(10.0), Mark("expect-stay-locked"), Stand(240_000, Facing.SIDE), Mark("expect-unlock"),
+                Walk(1.0), Stand(10_000))),
+        Scenario("F32 back 5 s after reaching 25 m", "open, walk 25 m, turn straight back to the door", 30.0,
+            approachAndOpen() + listOf(Mark("expect-lock"), Walk(25.0), Stand(5_000, Facing.AWAY),
+                Mark("expect-unlock"), Walk(1.0), Stand(15_000))),
+        Scenario("F33 pass-by at 2 m", "car locked; walk past the car at 2 m without stopping", 30.0,
+            listOf(Mark("-"), Walk(2.0), Walk(30.0), Mark("expect-locked-by-end"), Stand(120_000))),
+        Scenario("F34 jog away", "open, jog 80 m away at 3.5 m/s", 30.0,
+            approachAndOpen() + listOf(Mark("expect-lock"), Walk(80.0, 3.5), Stand(120_000))),
+        Scenario("F35 stairwell at 15 m", "open, walk 15 m into a stairwell/garage (deep shadow, no GNSS)", 30.0,
+            approachAndOpen() + listOf(Mark("expect-lock"), Walk(15.0), Fidget(60_000, -20.0),
+                Stand(150_000, Facing.AWAY, -25.0, indoor = true))),
+        Scenario("F36 loading the boot 3x", "open, three trips of 3 m with the body between phone and car", 30.0,
+            approachAndOpen() + listOf(Mark("expect-stay-unlocked"),
+                Walk(3.0, 0.8), Stand(15_000, Facing.AWAY, -12.0), Walk(1.0, 0.8), Stand(5_000),
+                Walk(3.0, 0.8), Stand(15_000, Facing.AWAY, -12.0), Walk(1.0, 0.8), Stand(5_000),
+                Walk(3.0, 0.8), Stand(15_000, Facing.AWAY, -12.0), Walk(1.0, 0.8), Stand(10_000))),
+        // Plan K2: the app process dies while the car is open (update, One UI, crash).
+        Scenario("F37 app restart while open, then away", "open, app restarts at the car, walk away 30 m", 30.0,
+            approachAndOpen() + listOf(ProcessRestart(4_000L), Stand(10_000), Mark("expect-lock"), Walk(30.0),
+                Stand(150_000))),
+        Scenario("F38 app restart while away, then approach", "car locked, app restarts at 30 m, approach", 30.0,
+            listOf(Stand(10_000), ProcessRestart(4_000L), Stand(10_000), Mark("expect-unlock"), Walk(1.0), Stand(10_000))),
+        Scenario("F39 Bluetooth off 60 s at the car, then away", "open, BT off 60 s at the car, on, walk away", 30.0,
+            approachAndOpen() + listOf(BluetoothOff(60_000L), Stand(10_000), Mark("expect-lock"), Walk(30.0),
+                Stand(150_000))),
+        // Plan H1: locked by hand while the link was down; the app still believes "open".
+        Scenario("F40 locked by hand while BT off, away, back", "open, BT off, lock by hand, 30 m away, BT on, back", 30.0,
+            approachAndOpen() + listOf(Bluetooth(false), Mark("-"), LockByOther, Walk(30.0), Stand(60_000, Facing.AWAY),
+                Bluetooth(true), Stand(20_000), Mark("expect-unlock"), Walk(1.0), Stand(10_000))),
+        // The key Lock is refused and the cloud is down: the only acceptable end is an alarm.
+        Scenario("F41 key Lock refused, cloud down", "normal departure; car refuses key Locks; cloud outage", 30.0,
+            approachAndOpen() + listOf(Mark("expect-alarm"), Walk(30.0), Stand(150_000)),
+            carRefusesKeyLock = true, cloudDown = true),
+        // Field 04/10 18:36-19:07: arrive by car, the car unlocks itself when parked, walk away.
+        Scenario("F42 drive in, car unlocks on parking, away", "phone in the car while driving; car unlocks itself; walk away", 2.0,
+            listOf(Mark("-"), PhoneInCar(60_000), CarUnlocksItself, OpenDoor, Stand(5_000), Mark("expect-lock"),
+                Walk(30.0), Stand(150_000))),
+    )
+
+    /** Every field incident 28/09-14/10 and the families that reproduce it (incident history, 14/10). */
+    val fieldCases: List<FieldCase> = listOf(
+        FieldCase("#1 28/09 0.1.38", "auto-Lock with the user beside the car", listOf("F05", "F06", "F36")),
+        FieldCase("#2 28-30/09 0.1.40-49", "departure never locks / locks 94 s late", listOf("F01", "F04", "F09")),
+        FieldCase("#3 30/09 0.1.46", "no unlock on approach after a relock", listOf("F02", "F16")),
+        FieldCase("#4 30/09-02/10", "first unlock only at the door (AR lag)", listOf("F07", "F17", "F01")),
+        FieldCase("#5 02/10 0.1.52", "tile showed Locked while open", listOf(), "UI - unit test LockView"),
+        FieldCase("#6 02/10 0.1.53", "walked away, no alarm", listOf("F21", "F23", "F41")),
+        FieldCase("#7 02/10 0.1.54", "stop-and-go approach, no unlock", listOf("F12", "F24")),
+        FieldCase("#8 02/10 0.1.55", "no reopen on return after a manual Lock", listOf("F12", "F18")),
+        FieldCase("#9 03/10 0.1.57", "cloud token expired", listOf(), "cloud - unit test SessionRenewal"),
+        FieldCase("#10 03/10 0.1.59", "false alarm; the car's own lock ignored", listOf("F02", "F16", "F25")),
+        FieldCase("#11 03/10 0.1.60-63", "return after a Lock opens late or not", listOf("F02", "F16", "F12", "F19")),
+        FieldCase("#12 04/10 0.1.64", "reopened at 10 m after a manual Lock", listOf("F03", "F18", "F13")),
+        FieldCase("#13 04/10 0.1.65-66", "stays locked at the door / opens late", listOf("F19")),
+        FieldCase("#14 04/10 0.2.0", "garage: app thought locked; re-unlock from damping", listOf("F42", "F35")),
+        FieldCase("#15 04/10 0.2.1", "auto-Lock not executed; a peak reopened the car", listOf("F20", "F21")),
+        FieldCase("#16 05/10 0.2.2", "no auto-Lock (2 steps, GNSS clearance)", listOf("F29", "F04", "F22")),
+        FieldCase("#17 05/10 0.2.2", "key Lock acknowledged but not executed", listOf("F21", "F23", "F41")),
+        FieldCase("#18 05/10 0.2.3", "pass-by unlock at ~10 m, then no Lock", listOf("F11", "F33")),
+        FieldCase("#19 05/10 0.2.4", "gate and door stops: no Lock", listOf("F22")),
+        FieldCase("#20 06/10 0.2.5", "alarm storm, security sleep while open", listOf("F26", "F39", "F35")),
+        FieldCase("#21 04/10 0.2.0", "re-unlock after auto-Lock; sleep while open", listOf("F20", "F28")),
+        FieldCase("#22 09/10 0.2.5", "opened at ~25 m from the house door", listOf("F24")),
+        FieldCase("#23 09/10 0.2.5", "motion STILL 40 s: no proof, alarm", listOf("F22", "F29")),
+        FieldCase("#24 10/10 0.2.6", "phone in the car, key slept, car open", listOf("F26")),
+        FieldCase("#25 12/10 0.2.12", "passive start fails with phone in pocket", listOf(), "car side - needs snooplog"),
+        FieldCase("#26 12/10 0.2.12", "~35 s handshaking with another Zeekr", listOf(), "unit test OwnKeyNameFilter; multi-car sim planned"),
+        FieldCase("#27 12/10 0.2.12", "Lock 38 s late at the link edge", listOf("F27")),
+        FieldCase("#28 13/10 0.2.13", "no unlock on return (latch)", listOf("F28", "F32", "F30")),
+        FieldCase("#29 13/10 0.2.15", "status-133 storms at the edge of range", listOf("F07", "F17"), "stress: SIM_PRESENCE_EDGE=1"),
+        FieldCase("#30 14/10 0.2.16", "no auto-Lock (step detector silent)", listOf("F29", "F22", "F04")),
     )
 
     /** families x carry x motion profile x seeds. */
@@ -150,60 +237,117 @@ internal object SimScenarios {
 internal object SimOracle {
     data class Finding(val code: String, val atMs: Long, val distanceM: Double, val detail: String)
 
+    /** Safety: the car opens or locks wrongly, or is open with the user away and nobody knows. */
+    val SAFETY = setOf("LOCK_WHILE_NEAR", "LOCK_WHILE_RETURNING", "UNWANTED_LOCK_NEAR", "UNLOCK_WHILE_FAR",
+        "UNWANTED_UNLOCK", "UNLOCK_WHILE_LOITERING", "DEPARTURE_NO_LOCK_SILENT", "OPEN_FAR_NO_ALARM", "GONE_BUT_UNLOCKED")
+    fun tier(code: String) = if (code in SAFETY) "SAFETY" else "COMFORT"
+
     fun check(w: SimWorld): List<Finding> {
         val out = mutableListOf<Finding>()
         val ev = w.events
+        val samples = w.samples
         fun f(code: String, e: SimWorld.Event, detail: String = e.detail) = Finding(code, e.atMs, e.distanceM, detail)
+        fun sampleAt(t: Long) = samples.lastOrNull { it.atMs <= t }
+        fun belief(t: Long) = sampleAt(t)?.let { if (!it.appAlive) "app dead" else if (it.appBelievesUnlocked) "app: open" else "app: locked" } ?: "?"
 
         // Which key Locks were the user's own (manual)?
         val manualLockAt = ev.filter { it.kind == "USER_MANUAL_LOCK" }.map { it.atMs }
+        fun automatic(e: SimWorld.Event) = (e.kind == "KEY_LOCK_CMD" || e.kind == "CLOUD_LOCK_CMD") &&
+            manualLockAt.none { e.atMs - it in 0..2_000 }
         for (e in ev) {
-            if ((e.kind == "KEY_LOCK_CMD" || e.kind == "CLOUD_LOCK_CMD") && manualLockAt.none { e.atMs - it in 0..2_000 } &&
-                e.distanceM <= 3.0)
+            if (automatic(e) && e.distanceM <= 5.0)
                 out += f("LOCK_WHILE_NEAR", e, "automatic Lock at %.1f m".format(e.distanceM))
+            else if (automatic(e) && e.distanceM <= 15.0) {
+                // The user turned back: >= 3 m closer than 6 s earlier (plan K1).
+                val before = sampleAt(e.atMs - 6_000)
+                if (before != null && before.distanceM - e.distanceM >= 3.0)
+                    out += f("LOCK_WHILE_RETURNING", e, "automatic Lock at %.1f m while walking back (%.1f m 6 s earlier)".format(e.distanceM, before.distanceM))
+            }
             if (e.kind == "KEY_UNLOCK_CMD" && e.distanceM > 15.0)
                 out += f("UNLOCK_WHILE_FAR", e, "unlock at %.1f m".format(e.distanceM))
+            else if (e.kind == "KEY_UNLOCK_CMD" && e.distanceM >= 8.0) {
+                // Waiting nearby (>= 5 s without walking at 8-15 m) must never open the car.
+                val win = samples.filter { it.atMs in (e.atMs - 5_000)..e.atMs }
+                if (win.size >= 4 && win.none { it.moving } && win.all { it.distanceM >= 8.0 })
+                    out += f("UNLOCK_WHILE_LOITERING", e, "unlock at %.1f m while standing there".format(e.distanceM))
+            }
             // The key went to sleep with the phone at the car (field 10/10 16:47: the car then no
             // longer recognised the phone lying in it).
             if (e.kind == "SECURITY_SLEEP" && e.distanceM <= 2.0 &&
-                w.samples.filter { it.atMs in (e.atMs - 30 * 60_000L)..e.atMs }.any { it.distanceM > 2.0 })
+                samples.filter { it.atMs in (e.atMs - 30 * 60_000L)..e.atMs }.any { it.distanceM > 2.0 })
                 out += f("KEY_ASLEEP_AT_CAR", e, "security sleep at %.1f m".format(e.distanceM))
             if (e.kind == "ALARM" && e.detail.contains("car LOCKED"))
                 out += f("FALSE_ALARM_CAR_LOCKED", e)
             if (e.kind == "ALARM" && !e.detail.contains("car LOCKED")) {
                 // The user stayed at the car for the next 30 s: alarm for nothing.
-                val near = w.samples.filter { it.atMs in e.atMs..(e.atMs + 30_000) }.all { it.distanceM <= 4.0 }
+                val near = samples.filter { it.atMs in e.atMs..(e.atMs + 30_000) }.all { it.distanceM <= 4.0 }
                 if (near && e.distanceM <= 4.0) out += f("ALARM_WHILE_AT_CAR", e)
             }
         }
-        // Car open and the user >= 20 m away for 2 min without any alarm.
+        // Alarm hygiene: one alarm per episode, and it stops once the car is locked or the user is back.
+        val alarms = ev.filter { it.kind == "ALARM" }
+        // More often than every ~3 min (field 06/10: 12 alarms in 17 min).
+        alarms.firstOrNull { a -> alarms.count { it.atMs in a.atMs until a.atMs + 600_000 } > 3 }?.let { a ->
+            out += f("ALARM_SPAM", a, "${alarms.count { it.atMs in a.atMs until a.atMs + 600_000 }} alarms within 10 min") }
+        for (a in alarms) {
+            val stop = ev.firstOrNull { it.kind == "ALARM_STOP" && it.atMs >= a.atMs }?.atMs ?: Long.MAX_VALUE
+            val soundingUntil = minOf(stop, a.atMs + com.openzeekr.app.ble.LockAlertPolicy.ALARM_EPISODE_MS)
+            val lockedAt = ev.firstOrNull { it.kind == "CAR_LOCKED" && it.atMs in a.atMs until soundingUntil }?.atMs
+            val backAt = samples.firstOrNull { it.atMs in a.atMs until soundingUntil && it.distanceM <= 2.0 }?.atMs
+            val resolvedAt = listOfNotNull(lockedAt, backAt).minOrNull()
+            if (resolvedAt != null && soundingUntil > resolvedAt + 10_000) {
+                out += f("ALARM_NOT_SILENCED", a, "alarm kept sounding after the car was ${if (resolvedAt == lockedAt) "locked" else "reached"}")
+                break
+            }
+        }
+        // Car open and the user away: an alarm (or a Lock) is due. 15 m for 90 s = late; 20 m for 2 min = none.
+        var awaySince = -1L; var lateDone = false
         var farOpenSince = -1L
-        for (s in w.samples) {
-            if (!s.carLocked && s.distanceM >= 20.0) {
+        for (s in samples) {
+            val open = !s.carLocked
+            if (open && s.distanceM >= 15.0) {
+                if (awaySince < 0) awaySince = s.atMs
+                if (!lateDone && s.atMs - awaySince >= 90_000L) {
+                    if (ev.none { it.kind == "ALARM" && it.atMs in (awaySince - 60_000)..s.atMs })
+                        out += Finding("ALARM_LATE", s.atMs, s.distanceM, "open, user >= 15 m for 90 s, no alarm yet (${belief(s.atMs)})")
+                    lateDone = true
+                }
+            } else { awaySince = -1L; lateDone = false }
+            if (open && s.distanceM >= 20.0) {
                 if (farOpenSince < 0) farOpenSince = s.atMs
                 if (s.atMs - farOpenSince >= 120_000L) {
                     val alarmed = ev.any { it.kind == "ALARM" && it.atMs in (farOpenSince - 60_000)..s.atMs }
-                    if (!alarmed) out += Finding("OPEN_FAR_NO_ALARM", s.atMs, s.distanceM, "car open, user >= 20 m for 2 min, no alarm")
+                    if (!alarmed) out += Finding("OPEN_FAR_NO_ALARM", s.atMs, s.distanceM, "car open, user >= 20 m for 2 min, no alarm (${belief(s.atMs)})")
                     farOpenSince = Long.MAX_VALUE / 2
                 }
             } else if (farOpenSince != Long.MAX_VALUE / 2) farOpenSince = -1L
         }
+        // Lock - unlock - lock by the app within a minute.
+        val changes = ev.filter { (it.kind == "CAR_LOCKED" || it.kind == "CAR_UNLOCKED") && (it.detail == "key" || it.detail == "cloud") }
+        for (i in 0 until changes.size - 2) {
+            val a = changes[i]; val b = changes[i + 1]; val c = changes[i + 2]
+            if (a.kind == "CAR_LOCKED" && b.kind == "CAR_UNLOCKED" && c.kind == "CAR_LOCKED" && c.atMs - a.atMs <= 60_000) {
+                out += f("LOCK_UNLOCK_THRASH", a, "locked, opened and locked again within %.0f s".format((c.atMs - a.atMs) / 1000.0)); break
+            }
+        }
 
         // Segment expectations.
         val marks = ev.filter { it.kind == "MARK" } + SimWorld.Event(Long.MAX_VALUE, "MARK", 0.0, "end")
+        fun plus(t: Long, ms: Long) = if (t > Long.MAX_VALUE - ms) Long.MAX_VALUE else t + ms
         for (i in 0 until marks.size - 1) {
             val m = marks[i]; val endAt = marks[i + 1].atMs
-            // A missed approach is reported once (APPROACH_NO_UNLOCK), not again as a missing Lock.
             val everUnlockedBefore = ev.any { it.kind == "CAR_UNLOCKED" && it.atMs < endAt }
-            val unlockedAtMark = w.samples.lastOrNull { it.atMs <= m.atMs }?.carLocked == false
+            val unlockedAtMark = samples.lastOrNull { it.atMs <= m.atMs }?.carLocked == false
             val seg = ev.filter { it.atMs >= m.atMs && it.atMs < endAt }
-            val segSamples = w.samples.filter { it.atMs >= m.atMs && it.atMs < endAt }
+            val segSamples = samples.filter { it.atMs >= m.atMs && it.atMs < endAt }
             when (m.detail) {
                 "expect-unlock" -> {
+                    // An unlock just after the segment (user already at the door) is late, not missing.
                     val u = seg.firstOrNull { it.kind == "CAR_UNLOCKED" }
+                        ?: ev.firstOrNull { it.kind == "CAR_UNLOCKED" && it.atMs in endAt..plus(endAt, 5_000) && it.distanceM <= 2.0 }
                     val arrival = segSamples.firstOrNull { it.distanceM <= 1.05 }
                     when {
-                        u == null -> out += Finding("APPROACH_NO_UNLOCK", m.atMs, m.distanceM, "no unlock on approach")
+                        u == null -> out += Finding("APPROACH_NO_UNLOCK", m.atMs, m.distanceM, "no unlock on approach (${belief(endAt.coerceAtMost(samples.last().atMs))})")
                         arrival != null && u.atMs > arrival.atMs + 1_000 ->
                             out += f("APPROACH_UNLOCK_AFTER_DOOR", u, "unlocked %.1f s after reaching the door".format((u.atMs - arrival.atMs) / 1000.0))
                         u.distanceM < 2.5 -> out += f("APPROACH_UNLOCK_LATE", u, "unlocked at %.1f m".format(u.distanceM))
@@ -212,14 +356,18 @@ internal object SimOracle {
                 }
                 "expect-lock" -> if (unlockedAtMark || seg.any { it.kind == "CAR_UNLOCKED" }) {
                     val l = seg.firstOrNull { it.kind == "CAR_LOCKED" }
-                    val alarmed = seg.any { it.kind == "ALARM" }
+                    // An alarm a few seconds into the next segment still counts as an alarm.
+                    val alarmed = ev.any { it.kind == "ALARM" && it.atMs >= m.atMs && it.atMs < plus(endAt, 30_000) }
                     when {
                         l == null -> out += Finding(if (alarmed) "DEPARTURE_NO_LOCK_ALARMED" else "DEPARTURE_NO_LOCK_SILENT",
-                            m.atMs, m.distanceM, "no Lock after the departure")
+                            m.atMs, m.distanceM, "no Lock after the departure (${belief(minOf(endAt, samples.last().atMs))})")
                         l.detail == "self-lock" -> Unit
                         l.distanceM > 30.0 -> out += f("DEPARTURE_LOCK_LATE", l, "locked at %.1f m".format(l.distanceM))
                     }
                 }
+                "expect-alarm" -> if (ev.none { it.kind == "ALARM" && it.atMs >= m.atMs && it.atMs < plus(endAt, 30_000) } &&
+                    seg.none { it.kind == "CAR_LOCKED" })
+                    out += Finding("DEPARTURE_NO_LOCK_SILENT", m.atMs, m.distanceM, "car could not be locked and no alarm")
                 "expect-stay-unlocked" -> seg.firstOrNull { it.kind == "KEY_LOCK_CMD" || it.kind == "CLOUD_LOCK_CMD" }?.let {
                     out += f("UNWANTED_LOCK_NEAR", it, "Lock at %.1f m while staying near".format(it.distanceM)) }
                 "expect-stay-locked" -> seg.firstOrNull { it.kind == "KEY_UNLOCK_CMD" }?.let {
@@ -227,7 +375,7 @@ internal object SimOracle {
                 "expect-unlocked-by-end" -> segSamples.lastOrNull()?.let { if (it.carLocked && everUnlockedBefore)
                     out += Finding("BACK_AT_CAR_BUT_LOCKED", it.atMs, it.distanceM, "user back at the car, car locked") }
                 "expect-locked-by-end" -> segSamples.lastOrNull()?.let { if (!it.carLocked)
-                    out += Finding("GONE_BUT_UNLOCKED", it.atMs, it.distanceM, "user gone, car still open") }
+                    out += Finding("GONE_BUT_UNLOCKED", it.atMs, it.distanceM, "user gone, car still open (${belief(it.atMs)})") }
             }
         }
         return out

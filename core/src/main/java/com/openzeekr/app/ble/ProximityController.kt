@@ -116,6 +116,8 @@ class ProximityController internal constructor(
 
     // Hysteresis latch: true once the car has CONFIRMED our auto-unlock (next auto action is a lock).
     private var armedUnlocked = false
+    /** Read-only view for the simulator's oracles: does the app believe the car is open (armed)? */
+    internal val believesCarUnlocked: Boolean get() = armedUnlocked
     // A new unlock can be followed by a quiet walk-away before the car emits another status frame.
     private var postUnlockFastUntilElapsedMs = 0L
     // Time-based evidence gate. This owns arrival/departure confirmation so neither the fast RSSI

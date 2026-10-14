@@ -108,6 +108,19 @@ jobs:
       - name: Test core and build phone APK
         run: ./gradlew :core:test :app:assembleDebug --stacktrace
 
+      # Fase 0 (14/10): the whole-app simulator (calibrated + stress worlds) must not show more
+      # SAFETY findings than core/src/test/resources/sim-baseline.json allows.
+      - name: Simulation safety gate
+        run: SIM_GATE=1 ./gradlew :core:testDebugUnitTest --tests "com.openzeekr.app.ble.sim.SimGateTest" --stacktrace
+
+      - name: Upload simulation gate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZeekRemote-sim-gate
+          path: core/build/sim-gate/
+          if-no-files-found: ignore
+
       - name: Verify departure location foreground service is packaged
         run: |
           set -euo pipefail
