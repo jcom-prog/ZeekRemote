@@ -23,11 +23,11 @@ class WholeAppSimulationTest {
         val suites = when (System.getenv("SIM_SUITE") ?: "calibrated") {
             "both" -> listOf("calibrated", "stress"); else -> listOf(System.getenv("SIM_SUITE") ?: "calibrated") }
         val only = System.getenv("SIM_ONLY")?.split(",")
-        val results = SimRunner.run(suites, seeds, only)
+        val traces = SimReport.TraceWriter(outDir, System.getenv("SIM_TRACE_EVERY_SEED") == "1")
+        val results = SimRunner.run(suites, seeds, only, traces::accept)
         val report = SimReport.text(results)
         File(outDir, "report.txt").writeText(report)
         File(outDir, "summary.json").writeText(SimReport.summaryJson(results))
-        SimReport.writeTraces(results, outDir, System.getenv("SIM_TRACE_EVERY_SEED") == "1")
         println(report.lineSequence().take(70).joinToString("\n"))
         if (System.getProperty("sim.strict") == "true") assertTrue("simulation findings", results.all { it.findings.isEmpty() })
     }
@@ -37,7 +37,8 @@ internal data class SimResult(val suite: String, val scenario: Scenario, val car
                               val seed: Long, val physics: SimPhysics, val findings: List<SimOracle.Finding>, val world: SimWorld)
 
 internal object SimRunner {
-    fun run(suites: List<String>, seeds: Int, only: List<String>?): List<SimResult> = suites.flatMap { suite ->
+    /** [onRun] sees every run with its full log (traces); the log is dropped afterwards to bound memory. */
+    fun run(suites: List<String>, seeds: Int, only: List<String>?, onRun: ((SimResult) -> Unit)? = null): List<SimResult> = suites.flatMap { suite ->
         SimScenarios.matrix(seeds).filter { r -> only == null || only.any { r.first.family.startsWith(it) } }.map { (sc, carry, mp) ->
             val (profile, seed) = mp
             // The world of a stress run depends on the seed only, so two app versions meet the same world.
@@ -45,7 +46,10 @@ internal object SimRunner {
             val w = SimWorld(seed, profile, carry, sc.startM, sc.gnssAccuracyM, carRefusesKeyLock = sc.carRefusesKeyLock,
                 keyEdgeRssi = sc.keyEdgeRssi, physics = physics, cloudDown = sc.cloudDown)
             w.play(sc.legs)
-            SimResult(suite, sc, carry, profile, seed, physics, SimOracle.check(w), w)
+            SimResult(suite, sc, carry, profile, seed, physics, SimOracle.check(w), w).also { r ->
+                onRun?.invoke(r)
+                w.logLines.clear(); w.logLines.trimToSize()
+            }
         }
     }
 }
@@ -158,32 +162,32 @@ internal object SimReport {
         return sb.toString()
     }
 
-    fun writeTraces(results: List<SimResult>, outDir: File, everySeed: Boolean) {
-        val traced = HashSet<String>()
-        if (System.getenv("SIM_TRACE_ALL") == "1") results.forEach { r ->
-            val name = (r.suite + "_" + r.scenario.family + "_" + r.carry + "_" + r.profile.name + "_" + r.seed).replace(Regex("[^A-Za-z0-9_+-]"), "_")
-            File(outDir, "run_$name.txt").writeText(buildString {
-                appendLine("${r.scenario.family}: ${r.scenario.description}")
-                appendLine("suite=${r.suite} carry=${r.carry} motion=${r.profile.name} seed=${r.seed} physics=[${r.physics.describe()}]")
-                appendLine("findings=${r.findings.joinToString { it.code }}")
-                appendLine("--- events"); r.world.events.forEach { appendLine("%8.1f d=%5.1f %s %s".format(it.atMs / 1000.0, it.distanceM, it.kind, it.detail)) }
-                appendLine("--- log"); r.world.logLines.forEach { appendLine(it) }
-            })
-        }
-        results.forEach { r -> r.findings.forEach { f ->
-            val perSeed = if (everySeed) "_${r.seed}" else ""
-            val key = "${r.suite}|${r.scenario.family}|${f.code}|${r.carry}|${r.profile.name}$perSeed"
-            if (traced.add(key)) {
-                val name = (r.suite + "_" + r.scenario.family + "_" + f.code + "_" + r.carry + "_" + r.profile.name + perSeed)
-                    .replace(Regex("[^A-Za-z0-9_+-]"), "_")
-                File(outDir, "trace_$name.txt").writeText(buildString {
-                    appendLine("${r.scenario.family}: ${r.scenario.description}")
-                    appendLine("suite=${r.suite} carry=${r.carry} motion=${r.profile.name} seed=${r.seed} physics=[${r.physics.describe()}]")
-                    appendLine("finding=${f.code} (${SimOracle.tier(f.code)}) at ${f.atMs / 1000.0}s d=${"%.1f".format(f.distanceM)} ${f.detail}")
-                    appendLine("--- events"); r.world.events.forEach { appendLine("%8.1f d=%5.1f %s %s".format(it.atMs / 1000.0, it.distanceM, it.kind, it.detail)) }
-                    appendLine("--- log"); r.world.logLines.forEach { appendLine(it) }
-                })
+    /** Writes traces while the runs happen (each run's log is dropped right after). */
+    class TraceWriter(private val outDir: File, private val everySeed: Boolean) {
+        private val traced = HashSet<String>()
+        private val all = System.getenv("SIM_TRACE_ALL") == "1"
+        fun accept(r: SimResult) {
+            if (all) {
+                val name = (r.suite + "_" + r.scenario.family + "_" + r.carry + "_" + r.profile.name + "_" + r.seed).replace(Regex("[^A-Za-z0-9_+-]"), "_")
+                File(outDir, "run_$name.txt").writeText(body(r, "findings=${r.findings.joinToString { it.code }}"))
             }
-        } }
+            r.findings.forEach { f ->
+                val perSeed = if (everySeed) "_${r.seed}" else ""
+                val key = "${r.suite}|${r.scenario.family}|${f.code}|${r.carry}|${r.profile.name}$perSeed"
+                if (traced.add(key)) {
+                    val name = (r.suite + "_" + r.scenario.family + "_" + f.code + "_" + r.carry + "_" + r.profile.name + perSeed)
+                        .replace(Regex("[^A-Za-z0-9_+-]"), "_")
+                    File(outDir, "trace_$name.txt").writeText(body(r,
+                        "finding=${f.code} (${SimOracle.tier(f.code)}) at ${f.atMs / 1000.0}s d=${"%.1f".format(f.distanceM)} ${f.detail}"))
+                }
+            }
+        }
+        private fun body(r: SimResult, head: String) = buildString {
+            appendLine("${r.scenario.family}: ${r.scenario.description}")
+            appendLine("suite=${r.suite} carry=${r.carry} motion=${r.profile.name} seed=${r.seed} physics=[${r.physics.describe()}]")
+            appendLine(head)
+            appendLine("--- events"); r.world.events.forEach { appendLine("%8.1f d=%5.1f %s %s".format(it.atMs / 1000.0, it.distanceM, it.kind, it.detail)) }
+            appendLine("--- log"); r.world.logLines.forEach { appendLine(it) }
+        }
     }
 }

@@ -358,7 +358,11 @@ internal object SimOracle {
                     val l = seg.firstOrNull { it.kind == "CAR_LOCKED" }
                     // An alarm a few seconds into the next segment still counts as an alarm.
                     val alarmed = ev.any { it.kind == "ALARM" && it.atMs >= m.atMs && it.atMs < plus(endAt, 30_000) }
+                    // The user came back within a minute: not locking in time is slow (comfort), not silent.
+                    val shortTrip = endAt != Long.MAX_VALUE && endAt - m.atMs < 60_000L
                     when {
+                        l == null && !alarmed && shortTrip -> out += Finding("NOT_LOCKED_BEFORE_RETURN", m.atMs, m.distanceM,
+                            "no Lock in the %.0f s before the user turned back".format((endAt - m.atMs) / 1000.0))
                         l == null -> out += Finding(if (alarmed) "DEPARTURE_NO_LOCK_ALARMED" else "DEPARTURE_NO_LOCK_SILENT",
                             m.atMs, m.distanceM, "no Lock after the departure (${belief(minOf(endAt, samples.last().atMs))})")
                         l.detail == "self-lock" -> Unit
