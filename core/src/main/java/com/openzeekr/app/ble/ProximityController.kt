@@ -69,6 +69,8 @@ class ProximityController internal constructor(
     approachConfirm: ProximityDecisionPolicy.ApproachConfirm = ProximityDecisionPolicy.ApproachConfirm.UNBROKEN,
     /** The walk-back return after a Lock at the ordinary approach level (0.3.2; the simulator compares). */
     walkBackReturn: Boolean = true,
+    /** Diagnostic only: is the screen on (phone in use, likely in the hand)? Null when unknown. */
+    private val screenOn: () -> Boolean? = { null },
 ) {
     constructor(
         appContext: android.content.Context,
@@ -83,7 +85,8 @@ class ProximityController internal constructor(
     ) : this(store::current, ble, motion, scope, cloudLock, cloudIsLocked, cloudLockSnapshot,
         SystemProximityClock, AndroidProximityAlerts(appContext), DepartureLocationSource(appContext),
         AndroidSafetyWakeLocks(appContext), SharedPrefsProximityStateStore(appContext),
-        SharedPrefsPhoneCalibrationStore(appContext))
+        SharedPrefsPhoneCalibrationStore(appContext),
+        screenOn = { (appContext.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager)?.isInteractive })
 
     enum class Zone { UNKNOWN, FAR, NEAR }
     enum class Phase { PASSIVE, CONNECTING, MONITORING }
@@ -1901,8 +1904,10 @@ class ProximityController internal constructor(
             decisionPolicy.onPendingUnlockStarted()
             // A liveness command must never occupy the shared reply slots while unlock starts.
             pingJob?.cancel(); pingJob = null; pingInFlight = false
+            // Screen state (0.3.2): whether a phone in the hand opens early is decided in the field, not
+            // in the simulator (its hand-held phone never has the screen on).
             Logx.d("prox", "approach-unlock ARM (rssi=$smoothed ~${"%.1f".format(dist)}m prevZone=$prevZone " +
-                "route=${decisionPolicy.unlockRoute}) — confirmed-unlock loop")
+                "route=${decisionPolicy.unlockRoute} screen=${runCatching { screenOn() }.getOrNull() ?: "?"}) — confirmed-unlock loop")
             startUnlockLoop()
             return
         }

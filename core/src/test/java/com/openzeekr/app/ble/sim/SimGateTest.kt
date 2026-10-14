@@ -7,11 +7,15 @@ import java.io.File
 
 /**
  * Regression gate (fase 0, 14/10). Runs both suites on the seeds of the committed baseline and fails
- * when any SAFETY finding occurs in more runs than the baseline allows. Comfort findings are reported
- * but do not fail the build. Only runs with SIM_GATE=1 (CI step), so ordinary unit-test runs stay fast.
+ * when any SAFETY finding occurs in more runs than the baseline allows, and (0.3.2) when a COMFORT
+ * finding - a late or missing unlock, a lock that does not come - grows beyond a wider allowance: the
+ * late unlock of 14/10 18:31 was a comfort finding that no gate looked at. The owner's targets are
+ * printed with the table. Only runs with SIM_GATE=1 (CI step), so ordinary unit-test runs stay fast.
  *
  *   SIM_GATE=1 ./gradlew :core:testDebugUnitTest --tests "com.openzeekr.app.ble.sim.SimGateTest"
  *   SIM_GATE=1 SIM_GATE_WRITE=1 ...   rewrites the baseline after an intended change (ratchet down)
+ *   (CI and the baseline use SIM_LEARN_VISITS=20 SIM_PLATEAU_P=0.15: the self-calibration learns as
+ *   on the phone, and 15 % of the walks to the car end flat as on 14/10 18:31)
  */
 class SimGateTest {
     private val baselineFile = File("src/test/resources/sim-baseline.json")
@@ -41,16 +45,24 @@ class SimGateTest {
                 table.append("  %-10s %-7s %-26s %4d -> %4d%s\n".format(suite, tier, code, bv, nv,
                     if (nv > bv) "  (+${nv - bv})" else if (nv < bv) "  (${nv - bv})" else ""))
                 if (tier == "SAFETY" && nv > bv + tolerance(bv)) regressions += "$suite $code: $bv -> $nv"
+                if (tier == "COMFORT" && nv > bv + comfortTolerance(bv)) regressions += "$suite $code (comfort): $bv -> $nv"
+            }
+            table.append("  targets ($suite):\n")
+            SimReport.targets(results.filter { it.suite == suite }).forEach { t ->
+                table.append("    %-4s %-48s %-22s goal %s\n".format(if (t.met) "ok" else "MISS", t.name, t.value, t.goal))
             }
         }
         println(table)
         File(outDir, "gate.txt").writeText(table.toString())
-        if (regressions.isNotEmpty()) fail("SAFETY regressions against sim-baseline.json:\n" + regressions.joinToString("\n") +
+        if (regressions.isNotEmpty()) fail("Regressions against sim-baseline.json:\n" + regressions.joinToString("\n") +
             "\nSee core/build/sim-gate/report.txt (every finding) and gate.txt.")
     }
 
     /** Small noise allowance: a changed decision shifts later random draws in the same run. */
     private fun tolerance(base: Int) = maxOf(1, (base * 0.10).toInt())
+
+    /** Comfort findings are more frequent and noisier: a wider allowance, still a gate. */
+    private fun comfortTolerance(base: Int) = maxOf(3, (base * 0.15).toInt())
 }
 
 /** The committed baseline: per suite, runs affected per finding code (flat JSON). */

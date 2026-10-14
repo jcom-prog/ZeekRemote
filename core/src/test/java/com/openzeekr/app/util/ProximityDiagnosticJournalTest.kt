@@ -41,6 +41,13 @@ class ProximityDiagnosticJournalTest {
             "approach-unlock ARM (rssi=-84 ~10,0m prevZone=NEAR route=presence) — confirmed-unlock loop"))
         assertEquals("UNLOCK_STARTED self_lock_return -58", ProximityDiagnosticJournal.event("prox",
             "approach-unlock ARM (rssi=-58 ~0,9m prevZone=NEAR route=self_lock_return) — confirmed-unlock loop"))
+        // 0.3.2: the screen state (phone in use) and the walk-back return are journaled too.
+        assertEquals("UNLOCK_STARTED approach -84 screen=true", ProximityDiagnosticJournal.event("prox",
+            "approach-unlock ARM (rssi=-84 ~10,0m prevZone=NEAR route=approach screen=true) — confirmed-unlock loop"))
+        assertEquals("UNLOCK_STARTED walk_back -83 screen=false", ProximityDiagnosticJournal.event("prox",
+            "approach-unlock ARM (rssi=-83 ~9,1m prevZone=FAR route=walk_back screen=false) — confirmed-unlock loop"))
+        assertEquals("UNLOCK_STARTED away_return_steps -79 screen=?", ProximityDiagnosticJournal.event("prox",
+            "approach-unlock ARM (rssi=-79 ~6,3m prevZone=FAR route=away_return_steps screen=?) — confirmed-unlock loop"))
         assertEquals("AUTO_LOCK_CONFIRMED ble-departure", ProximityDiagnosticJournal.event("prox",
             "auto lock confirmed (ble-departure): the car reports locked"))
         assertEquals("AUTO_LOCK_CONFIRMED verified-link-departure", ProximityDiagnosticJournal.event("prox",

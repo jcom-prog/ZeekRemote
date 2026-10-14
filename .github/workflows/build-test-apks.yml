@@ -111,9 +111,12 @@ jobs:
         run: ./gradlew :core:test :app:assembleDebug --stacktrace
 
       # Fase 0 (14/10): the whole-app simulator (calibrated + stress worlds) must not show more
-      # SAFETY findings than core/src/test/resources/sim-baseline.json allows.
+      # SAFETY findings than core/src/test/resources/sim-baseline.json allows; 0.3.2: nor clearly
+      # more COMFORT findings (late/missing unlock or lock), with 20 learning visits per run so
+      # the self-calibration is active as on the phone, and 15 % flat final approaches (field
+      # 14/10 18:31: the late unlock no simulation showed).
       - name: Simulation safety gate
-        run: SIM_GATE=1 ./gradlew :core:testDebugUnitTest --tests "com.openzeekr.app.ble.sim.SimGateTest" --stacktrace
+        run: SIM_GATE=1 SIM_LEARN_VISITS=20 SIM_PLATEAU_P=0.15 ./gradlew :core:testDebugUnitTest --tests "com.openzeekr.app.ble.sim.SimGateTest" --stacktrace
 
       - name: Upload simulation gate report
         if: always()

@@ -27,7 +27,8 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
         private val autoLockConfirmed = Regex(
             "auto lock confirmed \\((ble-departure|verified-link-departure|walk-away-lock|idle-far-lock)\\): the car reports locked")
         private val unlockArm = Regex("^approach-unlock ARM \\(rssi=(-[0-9]{2,3}) .* route=(presence|approach|door|still|" +
-            "deep_return|deep_window|manual_return|at_car|away_return|self_lock_return|none)\\)")
+            "deep_return|deep_window|manual_return|at_car|away_return|away_return_steps|self_lock_return|walk_back|none)" +
+            "(?: screen=(true|false|\\?))?\\)")
         private val bleLockAuthorized = Regex("^ble departure lock authorized \\(rssi=(-[0-9]{2,3}) kind=(walk|very_deep|" +
             "very_deep_gradual|none)\\)")
         private val lockAlarm = Regex("lock alarm (raised|unavailable|suppressed) \\(([A-Z_]{1,40})\\)")
@@ -83,7 +84,8 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                     message.startsWith("usable departure location anchor available") -> "ANCHOR_AVAILABLE"
                     // Which rule opened, at which smoothed signal (a number, never a position).
                     message.startsWith("approach-unlock ARM (") -> unlockArm.find(message)
-                        ?.let { "UNLOCK_STARTED ${it.groupValues[2]} ${it.groupValues[1]}" } ?: "UNLOCK_STARTED"
+                        ?.let { m -> "UNLOCK_STARTED ${m.groupValues[2]} ${m.groupValues[1]}" +
+                            m.groupValues[3].let { if (it.isEmpty()) "" else " screen=$it" } } ?: "UNLOCK_STARTED"
                     message.startsWith("car locked itself (") -> "CAR_SELF_LOCK"
                     message.startsWith("manual Lock not executed:") -> "MANUAL_LOCK_NOT_EXECUTED"
                     Regex("(ble-departure|verified-link-departure|walk-away-lock|idle-far-lock|far-no-motion): " +
