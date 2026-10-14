@@ -9,7 +9,6 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.openzeekr.app.net.model.InboxMessage
-import com.openzeekr.core.R
 
 /**
  * Surfaces messages from the car's message centre (charging complete, security alarms, abnormal
@@ -56,7 +55,7 @@ object CarNotifier {
             )
         }
         val n = NotificationCompat.Builder(ctx, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_logo)
+            .setSmallIcon(AppBranding.statusIcon(ctx))
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))

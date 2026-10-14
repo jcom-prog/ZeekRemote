@@ -12,6 +12,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.openzeekr.app.ble.LockAlertPolicy.Event
+import com.openzeekr.app.util.AppBranding
 import com.openzeekr.core.R
 
 /**
@@ -183,7 +184,7 @@ internal object UnverifiedLockNotifier {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         }
         val builder = NotificationCompat.Builder(context, channel)
-            .setSmallIcon(R.drawable.ic_logo)
+            .setSmallIcon(AppBranding.statusIcon(context))
             .setContentTitle(title)
             .setContentText(message)
             .setStyle(NotificationCompat.BigTextStyle().bigText(message))

@@ -1,5 +1,6 @@
 package com.openzeekr.app.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -20,19 +21,29 @@ import androidx.compose.material3.SwitchColors
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toBitmap
 import com.openzeekr.core.R
+import com.openzeekr.app.AppIcon
 import com.openzeekr.app.ui.theme.Brand
+import com.openzeekr.app.util.AppBranding
 
 /**
  * One consistent Switch palette for the whole app. The Material3 defaults wash out on
@@ -51,10 +62,25 @@ fun brandSwitchColors(checkedTrack: Color = Brand.accent): SwitchColors = Switch
     disabledUncheckedTrackColor = Brand.surface2,
 )
 
-/** The app badge with the OpenZeekr mark — used in the top bar. Dark-green card + green mark,
- *  matching the launcher icon. */
+/** The app badge in the top bar: the launcher icon the user picked (Settings > App-icoon, 0.3.1),
+ *  drawn with the device's own icon mask. The original design keeps the OpenZeekr mark on its
+ *  dark-green card, matching that launcher icon. */
 @Composable
 fun BrandBadge(size: Int = 30) {
+    val ctx = LocalContext.current
+    val selected by AppBranding.design.collectAsState()
+    val icon = AppIcon.of(selected ?: AppBranding.current(ctx))
+    if (icon != AppIcon.DEFAULT) {
+        val px = with(LocalDensity.current) { size.dp.roundToPx() }
+        val image = remember(icon, px) {
+            runCatching { ContextCompat.getDrawable(ctx, icon.iconRes)?.toBitmap(px, px)?.asImageBitmap() }.getOrNull()
+        }
+        if (image != null) {
+            Image(image, contentDescription = null,
+                modifier = Modifier.size(size.dp).clip(RoundedCornerShape((size / 3.2f).dp)))
+            return
+        }
+    }
     Box(
         modifier = Modifier
             .size(size.dp)

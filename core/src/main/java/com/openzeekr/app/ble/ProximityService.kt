@@ -21,9 +21,9 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.openzeekr.app.Deps
 import com.openzeekr.app.DepsHolder
+import com.openzeekr.app.util.AppBranding
 import com.openzeekr.app.util.CarNotifier
 import com.openzeekr.app.util.Logx
-import com.openzeekr.core.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -32,6 +32,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -210,6 +211,7 @@ class ProximityService : Service() {
                 launch { watchdog(deps) }
                 launch { stationaryKeySecurity(deps) }
                 launch { pollCarMessages(deps) }
+                launch { followBranding() }
             }
         }
         return START_STICKY
@@ -590,15 +592,39 @@ class ProximityService : Service() {
         }
     }
 
-    private fun startInForeground() {
-        createChannel()
-        val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
+    /** Small icon of the posted foreground notification; 0 = not posted yet. */
+    private var postedStatusIcon = 0
+
+    private fun foregroundNotification(): Notification {
+        val icon = AppBranding.statusIcon(this)
+        postedStatusIcon = icon
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("ZeekRemote digital key active")
             .setContentText("Keeping your key connected for lock/unlock")
-            .setSmallIcon(R.drawable.ic_logo)
+            .setSmallIcon(icon)
             .setOngoing(true)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
+    }
+
+    /**
+     * The status-bar icon follows the app icon picked in Settings (0.3.1) without a restart: re-post
+     * the same foreground notification under [NOTIF_ID]. Only the notification changes; the
+     * foreground service and its types stay as they are.
+     */
+    private suspend fun followBranding() {
+        AppBranding.design.filterNotNull().collect { design ->
+            if (postedStatusIcon == 0 || design.statusIcon == postedStatusIcon) return@collect
+            runCatching {
+                getSystemService(NotificationManager::class.java)?.notify(NOTIF_ID, foregroundNotification())
+                Logx.d("svc", "status icon -> ${design.name}")
+            }
+        }
+    }
+
+    private fun startInForeground() {
+        createChannel()
+        val notification = foregroundNotification()
 
         val connectedType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE else 0

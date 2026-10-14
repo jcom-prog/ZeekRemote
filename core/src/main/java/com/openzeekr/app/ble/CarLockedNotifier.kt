@@ -10,7 +10,7 @@ import android.os.Build
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import com.openzeekr.core.R
+import com.openzeekr.app.util.AppBranding
 
 /**
  * Audible confirmation that the car itself reported locked (user request 05/10: "als de auto
@@ -49,7 +49,7 @@ internal object CarLockedNotifier {
                 if (system.getNotificationChannel(CHANNEL_ID)?.importance == NotificationManager.IMPORTANCE_NONE) return
             }
             val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_logo)
+                .setSmallIcon(AppBranding.statusIcon(context))
                 .setContentTitle("Auto gesloten")
                 .setContentText("The car reports that it is locked.")
                 .setCategory(NotificationCompat.CATEGORY_STATUS)
