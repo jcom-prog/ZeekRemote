@@ -172,7 +172,13 @@ internal class ProximityDecisionPolicy(
     }
 
     /** Returns true only for a qualified approach or a fresh, stable session already at the door. */
-    fun shouldUnlock(nowMs: Long, rssi: Int, moving: Boolean, unlockThreshold: Int, steps: Long? = null): Boolean {
+    fun shouldUnlock(
+        nowMs: Long, rssi: Int, moving: Boolean, unlockThreshold: Int, steps: Long? = null,
+        /** False when a live step counter shows the walk has stopped ([StepStallGate], 0.3.2). */
+        walkingConfirmed: Boolean = true,
+        /** Milliseconds since a live step count last advanced (0 while walking or unknown). */
+        stepStallAgeMs: Long = 0L,
+    ): Boolean {
         if (departureLatched &&
             !tryRearmSameLinkReturn(nowMs, rssi, moving, unlockThreshold) &&
             !(awayRoundTripPending && tryRearmAwayReturn(nowMs, rssi, moving, unlockThreshold, steps))) {
@@ -193,7 +199,14 @@ internal class ProximityDecisionPolicy(
         if (presenceApproachAtMs != UNSET_MS) {
             presencePeakRssi = maxOf(presencePeakRssi, rssi)
             val improved = presencePeakRssi >= presenceEntryRssi + PRESENCE_RISE_DB
-            val crossedApproachBand = rssi >= unlockThreshold + PRESENCE_READY_MARGIN_DB
+            // 0.3.2: an entry already at the band proves no rise. Standing at the front door ~25 m
+            // away (simulator F24, field 09/10 12:59: entry -84, two readings of -82 opened the
+            // car) is told apart from a genuine mid-range arrival (field 0.1.28 / 0.1.34: entries
+            // of -82..-87 while walking up) by the step counter: while a live count shows the user
+            // standing, such an entry needs the door level; walking or no live count keeps +4.
+            val entryNear = presenceEntryRssi > unlockThreshold - FAR_MARGIN_DB
+            val crossedApproachBand = rssi >= unlockThreshold +
+                if (entryNear && !walkingConfirmed) PRESENCE_NEAR_ENTRY_MARGIN_DB else PRESENCE_READY_MARGIN_DB
             if (improved && crossedApproachBand) {
                 if (presenceNearSinceMs == UNSET_MS) presenceNearSinceMs = nowMs
                 if (nowMs - presenceNearSinceMs >= PRESENCE_CONFIRM_MS &&
@@ -222,7 +235,7 @@ internal class ProximityDecisionPolicy(
         // Once we were already strongly at the car and subsequently went FAR, a later multipath
         // rebound is departure noise, not a second approach. A genuine new approach starts with a
         // fresh policy/session and therefore has no [departureObserved] latch.
-        val qualifiedApproach = farQualified && !departureObserved && moving &&
+        val qualifiedApproach = farQualified && !departureObserved && moving && walkingConfirmed &&
             rssi >= unlockThreshold + UNLOCK_MARGIN_DB
         val freshDoorSession = !farQualified && !departureObserved && rssi >= STRONG_NEAR_RSSI
         // Approach while the motion sensor still says STILL (field 0.1.54 and the simulator: the
@@ -230,7 +243,11 @@ internal class ProximityDecisionPolicy(
         // sustained rise from a FAR baseline to well inside the approach band counts; a turn or
         // a passer-by at 10-15 m does not lift a FAR floor this far for this long.
         val stillApproach = farQualified && !departureObserved && !moving &&
-            rssi >= unlockThreshold + STILL_APPROACH_MARGIN_DB && rssi >= farFloorRssi + STILL_APPROACH_RISE_DB
+            rssi >= unlockThreshold + STILL_APPROACH_MARGIN_DB && rssi >= farFloorRssi + STILL_APPROACH_RISE_DB &&
+            // 0.3.2: this route stands for "walking while AR says STILL". A live step count that
+            // stopped more than [STILL_APPROACH_STEP_STALL_WINDOW_MS] ago says the walk is over: a
+            // stop at the door still opens, a wait at 8 m half a minute later does not (simulator F14).
+            stepStallAgeMs <= STILL_APPROACH_STEP_STALL_WINDOW_MS
         if (stillApproach) {
             if (stillApproachSinceMs == UNSET_MS) stillApproachSinceMs = nowMs
             if (nowMs - stillApproachSinceMs >= STILL_APPROACH_CONFIRM_MS && unlockQualifiedAtMs == UNSET_MS) {
@@ -956,6 +973,8 @@ internal class ProximityDecisionPolicy(
         // just over the threshold opened the car 0.2 s after connecting. The captured 0.1.28
         // arrival (-83..-87, -82 twice during the handshake) still qualifies in time.
         const val PRESENCE_READY_MARGIN_DB = 4
+        /** A presence entry already within [FAR_MARGIN_DB] of the threshold: the door level (0.3.2). */
+        const val PRESENCE_NEAR_ENTRY_MARGIN_DB = 8
         const val PRESENCE_RISE_DB = 1
         // Two consecutive fast-cadence observations. Requiring 400 ms made the result depend on
         // whether one noisy 200 ms sample landed just before SESSION_READY (the 0.1.28 failure).
@@ -1023,6 +1042,7 @@ internal class ProximityDecisionPolicy(
         const val STILL_APPROACH_MARGIN_DB = 4
         const val STILL_APPROACH_RISE_DB = 10
         const val STILL_APPROACH_CONFIRM_MS = 3_000L
+        const val STILL_APPROACH_STEP_STALL_WINDOW_MS = 10_000L
         const val MANUAL_WEAK_RETURN_RISE_DB = 8
         const val MANUAL_WEAK_RETURN_CONFIRM_MS = 400L
     }

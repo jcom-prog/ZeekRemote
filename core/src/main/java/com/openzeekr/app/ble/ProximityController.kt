@@ -154,6 +154,9 @@ class ProximityController internal constructor(
     private fun publishCalibration() { _calibrationView.value = calibrationViewNow() }
     /** Diagnose (0.3.2): when step counts reach the app while the car is heard. */
     private val stepTrace = StepDeliveryTrace()
+    /** "The walk has stopped" from the step counter, for the walking approach route (0.3.2). */
+    private val stepStall = StepStallGate()
+    private var stepStallLogged = false
     private val ble: ProximityLink = calibratedLink(ble)
 
     private fun calibratedLink(link: ProximityLink): ProximityLink = object : ProximityLink by link {
@@ -384,6 +387,7 @@ class ProximityController internal constructor(
         _state.value = State(running = true, phase = Phase.PASSIVE, zone = Zone.UNKNOWN)
         ble.onInboundActivity = { activityWake?.complete(Unit) } // wake the unlocked idle-wait instantly
         motion.onMovingEdge = {
+            stepStall.onMovingEdge(clock.wallMs())
             motionWake?.complete(Unit)   // wake the FAR-still approach sleep
             activityWake?.complete(Unit) // resume armed RSSI tracking on the first motion edge
             if (linkLostAtMs != 0L && armedUnlocked) scope.launch { scheduleLinkDepartureCheck() }
@@ -1700,10 +1704,16 @@ class ProximityController internal constructor(
         // Observe locked RSSI even while CONNECTED is still handshaking. The deep-sleep field trace
         // reached the door at -61 dBm, but SESSION_READY arrived ~3.4 s later after the signal had
         // weakened; gating observation on READY discarded the only reliable arrival evidence.
+        val stepsNow = motion.observedSteps
+        val walkingBySteps = stepStall.walking(now, stepsNow)
         val unlockQualified = !armedUnlocked && !needToUnlock && decisionPolicy.shouldUnlock(
             now, smoothed, motion.state.value == MotionMonitor.Motion.MOVING, unlockThresh,
-            if (awayReturnSteps) motion.observedSteps else null,
+            if (awayReturnSteps) stepsNow else null, walkingBySteps, stepStall.stalledForMs,
         )
+        if (!walkingBySteps && !stepStallLogged) {
+            stepStallLogged = true
+            Logx.d("prox", "step count stalled ${stepStall.stalledForMs / 1000.0} s -> walking approach paused")
+        } else if (walkingBySteps) stepStallLogged = false
         if (decisionPolicy.consumeDeepFarReturnRearm()) {
             Logx.d("prox", "return after Lock recognised from signal (clearly far, now near rssi=$smoothed) " +
                 "-> approach unlock rearmed")

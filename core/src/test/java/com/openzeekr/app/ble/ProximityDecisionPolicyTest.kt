@@ -830,6 +830,46 @@ class ManualLockDeepFarReturnTest {
         assertTrue(p.shouldUnlock(t, -80, true, -86))
     }
 
+    // ---- 0.3.2: unlock-safety rules from the simulation audit ----
+
+    @Test fun aPresenceEntryAlreadyAtTheBandNeedsTheDoorLevelWhileTheStepsShowStanding() {
+        // Front door ~25 m (simulator F24, field 09/10 12:59): the entry reads -84, readings of -82
+        // used to open the car. Standing (live step count stopped): -78 needed.
+        val standing = ProximityDecisionPolicy()
+        standing.onPresenceMatch(0L, -84, true, -86)
+        assertFalse((0 until 10).any { standing.shouldUnlock(200L * (it + 1), -82, true, -86, walkingConfirmed = false) })
+        assertTrue((10 until 14).any { standing.shouldUnlock(200L * (it + 1), -78, true, -86, walkingConfirmed = false) })
+        // Walking up (field 0.1.28 / 0.1.34 arrivals) or no live step count: -82 as before.
+        val walking = ProximityDecisionPolicy()
+        walking.onPresenceMatch(0L, -84, true, -86)
+        assertTrue((0 until 4).any { walking.shouldUnlock(200L * (it + 1), -82, true, -86) })
+    }
+
+    @Test fun aStoppedStepCountPausesTheWalkingApproachRoute() {
+        // Simulator F13/F31: the walk stops at 10 m, Activity Recognition still says MOVING.
+        val stopped = ProximityDecisionPolicy()
+        var t = 0L
+        repeat(15) { stopped.shouldUnlock(t, -93, true, -86); t += 200L }
+        assertFalse((0 until 10).any { stopped.shouldUnlock(t + 200L * it, -84, true, -86, walkingConfirmed = false) })
+        val walking = ProximityDecisionPolicy()
+        t = 0L
+        repeat(15) { walking.shouldUnlock(t, -93, true, -86); t += 200L }
+        assertTrue((0 until 10).any { walking.shouldUnlock(t + 200L * it, -84, true, -86, walkingConfirmed = true) })
+    }
+
+    @Test fun theStillRouteClosesTenSecondsAfterTheStepsStopped() {
+        // Simulator F14: walked up with AR silent, then waited at 8 m; the old rise kept the route open.
+        fun opens(stallAgeMs: Long): Boolean {
+            val p = ProximityDecisionPolicy()
+            var t = 0L
+            repeat(15) { p.shouldUnlock(t, -95, false, -86); t += 200L }
+            return (0 until 25).any { p.shouldUnlock(t + 200L * it, -80, false, -86, stepStallAgeMs = stallAgeMs) }
+        }
+        assertTrue("a stop at the door still opens", opens(3_000L))
+        assertFalse("a wait half a minute later does not", opens(30_000L))
+    }
+
+
     @Test fun aLockWhileTurningBackStillReopensAtTheCar() {
         // Simulator 03/10 (0.1.64) "turn back at 9 m": the Lock lands at ~7 m on the walk back.
         val p = ProximityDecisionPolicy()
