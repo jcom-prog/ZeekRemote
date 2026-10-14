@@ -729,9 +729,12 @@ internal class ProximityDecisionPolicy(
      * deep return stays. No step source: no walk-back return.
      */
     private fun walkedBackToTheCar(nowMs: Long, rssi: Int, unlockThreshold: Int, gap: Boolean): Boolean {
-        val away = stepsAtWalkBackFloor?.let { floor -> stepsAtDepartureStart?.let { floor - it } }
+        // The hub counter can hold back the first steps of a walk (simulator stress F29: 32 counted for
+        // a 35 m walk, the way back fully counted, 66 % "back" at 20 m): count the way out generously.
+        val away = stepsAtWalkBackFloor?.let { floor -> stepsAtDepartureStart?.let { floor - it + WALK_BACK_AWAY_ALLOWANCE_STEPS } }
         val back = readingSteps?.let { now -> stepsAtWalkBackFloor?.let { now - it } }
-        val walkedBack = away != null && back != null && away > 0 && back * 100 >= away * WALK_BACK_STEP_SHARE_PCT
+        val walkedBack = away != null && back != null && away > WALK_BACK_AWAY_ALLOWANCE_STEPS &&
+            back * 100 >= away * WALK_BACK_STEP_SHARE_PCT
         if (!(readingStepsRising && !deepReturnNeedsRecession && walkedBack &&
                 rssi >= unlockThreshold + UNLOCK_MARGIN_DB && rssi >= walkBackFloorRssi + WALK_BACK_RISE_DB)) {
             walkBackSinceMs = UNSET_MS
@@ -1072,6 +1075,7 @@ internal class ProximityDecisionPolicy(
         const val WALK_BACK_RISE_DB = 6
         const val WALK_BACK_STEP_SHARE_PCT = 60L
         const val WALK_BACK_FLOOR_BAND_DB = 2
+        const val WALK_BACK_AWAY_ALLOWANCE_STEPS = 12L
         const val MANUAL_DEEP_RETURN_CONFIRM_MS = 1_000L
         const val MANUAL_DEEP_RETURN_MIN_READINGS = 2
         /** Spread of the RSSI sampling cadence (GATT read time); see [tryRearmManualDeepFarReturn]. */

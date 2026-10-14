@@ -1137,18 +1137,20 @@ class ManualLockDeepFarReturnTest {
     /**
      * An automatic Lock 20 steps from the car (stepsAtCar 1 000), on to 60 steps out and straight back,
      * one step and one smoothed reading every 500 ms; the level falls 0.3 dB per step from [atCarDb].
-     * Returns "steps from the car route" of the first unlock on the way back, or null.
+     * The step total misses the first [warmUp] steps of the walk (a hub counter). Returns "steps from
+     * the car, route" of the first unlock on the way back, or null.
      */
-    private fun walkBackOpensAt(atCarDb: Double, withSteps: Boolean = true): String? {
+    private fun walkBackOpensAt(atCarDb: Double, withSteps: Boolean = true, warmUp: Long = 10L): String? {
         val p = ProximityDecisionPolicy()
         p.onUnlockConfirmed(0L)
         p.onDepartureLockStarted(stepsAtCar = 1_000L); p.onAutomaticLockProvenDeparture(10_000L)
         var t = 14_000L
-        for (step in 1_020L..1_120L) {
-            val pos = if (step <= 1_060L) step - 1_000L else 1_120L - step
+        for (walked in 20L..120L) {
+            val pos = if (walked <= 60L) walked else 120L - walked
             val rssi = (atCarDb - 0.3 * pos).toInt()
-            if (p.shouldUnlock(t, rssi, true, -86, if (withSteps) step else null, stepsRising = withSteps))
-                return "${if (step > 1_060L) pos else -pos} ${p.unlockRoute}"
+            val counted = 1_000L + (walked - warmUp).coerceAtLeast(0L)
+            if (p.shouldUnlock(t, rssi, true, -86, if (withSteps) counted else null, stepsRising = withSteps))
+                return "${if (walked > 60L) pos else -pos} ${p.unlockRoute}"
             t += 500L
         }
         return null
@@ -1156,13 +1158,19 @@ class ManualLockDeepFarReturnTest {
 
     @Test fun aWalkBackOpensAtTheApproachLevelOnceMostOfTheWayIsWalked() {
         // A front pocket: -85 from 17 steps out, -82 from 7 steps out (where the deep return opens).
-        assertEquals("10 walk_back", walkBackOpensAt(-80.0))
+        assertEquals("9 walk_back", walkBackOpensAt(-80.0))
     }
 
     @Test fun aStrongPhoneAtTheApproachLevelFarOutWaitsForTheDeepReturn() {
         // -85 already 37 steps out on the way back (simulator stress: strong phones opened at 16-29 m).
-        // The odometry holds the walk-back return (40 % of the way back); the deep return opens as before.
+        // The odometry holds the walk-back return; the deep return opens as before.
         assertEquals("27 deep_return", walkBackOpensAt(-74.0))
+    }
+
+    @Test fun aCounterThatMissedTheStartOfTheWalkDoesNotOpenHalfWayBack() {
+        // Simulator stress F29: a hand-held strong phone back from 35 m to 20 m; the counter had missed
+        // the first steps of the walk, so 21 steps back looked like 66 % of 32 steps out.
+        assertEquals("27 deep_return", walkBackOpensAt(-74.0, warmUp = 14L))
     }
 
     @Test fun withoutCountedStepsOnlyTheDeepReturnOpens() {
