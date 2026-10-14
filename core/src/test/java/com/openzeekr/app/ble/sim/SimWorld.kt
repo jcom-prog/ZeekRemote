@@ -127,6 +127,13 @@ internal data class SimPhysics(
     val cpuSleep: Boolean = System.getenv("SIM_CPU_SLEEP") == "1",
     /** Chance that this run's user walks with the screen on (phone in use); the field default is off. */
     val screenOnWhileWalkingP: Double = 0.0,
+    /**
+     * 0.3.2: chance per walk up to the car that the signal stays flat over the last metres and only
+     * jumps at the door (field 14/10 18:31, S24+ in the front trouser pocket: -85..-91 smoothed from
+     * ~12 m to ~1 m, then -77 at the door and -63 at the car). Body and car shadow along the walking
+     * line; the log-distance model alone always kept rising. SIM_PLATEAU_P.
+     */
+    val approachPlateauP: Double = env("SIM_PLATEAU_P", 0.0),
 ) {
     fun describe() = "%s phone%+.1fdB slope%.1f fade%.1f gnss%s ttff%.0fs hub%.0fs warm%.0f self%.0fs refuse%.2f cloud%.0fs/fail%.2f/lag%.0fs".format(
         name, phoneOffsetDb, pathSlope, fadeSigmaDb, gnssAccMedianM?.let { "%.1fm".format(it) } ?: "-", gnssTtffMs / 1000.0,
@@ -216,6 +223,10 @@ internal class SimWorld(
     private val rGnss = stream(5)
     private val rCar = stream(6)
     private val rCloud = stream(7)
+    private val rPlateau = stream(8)
+    /** The flat final approach of the current walk (see [SimPhysics.approachPlateauP]): cap and start. */
+    private var plateauCapDb: Double? = null
+    private var plateauFromM = 0.0
     /** World time: radio, car, BT controller, cloud servers. Always runs. */
     val scheduler = TestCoroutineScheduler()
     private val dispatcher = StandardTestDispatcher(scheduler)
@@ -269,6 +280,7 @@ internal class SimWorld(
         // Fitted on the field pocket readings: ~-79 at 2.5 m, -83 at 5 m, -85 at 7 m (approach ARM),
         // -87 at 10 m, -88..-90 facing at 15 m, -92..-98 walking away at 15-20 m (03/10 logs).
         trueRssi = -71.0 - physics.pathSlope * log10(d) + carryNow.db + facing.db + extraShadowDb + fade + physics.phoneOffsetDb
+        plateauCapDb?.let { cap -> if (distanceM in 1.0..plateauFromM) trueRssi = minOf(trueRssi, cap + fade) }
     }
     fun readRssi(): Int {
         var v = trueRssi + 1.0 * rRadio.gaussian()
@@ -973,8 +985,15 @@ internal class SimWorld(
                 is Leg.Walk -> {
                     walking = true; walkSpeed = leg.speedMps; walkTarget = leg.toM; extraShadowDb = 0.0
                     facing = if (leg.toM < distanceM) Facing.TOWARD else Facing.AWAY
+                    // A walk up to the door may have a flat final approach (only that walk).
+                    if (leg.toM < distanceM && leg.toM <= 1.5 && physics.approachPlateauP > 0.0 &&
+                        rPlateau.chance(physics.approachPlateauP)) {
+                        plateauCapDb = -88.0 + (carryNow.db - Carry.FRONT_POCKET.db) + physics.phoneOffsetDb +
+                            rPlateau.uniform(-2.0, 2.0)
+                        plateauFromM = rPlateau.uniform(8.0, 14.0)
+                    }
                     val ms = (kotlin.math.abs(leg.toM - distanceM) / leg.speedMps * 1000).toLong()
-                    run(ms); walking = false
+                    run(ms); walking = false; plateauCapDb = null
                 }
                 is Leg.WalkPeak -> {
                     walking = true; walkSpeed = leg.speedMps; walkTarget = distanceM + leg.speedMps * leg.ms / 1000.0

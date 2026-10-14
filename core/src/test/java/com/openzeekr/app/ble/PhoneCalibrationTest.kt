@@ -105,4 +105,44 @@ class PhoneCalibrationTest {
         assertEquals(0, again.offsetDb)
         assertEquals(PhoneCalibration.Profile(), memory.saved)
     }
+
+    // ---- 0.3.2: diagnose lines for the step counter ----
+
+    @Test fun aShortWalkSaysHowItsStepsArrived() {
+        val cal = PhoneCalibration(Memory())
+        val notes = mutableListOf<String>()
+        cal.onDecision = { notes += it }
+        val w = Walker(cal)
+        w.walkTo(25.0); w.stand(20_000)          // about 7 steps, then a stop far from the car
+        assertTrue(notes.toString(), notes.any { it.startsWith("stop after ") && it.contains(" updates in ") })
+    }
+
+    /** Synthetic walk from 30 m to the car while the step count stays at 100, then standing there. */
+    private fun frozenWalk(cal: PhoneCalibration, w: Walker, afterStop: List<Long>): Long {
+        var t = w.t
+        var d = 30.0
+        while (d > 1.0) { t += 500; d = maxOf(1.0, d - 0.65); cal.observe(t, w.rssi(d), 100L) }
+        afterStop.forEach { steps -> t += 500; cal.observe(t, w.rssi(1.0), steps) }
+        return t
+    }
+
+    @Test fun anArrivalWhoseStepsComeInOneLateBatchIsReported() {
+        // The count does not move during the walk and the whole walk arrives 5 s after the stop. One
+        // long silence also stretches the stop time (the learner adapts it to slow deliveries).
+        val cal = PhoneCalibration(Memory())
+        val notes = mutableListOf<String>()
+        cal.onDecision = { notes += it }
+        frozenWalk(cal, Walker(cal), List(10) { 100L } + List(120) { 140L })
+        assertTrue(cal.profile.approach.isEmpty())
+        assertTrue(notes.toString(), notes.any { it == "stop after 40 steps: too few step updates (2 updates in 27.5 s)" ||
+            it.startsWith("stop after 40 steps: too few step updates (2 updates in 27,5 s)") })
+    }
+
+    @Test fun anArrivalWithAlmostNoStepsIsReportedFromTheRise() {
+        val cal = PhoneCalibration(Memory())
+        val notes = mutableListOf<String>()
+        cal.onDecision = { notes += it }
+        frozenWalk(cal, Walker(cal), List(10) { 100L } + List(120) { 102L })
+        assertTrue(notes.toString(), notes.any { it.startsWith("stop: signal rose") && it.endsWith("only 2 steps were counted") })
+    }
 }

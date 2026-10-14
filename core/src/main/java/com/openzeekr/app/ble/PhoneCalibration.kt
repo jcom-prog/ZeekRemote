@@ -134,7 +134,14 @@ internal class PhoneCalibration(
         while (boutStart > 0 && stepMarks[boutStart].atMs - stepMarks[boutStart - 1].atMs < stopMs) boutStart--
         val bout = stepMarks.toList().subList(boutStart, stepMarks.size)
         val boutSteps = steps - bout.first().steps
-        if (bout.size < 3 || boutSteps < MIN_BOUT_STEPS) { if (boutSteps >= 4) note("stop after $boutSteps steps: walk too short"); return }
+        if (bout.size < 3 || boutSteps < MIN_BOUT_STEPS) {
+            when {
+                boutSteps >= MIN_BOUT_STEPS -> note("stop after $boutSteps steps: too few step updates (${boutNote(bout)})")
+                boutSteps >= 4 -> note("stop after $boutSteps steps: walk too short (${boutNote(bout)})")
+                else -> riseWithoutSteps(lastChange.atMs, boutSteps)?.let { note(it) }
+            }
+            return
+        }
         // Cadence from the bout without its last interval (that one contains the stop itself).
         val ratePerMs = (bout[bout.size - 2].steps - bout.first().steps).toDouble() /
             (bout[bout.size - 2].atMs - bout.first().atMs).coerceAtLeast(1L)
@@ -171,6 +178,23 @@ internal class PhoneCalibration(
         if (car - far < MIN_FALL_DB) { note("departure: signal did not fall"); return }
         record(far = far)
         note("departure learned: far %.0f".format(far))
+    }
+
+    /** Diagnose (0.3.2): how the step count arrived during a bout. */
+    private fun boutNote(bout: List<StepMark>): String =
+        "%d update%s in %.1f s".format(bout.size, if (bout.size == 1) "" else "s",
+            (bout.last().atMs - bout.first().atMs) / 1000.0)
+
+    /**
+     * Diagnose (0.3.2): a stop where the signal rose like an arrival but (almost) no steps were
+     * counted - the step count arrived late or not at all (field 14/10 18:31: no line at all).
+     */
+    private fun riseWithoutSteps(stopAtMs: Long, steps: Long): String? {
+        val atCar = meanBetween(stopAtMs + 500L, stopAtMs + 3_500L) ?: return null
+        val before = meanBetween(stopAtMs - 12_000L, stopAtMs - 8_000L) ?: return null
+        if (atCar - before < MIN_RISE_DB) return null
+        return "stop: signal rose %.0f dB but only %d step%s counted".format(atCar - before, steps,
+            if (steps == 1L) " was" else "s were")
     }
 
     /** When the count passed [target], from step marks assuming a steady cadence; null if unknown. */

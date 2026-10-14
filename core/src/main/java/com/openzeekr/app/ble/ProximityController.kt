@@ -109,7 +109,7 @@ class ProximityController internal constructor(
      * so every threshold keeps the meaning it was tuned with.
      */
     internal val calibration = PhoneCalibration(calibrationStore).also { c ->
-        c.onDecision = { Logx.d("prox", "self-calibration: $it"); publishCalibration() }
+        c.onDecision = { Logx.d("prox", "self-calibration: $it (${motion.stepSummary})"); publishCalibration() }
         c.onArrival = { onProvenArrival(it) }
     }
 
@@ -136,6 +136,8 @@ class ProximityController internal constructor(
     }
 
     private fun publishCalibration() { _calibrationView.value = calibrationViewNow() }
+    /** Diagnose (0.3.2): when step counts reach the app while the car is heard. */
+    private val stepTrace = StepDeliveryTrace()
     private val ble: ProximityLink = calibratedLink(ble)
 
     private fun calibratedLink(link: ProximityLink): ProximityLink = object : ProximityLink by link {
@@ -144,7 +146,9 @@ class ProximityController internal constructor(
 
     private fun calibrated(raw: Int): Int {
         val before = calibration.offsetDb
-        calibration.observe(clock.elapsedMs(), raw, motion.observedSteps)
+        val steps = motion.observedSteps
+        calibration.observe(clock.elapsedMs(), raw, steps)
+        stepTrace.observe(clock.elapsedMs(), steps)?.let { Logx.d("motion", "$it; ${motion.stepSummary}") }
         if (calibration.offsetDb != before) Logx.d("prox", "self-calibration: ${calibration.summary()}")
         return normalized(raw)
     }
