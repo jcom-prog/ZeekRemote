@@ -263,6 +263,8 @@ internal object SimOracle {
     fun tier(code: String) = if (code in SAFETY) "SAFETY" else "COMFORT"
     /** After a stop mark, a key command this soon still belongs to the walk up (see expect-stay-locked). */
     const val STOP_GRACE_MS = 2_500L
+    /** A departure lock beyond 30 m is late only this long after the user passed 8 m (see expect-lock). */
+    const val LOCK_EVIDENCE_MS = 12_000L
 
     fun check(w: SimWorld): List<Finding> {
         val out = mutableListOf<Finding>()
@@ -391,7 +393,11 @@ internal object SimOracle {
                         l == null -> out += Finding(if (alarmed) "DEPARTURE_NO_LOCK_ALARMED" else "DEPARTURE_NO_LOCK_SILENT",
                             m.atMs, m.distanceM, "no Lock after the departure (${belief(minOf(endAt, samples.last().atMs))})")
                         l.detail == "self-lock" -> Unit
-                        l.distanceM > 30.0 -> out += f("DEPARTURE_LOCK_LATE", l, "locked at %.1f m".format(l.distanceM))
+                        // Late = beyond 30 m and more than 12 s after passing 8 m: the proof needs ~12 s of
+                        // evidence, which a jogger (F34, 3.5 m/s) turns into 40 m (simulation audit C: 80 of the
+                        // 84 calibrated findings were this).
+                        l.distanceM > 30.0 && (segSamples.firstOrNull { it.distanceM >= 8.0 }?.let { l.atMs - it.atMs > LOCK_EVIDENCE_MS } ?: true) ->
+                            out += f("DEPARTURE_LOCK_LATE", l, "locked at %.1f m".format(l.distanceM))
                     }
                 }
                 // Only an open car needs the alarm (stress F41: the approach unlock failed, the car
