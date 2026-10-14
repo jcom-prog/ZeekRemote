@@ -78,6 +78,8 @@ internal class BleDepartureEvidence(
     // strong-near sample: back at the car, the at-the-car reference applies again).
     private var turnRefSmoothed: Int? = null
     private var turnAtNextSample = false
+    // The arrival was proven by steps + rise, not by a strong-near sample (0.3.1).
+    private var anchoredArrival = false
 
     /** Categorical reason for the latest decision; never contains a position. */
     var reason: String = "no_samples"
@@ -172,6 +174,7 @@ internal class BleDepartureEvidence(
 
         if (rawRssi >= strongNearRssi) {
             sawStrongInEpoch = true
+            anchoredArrival = false
             lastStrongAtMs = nowMs
             clearSinceMs = nowMs
             clearStartSteps = stepsSinceUnlock
@@ -223,7 +226,8 @@ internal class BleDepartureEvidence(
         return when {
             nowMs - clearSinceMs < minClearMs -> decide("clear_too_short")
             nowMs - weakSinceMs < minWeakMs -> decide("weak_too_short")
-            stepsSinceUnlock - baseSteps < minSteps -> decide("steps_too_few")
+            stepsSinceUnlock - baseSteps < (if (anchoredArrival) ANCHORED_MIN_STEPS else minSteps) ->
+                decide("steps_too_few")
             // Absence of strong samples is not departure: the signal must actually have receded
             // from the last at-the-car level (strong reference) by a clear margin.
             smoothedRssi > (strongRefSmoothed ?: clearStartSmoothed) - minRecessionDb ->
@@ -266,6 +270,27 @@ internal class BleDepartureEvidence(
      */
     fun linkRestored() { turnAtNextSample = true }
 
+    /**
+     * The phone was proven at the car without a strong-near sample (0.3.1 self-calibration): a walk
+     * that ended with the signal risen by the last metres' worth, measured with the step counter
+     * ([PhoneCalibration]). In a back pocket the field never read above about -77 at the door, so
+     * the walk proof was never available and the departure always ended in an alarm (simulator
+     * 14/10: 23 of 38 traced "alarm instead of Lock" cases). That level becomes the at-the-car
+     * reference: the departure must still recede [minRecessionDb] from it and stay deep for the
+     * whole window, and walk [ANCHORED_MIN_STEPS] steps instead of [minSteps]: from a back-pocket
+     * level the deep-far band starts about 2 m from the car, and a slow walk away (simulator F04,
+     * 0.6 m/s) otherwise completed the proof at its 5 m stop. A real strong-near sample keeps
+     * precedence.
+     */
+    fun arrivalObserved(smoothedLevel: Int) {
+        if (sawStrongInEpoch) return
+        sawStrongInEpoch = true
+        anchoredArrival = true
+        strongRefSmoothed = smoothedLevel
+        turnRefSmoothed = null
+        restartObservation()
+    }
+
     private fun rising(smoothedRssi: Int, windowMin: Int) = smoothedRssi >= windowMin + maxRiseDb
 
     private fun recededFromTurn(smoothedRssi: Int) =
@@ -306,5 +331,7 @@ internal class BleDepartureEvidence(
         const val MAX_DESCENT_GAP_MS = 8_000L
         /** 0.3.0: a smoothed rise above the window's lowest level that means "coming back". */
         const val MAX_RISE_DB = 5
+        /** 0.3.1: steps the walk proof needs after an arrival proven by steps + rise (~14 m). */
+        const val ANCHORED_MIN_STEPS = 20L
     }
 }

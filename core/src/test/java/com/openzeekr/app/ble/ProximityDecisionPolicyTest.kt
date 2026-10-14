@@ -1016,4 +1016,30 @@ class ManualLockDeepFarReturnTest {
             assertFalse(policy.shouldUnlock(time, -74, false, -86))
         }
     }
+
+    // ---- plan H2 (0.3.1): back from a walk-away Lock with the phone in a back pocket ----
+
+    private fun lockedAndGoneFar(stepsAtLoss: Long?): ProximityDecisionPolicy = ProximityDecisionPolicy().apply {
+        onDepartureLockStarted()                      // automatic Lock on the way out
+        onLinkEnded()                                 // the link dropped ...
+        onFarLinkLossWhileLocked(stepsAtLoss)         // ... clearly far from the car
+    }
+
+    @Test fun backPocketReturnAfterAFarLinkLossOpensWhenTheStepsShowTheWalkBack() {
+        // At the door in a back pocket: -79, never strong-near; the motion sensor still says STILL.
+        val withSteps = lockedAndGoneFar(stepsAtLoss = 100L)
+        assertTrue((0 until 8).any { i -> withSteps.shouldUnlock(60_000L + i * 1_000L, -79, false, -86, 140L) })
+        // 0.3.0 behaviour: without the step counter this return never opened the car.
+        val withoutSteps = lockedAndGoneFar(stepsAtLoss = null)
+        assertFalse((0 until 8).any { i -> withoutSteps.shouldUnlock(60_000L + i * 1_000L, -79, false, -86, null) })
+    }
+
+    @Test fun theStepReturnNeedsTheWalkAndADoorLevelSignal() {
+        // A few steps at the edge of range (no walk back), door-level readings: stays locked.
+        val shuffled = lockedAndGoneFar(stepsAtLoss = 100L)
+        assertFalse((0 until 8).any { i -> shuffled.shouldUnlock(60_000L + i * 1_000L, -79, false, -86, 106L) })
+        // Walked, but the signal is a 10 m signal (-88): stays locked.
+        val tenMetres = lockedAndGoneFar(stepsAtLoss = 100L)
+        assertFalse((0 until 8).any { i -> tenMetres.shouldUnlock(60_000L + i * 1_000L, -88, false, -86, 140L) })
+    }
 }

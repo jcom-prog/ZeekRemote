@@ -24,6 +24,7 @@ import com.openzeekr.app.DepsHolder
 import com.openzeekr.app.util.AppBranding
 import com.openzeekr.app.util.CarNotifier
 import com.openzeekr.app.util.Logx
+import com.openzeekr.app.util.SteadyClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -59,6 +60,7 @@ class ProximityService : Service() {
     // it when parked-idle (offloaded presence scan wakes us CPU-asleep) and — crucially — while the car
     // is connected but FAR + still, where the step detector wakes us the instant you start walking.
     private var wakeLock: android.os.PowerManager.WakeLock? = null
+    private var bridgeWakeLock: android.os.PowerManager.WakeLock? = null
 
     // One-shot probe for the "app started right next to the car" case before the offloaded listener
     // has seen its first advert. This runs once per service lifetime, never after every motion edge.
@@ -107,13 +109,13 @@ class ProximityService : Service() {
         // A wake-up sensor only guarantees CPU time for delivery of its callback. Hold a short,
         // bounded bridge across the 1.5 s motion-confirmation window; scan/connect owns the normal
         // wakelock after recovery begins. This is never a standing idle wakelock.
-        deps.motion.onHardwareWake = { acquireWakeLock(HARDWARE_WAKE_BRIDGE_MS) }
+        deps.motion.onHardwareWake = { acquireBridgeWakeLock(HARDWARE_WAKE_BRIDGE_MS) }
         deps.ble.onStatus133Recovery = {
             scope.launch {
                 val offload = deps.config.config.value.presenceOffloadEnabled
                 val armed = offload && deps.ble.armPresenceScan(approachMode = true)
                 if (armed) {
-                    motionPresenceRecoveryUntilMs = System.currentTimeMillis() + MOTION_PRESENCE_RECOVERY_MS
+                    motionPresenceRecoveryUntilMs = SteadyClock.wallMs() + MOTION_PRESENCE_RECOVERY_MS
                     Logx.d("svc", "status 133: hardware presence re-armed; preserving arrival epoch")
                 } else {
                     Logx.w("svc", "status 133: offload unavailable; bounded foreground fallback")
@@ -135,7 +137,7 @@ class ProximityService : Service() {
                     }
                     if (EarlyPresencePolicy.mayRetain(keySleeping,
                         deps.motion.state.value == MotionMonitor.Motion.MOVING,
-                        earlyPresenceUntilMs, System.currentTimeMillis()) &&
+                        earlyPresenceUntilMs, SteadyClock.wallMs()) &&
                         scanResult != null && EarlyPresencePolicy.freshAdvertisement(
                             scanResult.timestampNanos, android.os.SystemClock.elapsedRealtimeNanos(),
                             EARLY_PRESENCE_WINDOW_MS) &&
@@ -147,7 +149,7 @@ class ProximityService : Service() {
                         Logx.d("svc", "presence ignored: stationary key is sleeping")
                         if (!EarlyPresencePolicy.mayRetain(keySleeping,
                                 deps.motion.state.value == MotionMonitor.Motion.MOVING,
-                                earlyPresenceUntilMs, System.currentTimeMillis())) deps.ble.disarmPresenceScan()
+                                earlyPresenceUntilMs, SteadyClock.wallMs())) deps.ble.disarmPresenceScan()
                     }
                     return START_STICKY
                 }
@@ -244,18 +246,20 @@ class ProximityService : Service() {
             runCatching { it.ble.disarmPresenceScan() }
         }
         releaseWakeLock()
+        runCatching { if (bridgeWakeLock?.isHeld == true) bridgeWakeLock?.release() }
+        bridgeWakeLock = null
         if (wakeReceiverRegistered) runCatching { unregisterReceiver(wakeReceiver) }
         wakeReceiverRegistered = false
         scope.cancel()
         super.onDestroy()
     }
 
-    private fun acquireWakeLock(timeoutMs: Long? = null) {
+    private fun acquireWakeLock() {
         if (wakeLock?.isHeld == true) return
         val pm = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager ?: return
         wakeLock = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, WAKELOCK_TAG).apply {
             setReferenceCounted(false)
-            runCatching { if (timeoutMs != null) acquire(timeoutMs) else acquire() }
+            runCatching { acquire() }
         }
         Logx.d("svc", "wakelock acquired (CPU stays awake for screen-off keep-alive/proximity)")
     }
@@ -263,6 +267,19 @@ class ProximityService : Service() {
     private fun releaseWakeLock() {
         runCatching { if (wakeLock?.isHeld == true) wakeLock?.release() }
         wakeLock = null
+    }
+
+    /**
+     * Plan H11 (0.3.1): the short bridge after a hardware motion wake has its own wakelock. Sharing
+     * one made the session wakelock a no-op while the 5 s bridge was held ("already held"), so the
+     * CPU could sleep in the middle of a screen-off connect once the bridge expired; and releasing
+     * the session lock also cut the bridge short. Re-acquiring extends the bridge.
+     */
+    private fun acquireBridgeWakeLock(timeoutMs: Long) {
+        val pm = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager ?: return
+        val wl = bridgeWakeLock ?: pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, BRIDGE_WAKELOCK_TAG)
+            .apply { setReferenceCounted(false) }.also { bridgeWakeLock = it }
+        runCatching { wl.acquire(timeoutMs) }
     }
 
     /**
@@ -280,12 +297,12 @@ class ProximityService : Service() {
                 // walk-away lock. After that, enforce a genuinely silent key.
                 if (!EarlyPresencePolicy.mayRetain(keySleeping,
                         deps.motion.state.value == MotionMonitor.Motion.MOVING,
-                        earlyPresenceUntilMs, System.currentTimeMillis())) {
+                        earlyPresenceUntilMs, SteadyClock.wallMs())) {
                     earlyPresenceUntilMs = 0L
                     earlyPresenceResult = null
                     deps.ble.disarmPresenceScan()
                 }
-                if (System.currentTimeMillis() >= sleepDisconnectGraceUntilMs &&
+                if (SteadyClock.wallMs() >= sleepDisconnectGraceUntilMs &&
                     deps.ble.state.value !in setOf(DkBleManager.State.IDLE, DkBleManager.State.ERROR)) {
                     Logx.d("svc", "stationary key: dropping residual BLE session")
                     runCatching { deps.ble.disconnect() }
@@ -320,9 +337,9 @@ class ProximityService : Service() {
                         // AGGRESSIVE_RECONNECT_MS since the last session so walking AWAY falls back to the
                         // low-power scan once you're clearly gone.
                         val moving = deps.motion.state.value == MotionMonitor.Motion.MOVING
-                        val recentlyEngaged = System.currentTimeMillis() - lastEngagedMs < AGGRESSIVE_RECONNECT_MS
+                        val recentlyEngaged = SteadyClock.wallMs() - lastEngagedMs < AGGRESSIVE_RECONNECT_MS
                         val normallyAggressive = (moving && recentlyEngaged) || deps.ble.driveAuthorizationActive
-                        val presenceRecoveryActive = System.currentTimeMillis() < motionPresenceRecoveryUntilMs
+                        val presenceRecoveryActive = SteadyClock.wallMs() < motionPresenceRecoveryUntilMs
                         val recoveryRoute = DeepSleepRecoveryPolicy.keepAliveRoute(
                             presenceRecoveryActive = presenceRecoveryActive,
                             presenceArmed = deps.ble.presenceArmed,
@@ -343,7 +360,7 @@ class ProximityService : Service() {
                                 // Long-approach path: BALANCED while walking, LOW_POWER while still.
                                 // This filtered PendingIntent scan stays in the BT controller and holds
                                 // no CPU wakelock, so it can listen all day without foreground scanning.
-                                val fast = moving && System.currentTimeMillis() < fastPresenceUntilMs
+                                val fast = moving && SteadyClock.wallMs() < fastPresenceUntilMs
                                 if (!deps.ble.armPresenceScan(approachMode = moving, lowLatency = fast)) {
                                     Logx.w("svc", "keep-alive: hardware presence registration failed; trying foreground fallback")
                                     runCatching { deps.ble.connect(null) }
@@ -362,7 +379,7 @@ class ProximityService : Service() {
                     // establishing, then handed to the proximity controller's need). We do NOT proactively
                     // cycle the link — a genuine stall is caught reactively by the controller's liveness.
                     else -> {
-                        lastEngagedMs = System.currentTimeMillis()
+                        lastEngagedMs = SteadyClock.wallMs()
                         if (deps.ble.presenceArmed) deps.ble.disarmPresenceScan()
                     }
                 }
@@ -390,7 +407,7 @@ class ProximityService : Service() {
      *  the screen off while ordinary callback scans can time out twice. Other wake signals retain the
      *  bounded foreground probe. Neither route steals the BLE slot from Wear. */
     private suspend fun recoveryProbe(deps: Deps, reason: String, confirmedMotionWake: Boolean = false) {
-        val now = System.currentTimeMillis()
+        val now = SteadyClock.wallMs()
         if (now - lastWakeProbeMs < WAKE_PROBE_DEBOUNCE_MS) return
         if (!deps.ble.hasCredential || !deps.ble.bluetoothAvailable) return
         if (keySleeping) {
@@ -427,8 +444,19 @@ class ProximityService : Service() {
     /** Low-frequency state watchdog. This does not scan continuously: it only repairs an idle/error
      *  state while motion or the post-unlock drive window says the key is actively needed. */
     private suspend fun watchdog(deps: Deps) {
+        var setupSinceMs = 0L
         while (scope.isActive) {
             val state = deps.ble.state.value
+            // Plan H13: a link that stays in setup (connecting or handshaking) this long is wedged;
+            // start over instead of holding the wakelock and the car's key slot indefinitely.
+            if (state == DkBleManager.State.CONNECTING || state == DkBleManager.State.CONNECTED) {
+                if (setupSinceMs == 0L) setupSinceMs = SteadyClock.wallMs()
+                else if (SteadyClock.wallMs() - setupSinceMs >= SETUP_STUCK_MS) {
+                    Logx.w("svc", "link setup stuck for ${SETUP_STUCK_MS / 1000} s (${state.name}) -> reset")
+                    setupSinceMs = 0L
+                    runCatching { deps.ble.disconnect() }
+                }
+            } else setupSinceMs = 0L
             val needed = deps.ble.driveAuthorizationActive
             deps.proximity.updateDiagnostics(
                 "BLE ${state.name.lowercase()} · motion ${deps.motion.source.name.lowercase()}" +
@@ -472,7 +500,7 @@ class ProximityService : Service() {
                     deps.ble.state.value in setOf(DkBleManager.State.IDLE, DkBleManager.State.ERROR)) {
                     // Do not connect or unlock on an unconfirmed motion edge. Hardware filtering
                     // may capture an advert while the security debounce is still running.
-                    earlyPresenceUntilMs = System.currentTimeMillis() + EARLY_PRESENCE_WINDOW_MS
+                    earlyPresenceUntilMs = SteadyClock.wallMs() + EARLY_PRESENCE_WINDOW_MS
                     if (!deps.ble.armPresenceScan(approachMode = true, lowLatency = true)) {
                         earlyPresenceUntilMs = 0L
                     } else Logx.d("svc", "motion edge: early filtered presence armed; key remains asleep")
@@ -482,7 +510,7 @@ class ProximityService : Service() {
             if (keySleeping) return@collect
             when (deps.ble.state.value) {
                 DkBleManager.State.IDLE, DkBleManager.State.ERROR -> {
-                    fastPresenceUntilMs = System.currentTimeMillis() + FAST_PRESENCE_WINDOW_MS
+                    fastPresenceUntilMs = SteadyClock.wallMs() + FAST_PRESENCE_WINDOW_MS
                     Logx.d("svc", "motion: phone started moving — arm bounded LOW_LATENCY offloaded presence")
                     runCatching { deps.ble.armPresenceScan(approachMode = true, lowLatency = true) }
                 }
@@ -515,7 +543,7 @@ class ProximityService : Service() {
                 keySleeping = true
                 // Allow the existing controller a bounded window to finish a walk-away lock if the
                 // car had just been auto-unlocked. No new presence event can start an unlock now.
-                sleepDisconnectGraceUntilMs = System.currentTimeMillis() + KEY_SLEEP_LOCK_GRACE_MS
+                sleepDisconnectGraceUntilMs = SteadyClock.wallMs() + KEY_SLEEP_LOCK_GRACE_MS
                 deps.ble.disarmPresenceScan()
                 runCatching { deps.ble.disconnect() }
                 val stillFor = if (atCar) "30 min at the car" else "2 min"
@@ -533,7 +561,7 @@ class ProximityService : Service() {
                     Logx.d("svc", "$reason: waking stationary key; selecting screen-off recovery route")
                     val prepared = if (EarlyPresencePolicy.mayConnect(movementConfirmed,
                             com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value,
-                            earlyPresenceUntilMs, System.currentTimeMillis()))
+                            earlyPresenceUntilMs, SteadyClock.wallMs()))
                         earlyPresenceResult else null
                     earlyPresenceResult = null
                     earlyPresenceUntilMs = 0L
@@ -545,7 +573,7 @@ class ProximityService : Service() {
                     } else recoveryProbe(deps, reason, confirmedMotionWake = !driveOverride)
                 } else if (!EarlyPresencePolicy.mayRetain(keySleeping,
                         deps.motion.state.value == MotionMonitor.Motion.MOVING,
-                        earlyPresenceUntilMs, System.currentTimeMillis())) {
+                        earlyPresenceUntilMs, SteadyClock.wallMs())) {
                     // Keep the motion-edge scan alive through the debounce (it never connects on its
                     // own): field 03/10 19:55 (0.1.63) this poll disarmed it 0.2 s after arming, the
                     // advert was only heard after the wake and the car opened at the door.
@@ -663,6 +691,7 @@ class ProximityService : Service() {
 
     companion object {
         private const val WAKELOCK_TAG = "openzeekr:dk-keepalive"
+        private const val BRIDGE_WAKELOCK_TAG = "openzeekr:motion-bridge"
         private const val CHANNEL_ID = "proximity"
         private const val NOTIF_ID = 42
         private const val RECONNECT_INTERVAL_MS = 8_000L
@@ -679,6 +708,8 @@ class ProximityService : Service() {
         private const val EARLY_PRESENCE_WINDOW_MS = KEY_WAKE_MOTION_CONFIRM_MS + 2 * KEY_SLEEP_POLL_MS
         private const val KEY_SLEEP_LOCK_GRACE_MS = 15_000L
         private const val HARDWARE_WAKE_BRIDGE_MS = 5_000L
+        /** H13: setup (CONNECTING/CONNECTED without a session) longer than this is wedged. */
+        private const val SETUP_STUCK_MS = 90_000L
         /** While yielded to the watch, poll faster so we notice resume/expiry promptly. */
         private const val WATCH_YIELD_POLL_MS = 1_000L
         /** Car message-centre poll cadence (no server push, so we pull). */

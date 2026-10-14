@@ -208,6 +208,50 @@ fun SettingsScreen(deps: Deps, modifier: Modifier = Modifier) {
         // -------- region --------
         RegionSection(liveCfg, store) { deps.onEndpointChanged() }
 
+        // -------- self-calibration (0.3.1) --------
+        SettingsCard {
+            CardTitle("Zelfkalibratie")
+            val cal by deps.proximity.calibrationView.collectAsState()
+            var confirmRelearn by remember { mutableStateOf(false) }
+            Text("De app leert hoe jouw telefoon de auto hoort: bij elke aankomst kijkt hij terug naar het " +
+                "signaal 8 stappen vóór de auto, en bij elk vertrek naar het signaal na 25 stappen.",
+                color = Brand.muted, fontSize = 12.sp)
+            val learned = cal.learnedOffsetDb
+            val status = when {
+                learned == null -> "Leert nog: ${cal.arrivals} van ${cal.arrivalsNeeded} aankomsten."
+                cal.appliedOffsetDb > 0 -> "Jouw telefoon hoort de auto %.0f dB beter dan de standaard. ".format(learned) +
+                    "Correctie ${cal.appliedOffsetDb} dB: de auto opent en sluit op de bedoelde afstand."
+                learned < -1.5 -> "Jouw telefoon hoort de auto %.0f dB zwakker dan de standaard. ".format(-learned) +
+                    "Geen correctie: de app opent nooit eerder dan de standaard."
+                else -> "Jouw telefoon hoort de auto als de standaard. Geen correctie nodig."
+            }
+            Text(status, fontSize = 13.sp)
+            fun db(v: Double?) = v?.let { "%.0f dBm".format(it) } ?: "–"
+            InfoRow("Op ±6 m (aankomst)", db(cal.approachDb))
+            InfoRow("Bij de auto", db(cal.atCarDb))
+            InfoRow("Op ±17 m (vertrek)", if (cal.departures == 0) "–" else
+                db(cal.farDb) + if (cal.departuresOutOfRange > 0) " · ${cal.departuresOutOfRange}× buiten bereik" else "")
+            InfoRow("Aankomsten / vertrekken", "${cal.arrivals} / ${cal.departures}")
+            OutlinedButton(onClick = { confirmRelearn = true }, modifier = Modifier.fillMaxWidth()) { Text("Opnieuw leren") }
+            if (confirmRelearn) {
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { confirmRelearn = false },
+                    title = { Text("Opnieuw leren?") },
+                    text = { Text("De app vergeet wat hij over jouw telefoon heeft geleerd en begint opnieuw. " +
+                        "Tot er weer 5 aankomsten zijn, geldt de standaard. Doe dit na een andere telefoon of hoes.") },
+                    confirmButton = {
+                        androidx.compose.material3.TextButton(onClick = {
+                            confirmRelearn = false
+                            deps.proximity.resetCalibration()
+                        }) { Text("Opnieuw leren") }
+                    },
+                    dismissButton = {
+                        androidx.compose.material3.TextButton(onClick = { confirmRelearn = false }) { Text("Annuleren") }
+                    },
+                )
+            }
+        }
+
         // -------- measurement mode (calibration walk) --------
         SettingsCard {
             CardTitle("Measurement mode")

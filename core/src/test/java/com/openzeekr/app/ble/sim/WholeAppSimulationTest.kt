@@ -15,6 +15,10 @@ import java.io.File
  *   SIM_ONLY    comma-separated family prefixes (e.g. "F28,F37")
  *   SIM_OUT     report directory (default build/sim-report)
  *   SIM_TRACE_EVERY_SEED=1  one trace per seed instead of one per (family, finding, carry, motion)
+ *   SIM_LEARN_VISITS  0.3.1: ordinary visits in the same world before each run (self-calibration
+ *                     learning period; the phone's carry varies per visit). Default 0.
+ *   SIM_SELF_CAL=0 / SIM_ARRIVAL_ANCHOR=0 / SIM_H2=0  switch a phase-2 rule off (comparison runs)
+ *   SIM_KEEP_LEARN_LOG=1  keep the learning period in events and traces (debugging)
  */
 class WholeAppSimulationTest {
     @Test fun scenarioMatrix() {
@@ -28,6 +32,17 @@ class WholeAppSimulationTest {
         val report = SimReport.text(results)
         File(outDir, "report.txt").writeText(report)
         File(outDir, "summary.json").writeText(SimReport.summaryJson(results))
+        // One line per run for analysis (synthetic worlds only; no field data).
+        File(outDir, "runs.csv").writeText(buildString {
+            appendLine("suite,family,carry,motion,seed,phoneOffsetDb,slope,learnedOffsetDb,arrivals,codes,learnedRawDb")
+            results.forEach { r ->
+                appendLine(listOf(r.suite, r.scenario.family.substringBefore(' '), r.carry, r.profile.name, r.seed,
+                    "%.1f".format(java.util.Locale.ROOT, r.physics.phoneOffsetDb), "%.1f".format(java.util.Locale.ROOT, r.physics.pathSlope),
+                    r.world.learnedOffsetDb ?: "", r.world.learnedProfile?.approach?.size ?: 0,
+                    r.findings.map { it.code }.distinct().joinToString("|"),
+                    r.world.learnedRawOffsetDb?.let { "%.1f".format(java.util.Locale.ROOT, it) } ?: "").joinToString(","))
+            }
+        })
         println(report.lineSequence().take(70).joinToString("\n"))
         if (System.getProperty("sim.strict") == "true") assertTrue("simulation findings", results.all { it.findings.isEmpty() })
     }
@@ -37,6 +52,7 @@ internal data class SimResult(val suite: String, val scenario: Scenario, val car
                               val seed: Long, val physics: SimPhysics, val findings: List<SimOracle.Finding>, val world: SimWorld)
 
 internal object SimRunner {
+    val LEARN_VISITS = (System.getenv("SIM_LEARN_VISITS") ?: "0").toInt()
     /** [onRun] sees every run with its full log (traces); the log is dropped afterwards to bound memory. */
     fun run(suites: List<String>, seeds: Int, only: List<String>?, onRun: ((SimResult) -> Unit)? = null): List<SimResult> = suites.flatMap { suite ->
         SimScenarios.matrix(seeds).filter { r -> only == null || only.any { r.first.family.startsWith(it) } }.map { (sc, carry, mp) ->
@@ -45,7 +61,10 @@ internal object SimRunner {
             val physics = if (suite == "stress") SimPhysics.random(SimRandom(seed xor 0x5EED_0F_57E55L)) else SimPhysics.calibrated()
             val w = SimWorld(seed, profile, carry, sc.startM, sc.gnssAccuracyM, carRefusesKeyLock = sc.carRefusesKeyLock,
                 keyEdgeRssi = sc.keyEdgeRssi, physics = physics, cloudDown = sc.cloudDown)
-            w.play(sc.legs)
+            // 0.3.1: SIM_LEARN_VISITS ordinary visits in the same world first (self-calibration).
+            val learning = if (LEARN_VISITS > 0) SimScenarios.learningVisits(SimRandom(seed xor 0x1EA2_0F_CA1L), LEARN_VISITS)
+                else emptyList()
+            w.play(sc.legs, learning)
             SimResult(suite, sc, carry, profile, seed, physics, SimOracle.check(w), w).also { r ->
                 onRun?.invoke(r)
                 w.logLines.clear(); w.logLines.trimToSize()
@@ -114,6 +133,17 @@ internal object SimReport {
             }.sorted()
             sb.appendLine("Unlock distance m: n=%d p10=%.1f median=%.1f p90=%.1f".format(unlockD.size, pct(unlockD, .1), pct(unlockD, .5), pct(unlockD, .9)))
             sb.appendLine("Auto-Lock distance m: n=%d p10=%.1f median=%.1f p90=%.1f".format(autoLockD.size, pct(autoLockD, .1), pct(autoLockD, .5), pct(autoLockD, .9)))
+            val learned = rs.mapNotNull { it.world.learnedOffsetDb }.sorted()
+            if (learned.isNotEmpty()) {
+                val approach = rs.mapNotNull { r -> r.world.learnedProfile?.approach?.takeIf { it.size >= 5 }?.sorted()?.let { it[it.size / 2] } }.sorted()
+                val truth = rs.filter { it.world.learnedOffsetDb != null }.map { it.physics.phoneOffsetDb }
+                val err = rs.filter { it.world.learnedOffsetDb != null && (it.world.learnedProfile?.approach?.size ?: 0) >= 5 }
+                    .mapNotNull { r -> r.world.learnedRawOffsetDb?.let { it - r.physics.phoneOffsetDb } }.sorted()
+                sb.appendLine(("Self-calibration: %d runs, %d with >= 5 arrivals; offset dB p10=%d median=%d p90=%d; " +
+                    "approach level median p10=%.1f median=%.1f p90=%.1f; error vs true phone offset p10=%.1f median=%.1f p90=%.1f (true median %.1f)").format(
+                    learned.size, approach.size, learned[(learned.size - 1) / 10], learned[(learned.size - 1) / 2], learned[(learned.size - 1) * 9 / 10],
+                    pct(approach, .1), pct(approach, .5), pct(approach, .9), pct(err, .1), pct(err, .5), pct(err, .9), pct(truth.sorted(), .5)))
+            }
             sb.appendLine("Status-133 connect failures: %d (runs affected %d)".format(
                 rs.sumOf { r -> r.world.events.count { it.kind == "STATUS_133" } }, rs.count { r -> r.world.events.any { it.kind == "STATUS_133" } }))
             // Battery: share of time the CPU is held, and GNSS seconds, per hour of simulated time.
@@ -124,6 +154,9 @@ internal object SimReport {
             sb.appendLine("Battery: CPU held %.0f%% of the time (%.0f min/h); GNSS %.1f min/h; while far and locked the CPU is held %.0f%%".format(
                 100.0 * awakeS / totalS, 60.0 * awakeS / totalS, 60.0 * gnssS / totalS,
                 if (idleFar.isEmpty()) 0.0 else 100.0 * idleFar.count { it.cpuAwake } / idleFar.size))
+            val gnssWindows = rs.map { it.world.controller.maxGnssWindowsInAnEpoch }.sorted()
+            sb.appendLine("GNSS windows in one visit (25 s each): median=%d p90=%d max=%d".format(
+                gnssWindows[(gnssWindows.size - 1) / 2], gnssWindows[(gnssWindows.size - 1) * 9 / 10], gnssWindows.last()))
             sb.appendLine()
             sb.appendLine("Per family: unlock distance on each expected approach / auto-Lock distance / seconds to locked (median, p10-p90):")
             rs.groupBy { it.scenario.family }.forEach { (fam, frs) ->
@@ -185,6 +218,7 @@ internal object SimReport {
         private fun body(r: SimResult, head: String) = buildString {
             appendLine("${r.scenario.family}: ${r.scenario.description}")
             appendLine("suite=${r.suite} carry=${r.carry} motion=${r.profile.name} seed=${r.seed} physics=[${r.physics.describe()}]")
+            if (r.world.learnedOffsetDb != null) appendLine("learned: ${r.world.learnedSummary}")
             appendLine(head)
             appendLine("--- events"); r.world.events.forEach { appendLine("%8.1f d=%5.1f %s %s".format(it.atMs / 1000.0, it.distanceM, it.kind, it.detail)) }
             appendLine("--- log"); r.world.logLines.forEach { appendLine(it) }

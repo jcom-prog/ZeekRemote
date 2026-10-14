@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import kotlin.math.pow
 
 /**
@@ -41,7 +42,7 @@ import kotlin.math.pow
  */
 class ProximityController internal constructor(
     private val config: () -> com.openzeekr.app.config.SecretsConfig,
-    private val ble: ProximityLink,
+    ble: ProximityLink,
     private val motion: ProximityMotion,
     private val scope: CoroutineScope,
     /** Cloud lock fallback (POST Command.LOCK). Returns true if the cloud accepted it. Injected by Deps
@@ -57,6 +58,13 @@ class ProximityController internal constructor(
     private val departureLocationSource: DepartureLocator,
     private val wakeLocks: SafetyWakeLocks,
     private val stateStore: ProximityStateStore = ProximityStateStore.None,
+    calibrationStore: PhoneCalibrationStore = PhoneCalibrationStore.None,
+    /** Apply the learned correction (the simulator's comparison run learns without applying). */
+    private val selfCalibration: Boolean = true,
+    /** A proven arrival (steps + rise) anchors the departure proof like a strong-near sample. */
+    private val arrivalAnchor: Boolean = true,
+    /** Plan H2: steps since a far link loss let a door-level signal count as the return. */
+    private val awayReturnSteps: Boolean = true,
 ) {
     constructor(
         appContext: android.content.Context,
@@ -70,7 +78,8 @@ class ProximityController internal constructor(
         cloudLockSnapshot: suspend () -> CloudLockSnapshot? = { null },
     ) : this(store::current, ble, motion, scope, cloudLock, cloudIsLocked, cloudLockSnapshot,
         SystemProximityClock, AndroidProximityAlerts(appContext), DepartureLocationSource(appContext),
-        AndroidSafetyWakeLocks(appContext), SharedPrefsProximityStateStore(appContext))
+        AndroidSafetyWakeLocks(appContext), SharedPrefsProximityStateStore(appContext),
+        SharedPrefsPhoneCalibrationStore(appContext))
 
     enum class Zone { UNKNOWN, FAR, NEAR }
     enum class Phase { PASSIVE, CONNECTING, MONITORING }
@@ -91,6 +100,81 @@ class ProximityController internal constructor(
 
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state
+
+    /**
+     * Self-calibration per phone (0.3.1): learns from this phone's RAW readings at known moments;
+     * everything below sees readings on the reference phone's scale ([PhoneCalibration.normalize]),
+     * so every threshold keeps the meaning it was tuned with.
+     */
+    internal val calibration = PhoneCalibration(calibrationStore).also { c ->
+        c.onDecision = { Logx.d("prox", "self-calibration: $it"); publishCalibration() }
+        c.onArrival = { onProvenArrival(it) }
+    }
+
+    /** What the settings card shows (levels in dBm of THIS phone; no positions). */
+    data class CalibrationView(
+        val arrivals: Int, val arrivalsNeeded: Int,
+        /** + = hears the car better than the reference phone; null while learning. */
+        val learnedOffsetDb: Double?,
+        /** dB subtracted from every reading (only ever >= 0). */
+        val appliedOffsetDb: Int,
+        val approachDb: Double?, val atCarDb: Double?, val farDb: Double?,
+        val departures: Int, val departuresOutOfRange: Int,
+    )
+
+    private val _calibrationView = MutableStateFlow(calibrationViewNow())
+    val calibrationView: StateFlow<CalibrationView> = _calibrationView
+
+    private fun calibrationViewNow(): CalibrationView {
+        val c = calibration
+        val p = c.profile
+        fun median(l: List<Double>) = l.sorted().let { if (it.isEmpty()) null else it[it.size / 2] }
+        return CalibrationView(p.approach.size, PhoneCalibration.MIN_SAMPLES, c.learnedOffsetDb, c.offsetDb,
+            median(p.approach), median(p.atCar), median(p.far.filterNotNull()), p.far.size, p.far.count { it == null })
+    }
+
+    private fun publishCalibration() { _calibrationView.value = calibrationViewNow() }
+    private val ble: ProximityLink = calibratedLink(ble)
+
+    private fun calibratedLink(link: ProximityLink): ProximityLink = object : ProximityLink by link {
+        override suspend fun pollRemoteRssi(): Int? = link.pollRemoteRssi()?.let { calibrated(it) }
+    }
+
+    private fun calibrated(raw: Int): Int {
+        val before = calibration.offsetDb
+        calibration.observe(clock.elapsedMs(), raw, motion.observedSteps)
+        if (calibration.offsetDb != before) Logx.d("prox", "self-calibration: ${calibration.summary()}")
+        return normalized(raw)
+    }
+
+    private fun normalized(raw: Int) = if (selfCalibration) calibration.normalize(raw) else raw
+
+    /**
+     * The learner recognised a walk that ended at the car (it reports ~6-15 s after the stop). In the
+     * current unlock epoch that is the at-the-car anchor the departure proof needs when no strong
+     * sample came (back pocket), and the place the "steps since the car" count from.
+     */
+    private fun onProvenArrival(arrival: PhoneCalibration.Arrival) {
+        if (!arrivalAnchor || !armedUnlocked) return
+        val route = bleRoute ?: return
+        val epochStartElapsed = clock.elapsedMs() - (clock.wallMs() - unlockObservedAtMs)
+        if (arrival.atMs < epochStartElapsed - ARRIVAL_BEFORE_UNLOCK_MS) return
+        route.arrivalObserved(normalized(arrival.carLevelDb.roundToInt()))
+        val strongAfterArrival = lastStrongNearAtMs != 0L &&
+            clock.wallMs() - lastStrongNearAtMs < clock.elapsedMs() - arrival.atMs
+        if (!strongAfterArrival) stepsAtLastStrongNear = arrival.stepsAtCar
+        Logx.d("prox", "proven arrival at the car (steps + rise) -> departure anchor")
+    }
+
+    /** One line for the settings card. */
+    fun calibrationSummary(): String = calibration.summary()
+
+    /** "Learn again" in Settings: forget the learned profile (the correction returns to 0). */
+    fun resetCalibration() {
+        calibration.reset()
+        publishCalibration()
+        Logx.d("prox", "self-calibration reset")
+    }
 
     /** Service-level wake/recovery information for field diagnosis without logcat. */
     fun updateDiagnostics(value: String) {
@@ -148,6 +232,12 @@ class ProximityController internal constructor(
     private var nearDepartureAnchor: NearDepartureAnchor? = null
     private var linkDepartureJob: Job? = null
     private var departureProofAtMs = 0L
+    private var armedStillSinceMs = 0L
+    private var gnssWindowsThisEpoch = 0
+    private var gnssBudgetLogged = false
+    /** Simulator report: the most GNSS windows any one visit used. */
+    internal var maxGnssWindowsInAnEpoch = 0
+        private set
     // BLE + walking departure route: one route (evidence + proof ledger) per unlock epoch, only
     // for the replayed sensitivity preset. GNSS remains an additional positive route for BLE Lock
     // and the only route for cloud Lock.
@@ -340,7 +430,7 @@ class ProximityController internal constructor(
                         // Unlocked at the car (NEAR): don't burn battery polling — idle until the car
                         // pushes a frame (activity = you moving/leaving) or the link drops. Hold the
                         // wakelock: this is the at-the-car case and the inbound-frame wake needs the CPU.
-                        if (armedUnlocked) { _wakeLockNeeded.value = true; armedWatch(); continue }
+                        if (armedUnlocked) { _wakeLockNeeded.value = !armedLongStill(); armedWatch(); continue }
                         val rssi = ble.pollRemoteRssi()
                         if (rssi != null) { rssiNullStreak = 0; onSample(rssi) }
                         else {
@@ -415,7 +505,8 @@ class ProximityController internal constructor(
     }
 
     /** Preserve the motion + edge-RSSI evidence delivered by the offloaded presence receiver. */
-    fun onPresenceMatch(rssi: Int) {
+    fun onPresenceMatch(rawRssi: Int) {
+        val rssi = normalized(rawRssi)
         // A PendingIntent can recreate the service/process. Start before recording evidence so the
         // normal runApproach loop cannot subsequently reset the just-created arrival epoch.
         if (!_state.value.running) start()
@@ -518,6 +609,7 @@ class ProximityController internal constructor(
         farNoMotionCheck?.cancel(); farNoMotionCheck = null; farNoMotionCheckAtMs = 0L
         farNoMotionAttempts = 0; departureAlarmHolds = 0
         departureProofAtMs = 0L
+        gnssWindowsThisEpoch = 0; gnssBudgetLogged = false
         bleRoute = BleDepartureRoute.forLockThreshold(config().sensitivityLockRssi)
         bleDepartureLoggedReason = ""
         bleDepartureReasonLoggedAtMs = 0L
@@ -589,6 +681,7 @@ class ProximityController internal constructor(
 
     private fun onSessionDown() {
         if (linkLostAtMs == 0L) {
+            calibration.onLinkLost(clock.elapsedMs())
             decisionPolicy.onLinkEnded()
             carSelfLock.onLinkLost()
             linkLostAtMs = clock.wallMs()
@@ -609,7 +702,7 @@ class ProximityController internal constructor(
             // link beside the car or a phone left inside it never arms it.
             val lostFar = lostRssi?.let { it < config().sensitivityLockRssi } ?: false
             if (!armedUnlocked && lostFar)
-                decisionPolicy.onFarLinkLossWhileLocked()
+                decisionPolicy.onFarLinkLossWhileLocked(motion.observedSteps)
             stationaryFar.onReadingsStopped()
             // RSSI/body shielding and a real departure can both tear down the link. Neither a timer
             // nor the last (possibly stale) RSSI can tell them apart; position must corroborate.
@@ -1083,6 +1176,25 @@ class ProximityController internal constructor(
             !com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value
 
     /**
+     * Battery (0.3.1): the open-car idle wait held the CPU for as long as the car stayed open with
+     * the phone in range - hours, with the car open in the drive. After [ARMED_STILL_WAKE_MAX_MS]
+     * of continuous stillness (no verification or Lock running) the CPU may sleep: the link stays
+     * up in the Bluetooth controller, and a motion edge or a frame from the car (a door) wakes the
+     * wait at once and takes the wakelock again.
+     */
+    private fun armedLongStill(): Boolean {
+        val now = clock.elapsedMs()
+        val still = motion.state.value == MotionMonitor.Motion.STILL && lockConfirmationJob?.isActive != true &&
+            lockJob?.isActive != true && !measuringNow()
+        if (!still) { armedStillSinceMs = 0L; return false }
+        if (armedStillSinceMs == 0L) armedStillSinceMs = now
+        val long = now - armedStillSinceMs >= ARMED_STILL_WAKE_MAX_MS
+        if (long && _wakeLockNeeded.value) Logx.d("prox", "open car, phone still ${ARMED_STILL_WAKE_MAX_MS / 60_000} min: " +
+            "CPU may sleep; motion or the car wakes it")
+        return long
+    }
+
+    /**
      * Unlocked "activity watch" (replaces polling while armed). The car pushes status frames only on
      * CHANGE — bursts while you move, long silence while parked-still — so:
      *  - SILENT (no inbound for ≥ ARMED_ACTIVE_MS, after the post-unlock window): idle with
@@ -1290,6 +1402,16 @@ class ProximityController internal constructor(
             Logx.d("prox", "independent departure unverified: location anchor unavailable")
             return false
         }
+        // Battery (0.3.1): every check is a 25 s GNSS window. Six per visit cover a departure, a
+        // return and a second departure; past that the visit gets the alarm, not more GNSS.
+        if (gnssWindowsThisEpoch >= MAX_GNSS_WINDOWS_PER_EPOCH) {
+            if (!gnssBudgetLogged) Logx.d("prox", "independent departure unverified: location budget of this visit spent " +
+                "($MAX_GNSS_WINDOWS_PER_EPOCH windows)")
+            gnssBudgetLogged = true
+            return false
+        }
+        gnssWindowsThisEpoch++
+        maxGnssWindowsInAnEpoch = maxOf(maxGnssWindowsInAnEpoch, gnssWindowsThisEpoch)
         val observedUnlockAt = unlockObservedAtMs
         fun sameSession(): Boolean = armedUnlocked && unlockObservedAtMs == observedUnlockAt &&
             _state.value.running && config().proximityEnabled && departureAnchor === anchor
@@ -1460,6 +1582,7 @@ class ProximityController internal constructor(
         // weakened; gating observation on READY discarded the only reliable arrival evidence.
         val unlockQualified = !armedUnlocked && !needToUnlock && decisionPolicy.shouldUnlock(
             now, smoothed, motion.state.value == MotionMonitor.Motion.MOVING, unlockThresh,
+            if (awayReturnSteps) motion.observedSteps else null,
         )
         if (decisionPolicy.consumeDeepFarReturnRearm()) {
             Logx.d("prox", "return after Lock recognised from signal (clearly far, now near rssi=$smoothed) " +
@@ -1935,6 +2058,8 @@ class ProximityController internal constructor(
     private suspend fun verifyCloudLock(reason: String, bleProofAtMs: Long = 0L): Boolean {
         cloudLockWithheldUnverified = false
         val wl = acquireSafetyWakelock()
+        // The level when the first request went out: a later request needs the user still away.
+        var levelAtFirstRequest: Double? = null
         try {
             repeat(CLOUD_LOCK_MAX_REQUESTS) { requestIndex ->
                 val accepted = DepartureCheckedLockAttempt.send(
@@ -1953,6 +2078,18 @@ class ProximityController internal constructor(
                             Logx.w("prox", "$reason: cloud Lock vetoed - $why")
                             return@departure false
                         }
+                        // 0.3.1 (stress F32): the first request locked the car, but the cloud
+                        // status lagged and still said "unlocked"; a second request went out while
+                        // the user walked back and executed 13 s later with the user at the door.
+                        val level = gattEma
+                        val first = levelAtFirstRequest
+                        if (requestIndex > 0 && level != null && first != null && level >= first + LOCK_VETO_RISE_DB) {
+                            spendBleProof(fresh)
+                            Logx.w("prox", "$reason: cloud Lock request #${requestIndex + 1} vetoed - signal rose " +
+                                "${(level - first).toInt()} dB since the first request (walking back)")
+                            return@departure false
+                        }
+                        if (requestIndex == 0) levelAtFirstRequest = level
                         val bleProofFresh = bleProofAtMs != 0L && clock.wallMs() - bleProofAtMs <= BLE_PROOF_CLOUD_MS &&
                             lastStrongNearAtMs < bleProofAtMs
                         if (bleProofFresh) Logx.d("prox", "$reason: cloud Lock backed by a fresh BLE departure proof")
@@ -2201,6 +2338,12 @@ class ProximityController internal constructor(
         private const val LOSS_NEAR_STALE_READING_MS = 10_000L
         /** Level assumed for a veto without any reading: a new BLE proof is then out of reach. */
         private const val VETO_UNKNOWN_LEVEL_RSSI = -100
+        /** Battery: GNSS departure windows (25 s each) one visit may use. */
+        private const val MAX_GNSS_WINDOWS_PER_EPOCH = 6
+        /** Battery: an open car with the phone still beside it holds the CPU at most this long. */
+        private const val ARMED_STILL_WAKE_MAX_MS = 10 * 60_000L
+        /** A proven arrival up to this long before the unlock is this epoch's (a late unlock at the door). */
+        private const val ARRIVAL_BEFORE_UNLOCK_MS = 30_000L
         /** Plan K1: fewer steps than this since the car veto an automatic Lock (~9 m of walking). */
         private const val LOCK_MIN_STEPS_SINCE_CAR = 12L
         /** Plan K1: a strong reading this recent vetoes an automatic Lock. */

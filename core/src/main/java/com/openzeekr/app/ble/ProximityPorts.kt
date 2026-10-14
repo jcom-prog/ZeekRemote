@@ -16,7 +16,8 @@ interface ProximityClock {
 
 object SystemProximityClock : ProximityClock {
     override fun elapsedMs(): Long = android.os.SystemClock.elapsedRealtime()
-    override fun wallMs(): Long = System.currentTimeMillis()
+    /** Never jumps when the phone's clock is set (plan H7): see [com.openzeekr.app.util.SteadyClock]. */
+    override fun wallMs(): Long = com.openzeekr.app.util.SteadyClock.wallMs()
 }
 
 /** The digital-key link as the proximity loop sees it (implemented by [DkBleManager]). */

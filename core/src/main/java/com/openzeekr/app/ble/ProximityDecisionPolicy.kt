@@ -86,6 +86,8 @@ internal class ProximityDecisionPolicy {
     // had ended the link). Sitting in or beside the car never drops the link out of range.
     private var awayRoundTripPending = false
     private var awayReturnReadings = 0
+    /** Step count at that far link loss: walking back since then is shown by the step counter. */
+    private var stepsAtFarLoss: Long? = null
 
     /** Which rule qualified the latest unlock (categorical, for the log and the journal). */
     var unlockRoute: String = "none"
@@ -155,10 +157,10 @@ internal class ProximityDecisionPolicy {
     }
 
     /** Returns true only for a qualified approach or a fresh, stable session already at the door. */
-    fun shouldUnlock(nowMs: Long, rssi: Int, moving: Boolean, unlockThreshold: Int): Boolean {
+    fun shouldUnlock(nowMs: Long, rssi: Int, moving: Boolean, unlockThreshold: Int, steps: Long? = null): Boolean {
         if (departureLatched &&
             !tryRearmSameLinkReturn(nowMs, rssi, moving, unlockThreshold) &&
-            !(awayRoundTripPending && tryRearmAwayReturn(nowMs, rssi, moving, unlockThreshold))) {
+            !(awayRoundTripPending && tryRearmAwayReturn(nowMs, rssi, moving, unlockThreshold, steps))) {
             return false
         }
         // The key can wake while the user walks AWAY (security sleep at the car, car self-locked):
@@ -350,10 +352,11 @@ internal class ProximityDecisionPolicy {
      * Only called with real far evidence (a far reading at loss), so a wedged link beside the car
      * or a phone left inside it never arms this.
      */
-    fun onFarLinkLossWhileLocked() {
+    fun onFarLinkLossWhileLocked(steps: Long? = null) {
         if (departureLatched) {
             awayRoundTripPending = true
             awayReturnReadings = 0
+            stepsAtFarLoss = steps
         }
     }
 
@@ -564,15 +567,21 @@ internal class ProximityDecisionPolicy {
      * verify is that the phone is now genuinely back at the door. Require a sustained strong-near
      * run; any reading back out of the near band resets it. A slow reconnect that completes only at
      * the door, standing still, still opens the car - the exact field 16:44 failure.
+     * Plan H2 (0.3.1): in a back pocket the door reads -76..-81, never strong-near, and the motion
+     * sensor says STILL after the walk back (simulator F28: the car stayed locked at the door). When
+     * the step counter shows the walk back since the far loss ([AWAY_RETURN_MIN_STEPS]), a sustained
+     * door-level signal ([AWAY_RETURN_DOOR_MARGIN_DB] above the unlock threshold) is the return too.
      */
-    private fun tryRearmAwayReturn(nowMs: Long, rssi: Int, moving: Boolean, unlockThreshold: Int): Boolean {
+    private fun tryRearmAwayReturn(nowMs: Long, rssi: Int, moving: Boolean, unlockThreshold: Int, steps: Long?): Boolean {
         if (rssi <= unlockThreshold - FAR_MARGIN_DB) { awayReturnReadings = 0; return false }
-        if (rssi >= STRONG_NEAR_RSSI) awayReturnReadings++ else awayReturnReadings = 0
+        val walkedBack = steps != null && stepsAtFarLoss?.let { steps - it >= AWAY_RETURN_MIN_STEPS } == true
+        val atDoor = rssi >= STRONG_NEAR_RSSI || (walkedBack && rssi >= unlockThreshold + AWAY_RETURN_DOOR_MARGIN_DB)
+        if (atDoor) awayReturnReadings++ else awayReturnReadings = 0
         val needed = if (moving) AWAY_RETURN_MOVING_READINGS else AWAY_RETURN_STILL_READINGS
         if (awayReturnReadings < needed) return false
         finishSameLinkReturn()
-        unlockQualifiedAtMs = nowMs; unlockRoute = "away_return"
-        awayRoundTripPending = false
+        unlockQualifiedAtMs = nowMs; unlockRoute = if (rssi >= STRONG_NEAR_RSSI) "away_return" else "away_return_steps"
+        awayRoundTripPending = false; stepsAtFarLoss = null
         return true
     }
 
@@ -959,6 +968,10 @@ internal class ProximityDecisionPolicy {
         // door is exactly the ambiguous field 16:44 case.
         const val AWAY_RETURN_MOVING_READINGS = 2
         const val AWAY_RETURN_STILL_READINGS = 4
+        /** H2: steps since the far link loss that prove the walk back (~10 m). */
+        const val AWAY_RETURN_MIN_STEPS = 15L
+        /** H2: the door level after a proven walk back, above the unlock threshold (-82 for "far"). */
+        const val AWAY_RETURN_DOOR_MARGIN_DB = 4
         /** Linked-watch samples every 1 s; a longer silence is a far-sleep gap. */
         const val MANUAL_DEEP_MAX_GAP_MS = 2_500L
         const val MANUAL_DEEP_PROOF_TTL_MS = 60_000L

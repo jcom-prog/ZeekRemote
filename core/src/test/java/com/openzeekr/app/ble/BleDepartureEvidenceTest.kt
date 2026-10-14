@@ -352,4 +352,36 @@ class BleDepartureEvidenceTest {
             moving = false, stepsAvailable = false)
         assertNull(f.firstConfirmAt)
     }
+
+    // ---- 0.3.1: a proven arrival (steps + rise) as the at-the-car anchor ----
+
+    @Test fun aBackPocketDepartureNeedsAProvenArrivalAndThenRecedesFromIt() {
+        // Back pocket: -79 at the door, never a strong-near sample; walking away decays to -96.
+        fun departure(e: BleDepartureEvidence): Feed {
+            val f = Feed(e)
+            f.run(4_000, { -79 }, moving = false)
+            val leaveAt = f.t
+            f.run(20_000, f.decay(-80, leaveAt, 1.5))
+            return f
+        }
+        val without = departure(BleDepartureEvidence(lock))
+        assertNull(without.firstConfirmAt)
+        assertEquals("arrival_not_observed", without.e.reason)
+
+        val anchored = BleDepartureEvidence(lock).also { it.arrivalObserved(-79) }
+        val f = departure(anchored)
+        assertTrue("confirmed only once the signal receded from the car level", f.firstConfirmAt != null)
+        assertEquals("walk", anchored.confirmKind)
+    }
+
+    @Test fun aProvenArrivalNeverReplacesAStrongSample() {
+        val e = BleDepartureEvidence(lock)
+        val f = Feed(e)
+        f.run(2_000, { -62 }, moving = false)                 // strong at the door
+        e.arrivalObserved(-90)                               // a later, weaker anchor changes nothing:
+        val leaveAt = f.t                                    // with -90 as reference the walk below
+        f.run(25_000, { at -> f.decay(-70, leaveAt, 2.0)(at).coerceAtLeast(-93) })  // could never recede 6 dB
+        assertTrue(f.firstConfirmAt != null)
+        assertEquals("walk", e.confirmKind)
+    }
 }

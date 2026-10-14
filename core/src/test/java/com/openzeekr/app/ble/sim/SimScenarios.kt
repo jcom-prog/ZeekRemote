@@ -226,6 +226,26 @@ internal object SimScenarios {
         FieldCase("#30 14/10 0.2.16", "no auto-Lock (step detector silent)", listOf("F29", "F22", "F04")),
     )
 
+    /**
+     * The learning period before a run (0.3.1 self-calibration): [visits] ordinary days at the car -
+     * walk up from 30 m, a short stop at the door, away again - each with the phone carried another
+     * way (hand, front or back pocket at random), in the same world as the run. The scenario then
+     * starts with what the app learned.
+     */
+    fun learningVisits(r: SimRandom, visits: Int): List<Leg> = buildList {
+        repeat(visits) {
+            add(Leg.Carrying(Carry.values()[(r.nextDouble() * 3).toInt().coerceAtMost(2)]))
+            add(Walk(1.0, r.uniform(1.1, 1.5)))
+            add(Stand(r.uniform(4_000.0, 10_000.0).toLong()))
+            add(OpenDoor)
+            add(Stand(r.uniform(5_000.0, 15_000.0).toLong(), shadowDb = -6.0))
+            add(Walk(30.0, r.uniform(1.1, 1.5)))
+            add(Stand(60_000))
+            add(LockByOther)
+        }
+        add(Leg.Carrying(null))
+    }
+
     /** families x carry x motion profile x seeds. */
     fun matrix(seeds: Int = 3): List<Triple<Scenario, Carry, Pair<MotionProfile, Long>>> = buildList {
         for (f in families) for (c in Carry.values()) for (m in MotionProfile.ALL) for (s in 1..seeds)

@@ -20,6 +20,7 @@ import android.content.IntentFilter
 import android.os.Build
 import android.util.Log
 import com.openzeekr.app.util.Logx
+import com.openzeekr.app.util.SteadyClock
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -64,12 +65,12 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
         private set
 
     override fun noteUnlockConfirmed() {
-        driveAuthorizationUntilMs = System.currentTimeMillis() + DRIVE_AUTHORIZATION_WINDOW_MS
+        driveAuthorizationUntilMs = SteadyClock.wallMs() + DRIVE_AUTHORIZATION_WINDOW_MS
         Logx.d("ble", "unlock confirmed - keeping DK presence ready for drive authorization")
     }
 
     val driveAuthorizationActive: Boolean
-        get() = System.currentTimeMillis() < driveAuthorizationUntilMs
+        get() = SteadyClock.wallMs() < driveAuthorizationUntilMs
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var inboundHandler: ((Int, ByteArray) -> Unit)? = null
@@ -147,6 +148,25 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
     }
 
     /** Our own key module's advertised name, learned after a successful DK session (phone only). */
+    /** Battery (0.3.1): Android's limit of 5 scan starts per 30 s, kept with one start of margin. */
+    private val scanStarts = ScanStartLimiter()
+    @Volatile private var staleScanCleared = false
+
+    /**
+     * Battery (0.3.1): an offloaded presence scan is registered with a PendingIntent and outlives the
+     * process that armed it. A new process starts with [presenceArmed] false and never stopped it, so a
+     * LOW_LATENCY scan from before a restart could keep running unseen. Stopped once per process.
+     */
+    @SuppressLint("MissingPermission")
+    private fun clearStalePresenceScan(scanner: android.bluetooth.le.BluetoothLeScanner) {
+        if (staleScanCleared) return
+        staleScanCleared = true
+        runCatching { scanner.stopScan(presencePendingIntent()) }
+    }
+
+    /** Plan H3 (0.3.1): another Zeekr whose handshake just failed waits behind other candidates. */
+    private val failedHandshakes = FailedHandshakeDeferral()
+    @Volatile private var scanStartedAtMs = 0L
     private val ownKey = OwnKeyNameFilter(object : OwnKeyNameFilter.Store {
         private val prefs = appContext.getSharedPreferences("dk_own_key", Context.MODE_PRIVATE)
         override fun load(): String? = prefs.getString("name", null)
@@ -254,7 +274,7 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
     @Volatile private var handshakeBackoffUntilMs = 0L
 
     private fun inHandshakeBackoff(): Boolean {
-        val left = handshakeBackoffUntilMs - System.currentTimeMillis()
+        val left = handshakeBackoffUntilMs - SteadyClock.wallMs()
         if (left > 0) { Logx.d("ble", "handshake backoff active (${left / 1000}s left) - not auto-connecting"); return true }
         return false
     }
@@ -396,9 +416,14 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
     @SuppressLint("MissingPermission")
     private fun startScan(a: BluetoothAdapter, useBatching: Boolean = true) {
         val scanner = a.bluetoothLeScanner ?: run { fail("no LE scanner"); return }
+        if (!scanStarts.tryStart(SteadyClock.wallMs())) {
+            fail("scan start deferred: Android allows 5 scan starts per 30 s; the keep-alive retries")
+            return
+        }
         _state.value = State.SCANNING
         seenAdvertisers.clear(); waitingRndLogged.clear()
         skippedOtherCars.clear(); weakAdvertLogged.clear(); ownKey.onScanStart()
+        scanStartedAtMs = SteadyClock.wallMs()
         rndByMac.clear()
         advBroadcastRnd = null
         // No device ScanFilter on the foreground connect: the car doesn't advertise the DK
@@ -454,6 +479,10 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
                     if (skippedOtherCars.add(addr)) Logx.d("ble", "skip other Zeekr $addr (not our key module)")
                     return false
                 }
+                if (failedHandshakes.deferNow(addr, SteadyClock.wallMs(), scanStartedAtMs)) {
+                    if (skippedOtherCars.add(addr)) Logx.d("ble", "defer $addr (its handshake failed recently) - other cars first")
+                    return false
+                }
                 // Only advertisers that match the car are logged (once per MAC per scan). Logging
                 // every headset, TV and watch around filled the phone log within minutes (field
                 // 12/10: the 16:33 key problem had already scrolled out of the log at 16:48).
@@ -500,14 +529,21 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
             }
         }
         scanCb = cb
-        Logx.d("ble", "scanning (UNFILTERED, ${if (useBatching) "batched ${REPORT_DELAY_MS}ms" else "immediate"}) " +
+        // Foreground connect: with the screen on, scan UNFILTERED and match in software (see
+        // handleAdvert), so the advert log can show a car whose region/firmware advertises different
+        // identifiers. With the screen off Android refuses an unfiltered scan ("Cannot start unfiltered
+        // scan in screen-off") without an error: every screen-off route that came here waited out the
+        // whole scan timeout (plan H12, ~28 s) before the offloaded presence scan took over. Screen off
+        // therefore uses the same 0xFDFD/0x06FE filter the presence scan has proven in the field.
+        val screenOn = runCatching {
+            (appContext.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager)?.isInteractive
+        }.getOrNull() ?: true
+        val filters = if (screenOn) null else carScanFilters()
+        Logx.d("ble", "scanning (${if (filters == null) "UNFILTERED" else "FILTERED 0xFDFD/0x06FE, screen off"}, " +
+            "${if (useBatching) "batched ${REPORT_DELAY_MS}ms" else "immediate"}) " +
             "- match by name *zeekr*, adv-uuid 0xFDFD, DK service ${DkProtocol.SERVICE_UUID}, svcData or mfr 0x06FE. " +
             "Only matching advertisers are logged.")
-        // Foreground connect: scan UNFILTERED and match in software (see handleAdvert). The hardware
-        // 0xFDFD/0x06FE ScanFilter is kept ONLY for the offloaded background presence scan; on the
-        // foreground connect it risked hiding (and never logging) a car whose region/firmware
-        // advertises different identifiers - the "no DK device matched, nothing in the advert log" case.
-        scanner.startScan(null, settings, cb)
+        scanner.startScan(filters, settings, cb)
         scanJob = scope.launch {
             delay(SCAN_TIMEOUT_MS)
             if (_state.value == State.SCANNING) {
@@ -568,6 +604,11 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
         if (presenceArmed) disarmPresenceScan()
         val scanner = adapter?.bluetoothLeScanner ?: return false
         if (adapter?.isEnabled != true) return false
+        clearStalePresenceScan(scanner)
+        if (!scanStarts.tryStart(SteadyClock.wallMs())) {
+            Logx.w("ble", "presence scan arm deferred (Android allows 5 scan starts per 30 s)")
+            return false
+        }
         val settings = ScanSettings.Builder()
             // LOW_LATENCY is allowed only during ProximityService's bounded post-motion wake window.
             // Continued walking falls back to BALANCED; parked/still remains LOW_POWER. All three
@@ -608,7 +649,7 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
     /** Stop the hardware-offloaded presence scan (e.g. once we're engaged with a live session). */
     @SuppressLint("MissingPermission")
     fun disarmPresenceScan() {
-        if (!presenceArmed) return
+        if (!presenceArmed) { adapter?.bluetoothLeScanner?.let { clearStalePresenceScan(it) }; return }
         val scanner = adapter?.bluetoothLeScanner
         runCatching { scanner?.stopScan(presencePendingIntent()) }
         presenceArmed = false
@@ -683,8 +724,8 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
         disconnect()
         delay(800) // let the stack settle and the car release the stale session before reconnecting
         if (!reconnectLast()) connect(null)
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
+        val deadline = SteadyClock.wallMs() + timeoutMs
+        while (SteadyClock.wallMs() < deadline) {
             if (_state.value == State.SESSION_READY) { Logx.d("ble", "refreshSession: SESSION_READY"); return true }
             delay(200)
         }
@@ -834,6 +875,7 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
             Logx.d("ble", "DK session READY")
             val before = ownKey.learnedName
             ownKey.onSessionReady(connectingName)
+            lastDevice?.address?.let { failedHandshakes.onSuccess(it) }
             if (ownKey.learnedName != before) Logx.d("ble", "own key module name learned")
             setupRetries = 0 // clean session — clear the fast-retry budget
             status133RecoveryPolicy.onSessionReady()
@@ -849,10 +891,11 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
             // growing window so a car that won't complete the DK handshake can't cause an endless
             // connect/stall/drop/reconnect thrash. A user-initiated connect clears this (resetHandshakeBackoff).
             handshakeFailStreak++
+            lastDevice?.address?.let { failedHandshakes.onFailure(it, SteadyClock.wallMs()) }
             if (handshakeFailStreak >= HANDSHAKE_FAIL_THRESHOLD) {
                 val backoff = (HANDSHAKE_BACKOFF_BASE_MS shl (handshakeFailStreak - HANDSHAKE_FAIL_THRESHOLD))
                     .coerceAtMost(HANDSHAKE_BACKOFF_MAX_MS)
-                handshakeBackoffUntilMs = System.currentTimeMillis() + backoff
+                handshakeBackoffUntilMs = SteadyClock.wallMs() + backoff
                 Logx.w("ble", "DK handshake failed ${handshakeFailStreak}x - backing off auto-reconnect ${backoff / 1000}s")
             }
             fail("DK handshake: ${e.message}")
@@ -878,7 +921,7 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
         val frameBytes = reasm.feed(bytes) ?: return
         try {
             val f = DkFrame.decode(frameBytes)
-            lastInboundMs = System.currentTimeMillis() // the car is talking = activity
+            lastInboundMs = SteadyClock.wallMs() // the car is talking = activity
             runCatching { onInboundActivity?.invoke() }
             Logx.d("ble", "<- frame cmd=0x${f.cmdId.toString(16)} ${DkProtocol.name(f.cmdId)} body=${f.body.size}B " +
                 "hex=${f.body.take(64).joinToString("") { "%02x".format(it) }}")
@@ -918,7 +961,25 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
 
     override fun close() { inboundHandler = null }
 
-    private fun fail(msg: String) { lastError = msg; Logx.e("ble", msg); _state.value = State.ERROR }
+    /**
+     * Every failure ends with no GATT client left open (plan H13, 0.3.1). A failure during setup
+     * (service not found, notify or handshake failed) used to leave [gatt] set: the next connect()
+     * then ignored its own scan match ("a GATT client is already active") and stayed CONNECTING for
+     * good - no working key, the wakelock held, and the car occupied for other keys.
+     */
+    private fun fail(msg: String) {
+        lastError = msg; Logx.e("ble", msg)
+        abortSetup()
+        gatt?.let { g ->
+            (session as? RealDkSession)?.reset()
+            runCatching { g.disconnect(); g.close() }
+            gatt = null
+            chWrite1 = null; chWrite2 = null; chNotify1 = null; chNotify2 = null
+            reasm1.reset(); reasm2.reset()
+            rssiReads.clear()
+        }
+        _state.value = State.ERROR
+    }
 
     companion object {
         private const val TAG = "DkBleManager"

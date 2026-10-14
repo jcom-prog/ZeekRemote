@@ -86,6 +86,9 @@ internal class BleDepartureRoute private constructor(lockThreshold: Int) {
     /** The link is back after a loss: recession counts from the first reading of the new session. */
     fun linkRestored() = evidence.linkRestored()
 
+    /** A walk that ended at the car, proven by steps and the signal's rise (self-calibration). */
+    fun arrivalObserved(smoothedLevel: Int) = evidence.arrivalObserved(smoothedLevel)
+
     private fun revokeIfContradicted(nowMs: Long, rawRssi: Int, smoothedRssi: Int) {
         revokedReason = null
         val hadProof = ledger.hasProof

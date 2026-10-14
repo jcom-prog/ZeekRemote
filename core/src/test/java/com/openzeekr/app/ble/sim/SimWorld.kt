@@ -186,6 +186,8 @@ internal sealed class Leg {
     /** Bluetooth off or on until the next toggle (the walker carries on meanwhile). */
     data class Bluetooth(val on: Boolean) : Leg()
     data class Mark(val label: String) : Leg()
+    /** Learning period only: how the phone is carried from now on (null = the run's own carry). */
+    data class Carrying(val carry: Carry?) : Leg()
 }
 
 internal class SimWorld(
@@ -242,6 +244,10 @@ internal class SimWorld(
 
     // ---------------- walker ----------------
     var distanceM = startDistanceM; private set
+    private val startM = startDistanceM
+    /** The learning period (0.3.1) carries the phone differently on each visit; the scenario uses [carry]. */
+    private var learnCarry: Carry? = null
+    private val carryNow get() = learnCarry ?: carry
     var facing = Facing.TOWARD; private set
     var walking = false; private set
     var walkSpeed = 0.0; private set
@@ -261,7 +267,7 @@ internal class SimWorld(
         val d = max(distanceM, 0.7)
         // Fitted on the field pocket readings: ~-79 at 2.5 m, -83 at 5 m, -85 at 7 m (approach ARM),
         // -87 at 10 m, -88..-90 facing at 15 m, -92..-98 walking away at 15-20 m (03/10 logs).
-        trueRssi = -71.0 - physics.pathSlope * log10(d) + carry.db + facing.db + extraShadowDb + fade + physics.phoneOffsetDb
+        trueRssi = -71.0 - physics.pathSlope * log10(d) + carryNow.db + facing.db + extraShadowDb + fade + physics.phoneOffsetDb
     }
     fun readRssi(): Int {
         var v = trueRssi + 1.0 * rRadio.gaussian()
@@ -790,11 +796,15 @@ internal class SimWorld(
         }
     }
 
-    private var safetyHeldUntilMs = 0L
+    // Safety wakelocks as Android holds them: each until released or timed out (0.3.1: the model
+    // ignored release, so a 3-min lock-loop wakelock always ran its full time in the battery figures).
+    private val safetyHolds = HashMap<Int, Long>()
+    private var nextSafetyHold = 0
     private val wakeLocks = object : SafetyWakeLocks {
-        override fun acquire(timeoutMs: Long): Any? { safetyHeldUntilMs = maxOf(safetyHeldUntilMs, now() + timeoutMs); return timeoutMs }
-        override fun release(token: Any?) {}
+        override fun acquire(timeoutMs: Long): Any? { val t = ++nextSafetyHold; safetyHolds[t] = now() + timeoutMs; return t }
+        override fun release(token: Any?) { (token as? Int)?.let { safetyHolds.remove(it) } }
     }
+    private fun safetyHeld(): Boolean { val n = now(); safetyHolds.values.removeAll { it <= n }; return safetyHolds.isNotEmpty() }
 
     // ---------------- the real controller ----------------
     val config = SecretsConfig(proximityEnabled = true, proximitySensitivity = "far")
@@ -803,11 +813,21 @@ internal class SimWorld(
     var btOn = true; private set
     var appAlive = true; private set
     /** App-private storage: survives a process restart (SharedPreferences in the app). */
+    private var savedState: com.openzeekr.app.ble.ProximityStateStore.Saved? = null
     val stateStore = object : com.openzeekr.app.ble.ProximityStateStore {
-        var saved: com.openzeekr.app.ble.ProximityStateStore.Saved? = null
-        override fun load() = saved
-        override fun save(saved: com.openzeekr.app.ble.ProximityStateStore.Saved) { this.saved = saved }
+        override fun load() = savedState
+        override fun save(saved: com.openzeekr.app.ble.ProximityStateStore.Saved) { savedState = saved }
     }
+    /** The self-calibration profile (SharedPreferences in the app): survives a process restart. */
+    var learnedProfile: com.openzeekr.app.ble.PhoneCalibration.Profile? = null; private set
+    val calibrationStore = object : com.openzeekr.app.ble.PhoneCalibrationStore {
+        override fun load() = learnedProfile
+        override fun save(profile: com.openzeekr.app.ble.PhoneCalibration.Profile) { learnedProfile = profile }
+    }
+    /** What the learning period taught the app (for the report); null = no learning period. */
+    var learnedSummary = ""; private set
+    var learnedOffsetDb: Int? = null; private set
+    var learnedRawOffsetDb: Double? = null; private set
     private var appScope = CoroutineScope(SupervisorJob() + appDispatcher)
     private fun newController() = ProximityController(
         config = { config }, ble = link, motion = motion, scope = appScope,
@@ -824,7 +844,8 @@ internal class SimWorld(
         cloudLockSnapshot = { if (System.getenv("SIM_NO_CLOUD_STATUS") == "1" || cloudDown) null
             else car.cloudView().let { com.openzeekr.app.ble.CloudLockSnapshot(it.first, it.second) } },
         clock = clock, alerts = alerts, departureLocationSource = locator, wakeLocks = wakeLocks,
-        stateStore = stateStore,
+        stateStore = stateStore, calibrationStore = calibrationStore, selfCalibration = SELF_CAL,
+        arrivalAnchor = ARRIVAL_ANCHOR, awayReturnSteps = H2_STEPS,
     )
     var controller = newController(); private set
 
@@ -834,6 +855,7 @@ internal class SimWorld(
         controller.stop()
         appScope.cancel()
         link.disconnect()
+        safetyHolds.clear()   // a dead process holds no wakelock
         appAlive = false
         service.reset()
     }
@@ -851,7 +873,7 @@ internal class SimWorld(
 
     /** The app holds the CPU (its wakelocks, or a connection in progress). */
     private fun cpuAwake() = appAlive && (controller.wakeLockNeeded.value || link.state.value == DkBleManager.State.CONNECTING ||
-        link.state.value == DkBleManager.State.CONNECTED || now() < safetyHeldUntilMs)
+        link.state.value == DkBleManager.State.CONNECTED || safetyHeld())
     /** Do the app's timers run? Always in the calibrated world; with [SimPhysics.cpuSleep] only while awake. */
     private fun appRuns(): Boolean {
         if (!appAlive) return false
@@ -893,11 +915,47 @@ internal class SimWorld(
     var onTick: ((Long) -> Unit)? = null
     private var walkTarget = 0.0
 
-    fun play(legs: List<Leg>) {
+    fun play(legs: List<Leg>, learning: List<Leg> = emptyList()) {
         Logx.testSink = { level, area, msg -> if (area in LOG_AREAS) log(level, area, msg) }
         try {
             controller.start()
-            for (leg in legs) when (leg) {
+            if (learning.isNotEmpty()) {
+                learning.forEach(::playLeg)
+                endLearning()
+            }
+            legs.forEach(::playLeg)
+        } finally {
+            Logx.testSink = null
+            if (appAlive) controller.stop()
+            appScope.cancel()
+            scope.cancel()
+        }
+    }
+
+    /**
+     * The learning period is over: the user is back where the scenario starts, the car is locked and
+     * the app starts afresh with only what it keeps on disk (the calibration profile). The oracles
+     * and traces see the scenario alone.
+     */
+    private fun endLearning() {
+        learnCarry = null
+        if (!car.locked) car.actuate(true, "by hand")
+        if (appAlive) killApp()
+        savedState = null
+        if (!btOn) btOn = true
+        walking = false; facing = Facing.TOWARD; extraShadowDb = 0.0; indoor = false
+        distanceM = startM
+        run(4_000L)
+        startApp()
+        learnedSummary = controller.calibrationSummary()
+        learnedOffsetDb = controller.calibration.offsetDb
+        learnedRawOffsetDb = controller.calibration.learnedOffsetDb
+        if (System.getenv("SIM_KEEP_LEARN_LOG") != "1") { events.clear(); samples.clear(); logLines.clear() }
+        log('D', "sim", "learning period over: $learnedSummary")
+    }
+
+    private fun playLeg(leg: Leg) {
+            when (leg) {
                 is Leg.Stand -> {
                     walking = false; facing = leg.facing; extraShadowDb = leg.shadowDb; indoor = leg.indoor
                     run(leg.ms); indoor = false
@@ -931,7 +989,7 @@ internal class SimWorld(
                 is Leg.PhoneInCar -> {
                     // In the cabin, no body loss: the outdoor path-loss fit reads ~-69 at 0.7 m.
                     // Stays in the cabin until the next walk (a reopen by hand does not move it).
-                    walking = false; facing = Facing.TOWARD; extraShadowDb = 21.0 - carry.db
+                    walking = false; facing = Facing.TOWARD; extraShadowDb = 21.0 - carryNow.db
                     run(leg.ms)
                 }
                 Leg.ReopenByOther -> { if (car.locked) car.actuate(false, "by hand"); car.openDoor(); run(100) }
@@ -957,13 +1015,8 @@ internal class SimWorld(
                     run(100)
                 }
                 is Leg.Mark -> { label = leg.label; record("MARK", leg.label) }
+                is Leg.Carrying -> learnCarry = leg.carry
             }
-        } finally {
-            Logx.testSink = null
-            if (appAlive) controller.stop()
-            appScope.cancel()
-            scope.cancel()
-        }
     }
 
     companion object {
@@ -985,6 +1038,12 @@ internal class SimWorld(
         const val KEY_SLEEP_POLL_MS = 500L
         const val EARLY_PRESENCE_WINDOW_MS = KEY_WAKE_MOTION_CONFIRM_MS + 2 * KEY_SLEEP_POLL_MS
         const val KEY_SLEEP_LOCK_GRACE_MS = 15_000L
-        val LOG_AREAS = setOf("prox", "svc", "motion")
+        val LOG_AREAS = setOf("prox", "svc", "motion", "sim")
+        /** SIM_SELF_CAL=0: the app learns but does not apply the correction (the comparison run). */
+        val SELF_CAL = System.getenv("SIM_SELF_CAL") != "0"
+        /** SIM_ARRIVAL_ANCHOR=0: a proven arrival does not anchor the departure proof. */
+        val ARRIVAL_ANCHOR = System.getenv("SIM_ARRIVAL_ANCHOR") != "0"
+        /** SIM_H2=0: the away-return after a far link loss ignores the step counter (0.3.0). */
+        val H2_STEPS = System.getenv("SIM_H2") != "0"
     }
 }
