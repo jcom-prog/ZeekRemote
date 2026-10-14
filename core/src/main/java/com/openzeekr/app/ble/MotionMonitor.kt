@@ -70,6 +70,12 @@ class MotionMonitor(context: Context) : ProximityMotion {
             ?.takeIf { isWakeCapableStepDetector(it.isWakeUpSensor) }
     private val nonWakeStepDetector: Sensor? =
         sensors?.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)?.takeUnless { it.isWakeUpSensor }
+    // The sensor hub's pedometer keeps counting while the processor sleeps; the S24+ step DETECTOR
+    // does not deliver screen-off (field 14/10 11:30). Read on demand via flush (see [observedSteps]).
+    private val stepCounter: Sensor? = sensors?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+    private val tally = StepTally()
+    @Volatile private var stepCounterActive = false
+    @Volatile private var lastStepFlushElapsedMs = 0L
 
     private val _state = MutableStateFlow(Motion.UNKNOWN)
     override val state: StateFlow<Motion> = _state.asStateFlow()
@@ -85,11 +91,23 @@ class MotionMonitor(context: Context) : ProximityMotion {
     /** A (non-wake-up) step detector exists that can report MOVING while the CPU is held awake. */
     override val hasStepAssist: Boolean get() = nonWakeStepDetector != null
 
-    /** Diagnostic only: counted step-detector events, when the sensor is available. */
-    @Volatile private var countedSteps = 0L
     @Volatile private var diagnosticStepListenerActive = false
-    override val observedSteps: Long? get() = if (diagnosticStepListenerActive || source == Source.STEP ||
-        (source == Source.ACTIVITY && nonWakeStepDetector != null)) countedSteps else null
+    /** Steps since start: the larger of the step detector and the hub's step counter (flushed at most
+     *  once a second, so the value lags real steps by about a second). */
+    override val observedSteps: Long? get() {
+        val detectorAvailable = diagnosticStepListenerActive || source == Source.STEP ||
+            (source == Source.ACTIVITY && nonWakeStepDetector != null)
+        if (stepCounterActive) {
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastStepFlushElapsedMs >= STEP_FLUSH_INTERVAL_MS) {
+                lastStepFlushElapsedMs = now
+                runCatching { sensors?.flush(onStepCounter) }
+            }
+        }
+        if (!detectorAvailable && !stepCounterActive) return null
+        return tally.total(detectorAvailable)
+    }
+    override val stepSummary: String get() = tally.summary()
 
     /** Invoked once on each STILL→MOVING edge (any source). Lets the caller cancel a long idle sleep. */
     @Volatile override var onMovingEdge: (() -> Unit)? = null
@@ -131,7 +149,7 @@ class MotionMonitor(context: Context) : ProximityMotion {
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
         override fun onSensorChanged(event: SensorEvent) {
             if (!running) return
-            countedSteps++
+            tally.onDetectorStep()
             setMoving()
             stillHandler.removeCallbacks(stepStillRunnable)
             stillHandler.postDelayed(stepStillRunnable, STEP_STILL_TIMEOUT_MS)
@@ -140,12 +158,24 @@ class MotionMonitor(context: Context) : ProximityMotion {
     /** When hardware motion triggers own wake-up, count steps without changing that wake policy. */
     private val diagnosticStepListener = object : SensorEventListener {
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
-        override fun onSensorChanged(event: SensorEvent) { if (running) countedSteps++ }
+        override fun onSensorChanged(event: SensorEvent) { if (running) tally.onDetectorStep() }
+    }
+    private val onStepCounter = object : SensorEventListener {
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+        override fun onSensorChanged(event: SensorEvent) {
+            if (running && event.values.isNotEmpty()) tally.onCounter(event.values[0].toLong())
+        }
     }
 
     override fun start() {
         if (running) return
         running = true
+        stepCounterActive = stepCounter?.let {
+            runCatching { sensors?.registerListener(onStepCounter, it, SensorManager.SENSOR_DELAY_NORMAL) == true }
+                .getOrDefault(false)
+        } ?: false
+        if (stepCounterActive) runCatching { sensors?.flush(onStepCounter) } // baseline at once
+        Logx.d("motion", "step counter ${if (stepCounterActive) "active" else "unavailable"}")
         // 1) Hardware trigger sensors (preferred: Doze-proof, zero standing power).
         if (motionDetect != null || stationaryDetect != null) {
             armMotion(); armStationary()
@@ -195,6 +225,8 @@ class MotionMonitor(context: Context) : ProximityMotion {
         runCatching { significantMotion?.let { sensors?.cancelTriggerSensor(onSignificant, it) } }
         runCatching { sensors?.unregisterListener(onStep) }
         runCatching { sensors?.unregisterListener(diagnosticStepListener) }
+        runCatching { sensors?.unregisterListener(onStepCounter) }
+        stepCounterActive = false
         diagnosticStepListenerActive = false
         stillHandler.removeCallbacks(stepStillRunnable)
         stopActivityRecognition()
@@ -315,6 +347,7 @@ class MotionMonitor(context: Context) : ProximityMotion {
 
         // Must match the <attribution android:tag> declared in the manifest.
         private const val ATTRIBUTION_TAG = "proximity"
+        private const val STEP_FLUSH_INTERVAL_MS = 1_000L
         private const val STEP_STILL_TIMEOUT_MS = 5_000L // no step for this long ⇒ back to STILL
         private const val AR_REQUEST_CODE = 0x2ee6
         @Volatile private var active: MotionMonitor? = null

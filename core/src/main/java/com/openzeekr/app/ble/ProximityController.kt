@@ -571,7 +571,7 @@ class ProximityController internal constructor(
                 motion.observedSteps?.let { (it - baseline).coerceAtLeast(0L) }
             }
             Logx.d("prox", "link down (lastRssi=$lostRssi armed=$armedUnlocked " +
-                "stepsSinceUnlock=${observedStepsSinceUnlock ?: "unavailable"}) " +
+                "stepsSinceUnlock=${observedStepsSinceUnlock ?: "unavailable"} ${motion.stepSummary}) " +
                 "-> independent departure check; no Lock from link loss alone")
             queueUnverifiedLockAlert()
             scheduleLinkDepartureCheck()
@@ -1104,7 +1104,8 @@ class ProximityController internal constructor(
             }
         }, enabled = ::sameSession, bleCorroborated = ::departureBleCorroborated) && sameSession()
         if (confirmed) departureProofAtMs = clock.wallMs()
-        else Logx.d("prox", "independent departure unverified: bounded live location proof unavailable")
+        else Logx.d("prox", "independent departure unverified: bounded live location proof unavailable " +
+            "(stepsSinceUnlock=${stepsSinceUnlock() ?: "unavailable"} ${motion.stepSummary})")
         return confirmed
     }
 
@@ -1628,6 +1629,13 @@ class ProximityController internal constructor(
                     alerts.carLocked()
                     Logx.w("prox", "$reason: locked via cloud; a newer cloud report confirms it")
                     _state.value = _state.value.copy(lastAction = "$reason · locked via cloud ✓")
+                } else if (cloudLockWithheldUnverified && userBackAtCar()) {
+                    // The cloud Lock was withheld because the departure no longer held, and the
+                    // phone reads strong at the car again: the user came back (simulator F28, a
+                    // late location proof while walking back). Open car + user present is no alarm;
+                    // a new departure starts the normal check again.
+                    Logx.w("prox", "$reason: Lock withheld, user back at the car (strong signal) -> no alarm")
+                    _state.value = _state.value.copy(lastAction = "$reason · back at the car; not locked")
                 } else {
                     val posted = alerts.show(LockAlertPolicy.Event.AUTO_LOCK_UNCONFIRMED)
                     unverifiedLockAlertRaised = true
@@ -1663,8 +1671,19 @@ class ProximityController internal constructor(
         } ?: false
     }
 
+    /** Set by [verifyCloudLock]: no cloud Lock was sent because the departure no longer held. */
+    private var cloudLockWithheldUnverified = false
+
+    /** A live key session reading strong-near right now (not a stale value). */
+    private suspend fun userBackAtCar(): Boolean {
+        if (ble.state.value != DkBleManager.State.SESSION_READY) return false
+        val fresh = ble.pollRemoteRssi() ?: return false
+        return fresh >= STRONG_NEAR_DIAGNOSTIC_RSSI
+    }
+
     /** A successful HTTP response acknowledges the request, not a physical door lock. */
     private suspend fun verifyCloudLock(reason: String, bleProofAtMs: Long = 0L): Boolean {
+        cloudLockWithheldUnverified = false
         val wl = acquireSafetyWakelock()
         try {
             repeat(CLOUD_LOCK_MAX_REQUESTS) { requestIndex ->
@@ -1688,6 +1707,7 @@ class ProximityController internal constructor(
                 ) ?: run {
                     Logx.w("prox", "$reason: departure unverified before cloud request " +
                         "#${requestIndex + 1}; NO LOCK SENT; manual Lock required")
+                    cloudLockWithheldUnverified = true
                     return false
                 }
                 Logx.d("prox", "$reason: cloud lock request #${requestIndex + 1} " +

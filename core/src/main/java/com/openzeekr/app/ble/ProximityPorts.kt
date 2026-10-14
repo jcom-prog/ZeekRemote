@@ -39,6 +39,8 @@ interface ProximityMotion {
     val hasSource: Boolean
     val hasStepAssist: Boolean
     val observedSteps: Long?
+    /** Diagnostic: the step sources behind [observedSteps] (no positions, no identifiers). */
+    val stepSummary: String get() = ""
     var onMovingEdge: (() -> Unit)?
     fun start()
     fun stop()

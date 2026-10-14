@@ -91,9 +91,11 @@ class WholeAppSimulationTest {
         // One full trace per (family, finding type): the evidence for the analysis.
         val traced = HashSet<String>()
         results.forEach { r -> r.findings.forEach { f ->
-            val key = "${r.scenario.family}|${f.code}|${r.carry}|${r.profile.name}"
+            // SIM_TRACE_EVERY_SEED=1: one trace per seed as well (to follow a single run).
+            val perSeed = if (System.getenv("SIM_TRACE_EVERY_SEED") == "1") "_${r.seed}" else ""
+            val key = "${r.scenario.family}|${f.code}|${r.carry}|${r.profile.name}$perSeed"
             if (traced.add(key)) {
-                val name = (r.scenario.family + "_" + f.code + "_" + r.carry + "_" + r.profile.name).replace(Regex("[^A-Za-z0-9_+-]"), "_")
+                val name = (r.scenario.family + "_" + f.code + "_" + r.carry + "_" + r.profile.name + perSeed).replace(Regex("[^A-Za-z0-9_+-]"), "_")
                 File(outDir, "trace_$name.txt").writeText(buildString {
                     appendLine("${r.scenario.family}: ${r.scenario.description}")
                     appendLine("carry=${r.carry} motion=${r.profile.name} seed=${r.seed} finding=${f.code} at ${f.atMs / 1000.0}s d=${"%.1f".format(f.distanceM)} ${f.detail}")

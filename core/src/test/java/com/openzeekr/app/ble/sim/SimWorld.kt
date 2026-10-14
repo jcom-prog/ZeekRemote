@@ -196,7 +196,17 @@ internal class SimWorld(
         override val hasSource = true
         override val hasStepAssist = motionProfile.hasStepDetector
         private var steps = 0L
-        override val observedSteps: Long? get() = if (motionProfile.hasStepDetector) steps else null
+        /**
+         * Hub step counter (TYPE_STEP_COUNTER, 0.2.17): counts while the CPU sleeps; conservatively it
+         * drops the first [HUB_COUNTER_WARMUP_STEPS] of every bout, undercounts 10 % and the app sees its
+         * total ~1 s late (flush). SIM_STEP_COUNTER=0 replays 0.2.16 (detector only).
+         */
+        private var hubSteps = 0.0; private var hubBoutSteps = 0.0
+        private var hubSeen = 0L; private var hubSnapMs = 0L
+        override val observedSteps: Long? get() =
+            if (!motionProfile.hasStepDetector) null
+            else if (STEP_COUNTER) maxOf(steps, hubSeen) else steps
+        override val stepSummary: String get() = "detector=$steps counter=${if (STEP_COUNTER) hubSeen.toString() else "none"}"
         override var onMovingEdge: (() -> Unit)? = null
         private var running = false
         override fun start() { running = true; if (_state.value == MotionMonitor.Motion.UNKNOWN) setStill() }
@@ -208,6 +218,11 @@ internal class SimWorld(
         private var lastStepMs = -1L; private var stepAccum = 0.0
 
         fun tick(dtMs: Long, cpuAwake: Boolean) {
+            if (walking) {
+                hubBoutSteps += dtMs / 550.0
+                if (hubBoutSteps >= HUB_COUNTER_WARMUP_STEPS) hubSteps += 0.9 * dtMs / 550.0
+            } else hubBoutSteps = 0.0
+            if (now() - hubSnapMs >= 1_000L) { hubSnapMs = now(); hubSeen = hubSteps.toLong() }
             if (walking) {
                 stopStartMs = -1L
                 if (boutStartMs < 0) {
@@ -622,6 +637,8 @@ internal class SimWorld(
         const val CONNECT_MIN_RSSI = -96.0
         val PRESENCE_EDGE = System.getenv("SIM_PRESENCE_EDGE") == "1"
         val WEAK_GATE = System.getenv("SIM_WEAK_GATE") != "0"
+        val STEP_COUNTER = System.getenv("SIM_STEP_COUNTER") != "0"
+        const val HUB_COUNTER_WARMUP_STEPS = 8.0
         const val DROP_RSSI = -102.0
         const val SUPERVISION_MS = 3_000L
         const val PRESENCE_MIN_RSSI = -95.0

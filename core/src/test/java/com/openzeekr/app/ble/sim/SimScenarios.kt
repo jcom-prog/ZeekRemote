@@ -131,6 +131,12 @@ internal object SimScenarios {
         Scenario("F28 walk-away lock, straight back", "open, away 30 m (auto-lock, link drops far), back to the door", 30.0,
             approachAndOpen() + listOf(Mark("expect-lock"), Walk(30.0), Stand(14_000, Facing.AWAY),
                 Mark("expect-unlock"), Walk(1.0), Stand(20_000))),
+        // Field 14/10 11:30: open by the handle, walk ~35 m away and come back to ~20 m, stand there.
+        // With the screen off the step detector delivered nothing: the BLE route said too few steps
+        // and the location proof needed 12 m clearance without steps, so the car stayed open until
+        // the alarm and the user locked from the app. The hub step counter (0.2.17) must lock it.
+        Scenario("F29 walk away, wait at 20 m", "open, away 35 m, back to 20 m, stand 2 min", 30.0,
+            approachAndOpen() + listOf(Mark("expect-lock"), Walk(35.0), Walk(20.0), Stand(120_000))),
     )
 
     /** families x carry x motion profile x seeds. */

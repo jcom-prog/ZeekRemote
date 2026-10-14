@@ -51,6 +51,7 @@ on:
       - zeekremote-0.2.14-return-reopen
       - zeekremote-0.2.15-own-key
       - zeekremote-0.2.16-edge-of-range
+      - zeekremote-0.2.17-step-counter
 
 permissions:
   contents: read
@@ -154,6 +155,9 @@ jobs:
           grep -Fq 'const val CONNECT_FLOOR_RSSI = -94' core/src/main/java/com/openzeekr/app/ble/WeakConnectGate.kt
           grep -Fq 'WeakConnectGate.onPresence(scanResult.rssi, moving)' core/src/main/java/com/openzeekr/app/ble/ProximityService.kt
           grep -Fq 'private const val STATIONARY_LINK_LOSS_CHECK_MS = 100_000L' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'private val stepCounter: Sensor? = sensors?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)' core/src/main/java/com/openzeekr/app/ble/MotionMonitor.kt
+          grep -Fq 'internal class StepTally' core/src/main/java/com/openzeekr/app/ble/StepTally.kt
+          grep -Fq 'cloudLockWithheldUnverified && userBackAtCar()' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -175,7 +179,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='122' versionName='0.2.16-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='123' versionName='0.2.17-work'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
           sha256sum "$APK"
