@@ -94,11 +94,48 @@ internal object SimReport {
         append("}\n")
     }
 
+    /**
+     * Absolute targets (0.3.2): what the owner should notice, not only "better than the last version".
+     * Field 14/10: the comparison-only view hid that about 1 in 9 front-pocket approaches opened late.
+     */
+    data class Target(val name: String, val value: String, val goal: String, val met: Boolean)
+
+    fun targets(rs: List<SimResult>): List<Target> {
+        fun has(r: SimResult, vararg codes: String) = r.findings.any { it.code in codes }
+        fun expects(r: SimResult, what: String) = r.world.events.any { it.kind == "MARK" && it.detail == what }
+        fun share(n: Int, d: Int) = if (d == 0) "-" else "%d/%d (%.1f%%)".format(n, d, 100.0 * n / d)
+        fun pctOk(n: Int, d: Int, goal: Double) = d == 0 || 100.0 * n / d >= goal
+        val pocket = rs.filter { it.carry != Carry.HAND }
+        val hand = rs.filter { it.carry == Carry.HAND }
+        val front = rs.filter { it.carry == Carry.FRONT_POCKET }
+        val approaches = front.filter { expects(it, "expect-unlock") }
+        val onTime = approaches.count { !has(it, "APPROACH_UNLOCK_LATE", "APPROACH_UNLOCK_AFTER_DOOR", "APPROACH_NO_UNLOCK") }
+        val departures = front.filter { expects(it, "expect-lock") }
+        val autoLocked = departures.count { !has(it, "DEPARTURE_NO_LOCK_ALARMED", "DEPARTURE_NO_LOCK_SILENT", "NOT_LOCKED_BEFORE_RETURN") }
+        val farPocket = pocket.count { has(it, "UNLOCK_WHILE_FAR") }
+        val farHand = hand.count { has(it, "UNLOCK_WHILE_FAR") }
+        val unwanted = rs.count { has(it, "UNWANTED_UNLOCK", "UNLOCK_WHILE_LOITERING") }
+        val lockNear = rs.count { has(it, "LOCK_WHILE_NEAR", "LOCK_WHILE_RETURNING", "UNWANTED_LOCK_NEAR") }
+        val silent = rs.count { has(it, "DEPARTURE_NO_LOCK_SILENT", "OPEN_FAR_NO_ALARM", "GONE_BUT_UNLOCKED") }
+        return listOf(
+            Target("never opens from > 15 m, phone in a pocket", share(farPocket, pocket.size), "0", farPocket == 0),
+            Target("never opens from > 15 m, phone in the hand", share(farHand, hand.size), "0", farHand == 0),
+            Target("never opens where the car should stay locked", share(unwanted, rs.size), "0", unwanted == 0),
+            Target("never locks near or while walking back", share(lockNear, rs.size), "0", lockNear == 0),
+            Target("never silent while open and away", share(silent, rs.size), "0", silent == 0),
+            Target("front pocket: approach opens before the door", share(onTime, approaches.size), ">= 95%", pctOk(onTime, approaches.size, 95.0)),
+            Target("front pocket: departure locks by itself", share(autoLocked, departures.size), ">= 95%", pctOk(autoLocked, departures.size, 95.0)),
+        )
+    }
+
     fun text(results: List<SimResult>): String {
         val sb = StringBuilder()
         for ((suite, rs) in results.groupBy { it.suite }) {
             sb.appendLine("=== Suite: $suite — ${rs.size} runs, ${rs.count { it.findings.isEmpty() }} without findings, " +
                 "${rs.count { r -> r.findings.any { SimOracle.tier(it.code) == "SAFETY" } }} with a SAFETY finding ===")
+            sb.appendLine()
+            sb.appendLine("Targets (what the owner notices):")
+            targets(rs).forEach { t -> sb.appendLine("  %-4s %-48s %-22s goal %s".format(if (t.met) "ok" else "MISS", t.name, t.value, t.goal)) }
             sb.appendLine()
             sb.appendLine("Findings by type (runs affected):")
             rs.flatMap { r -> r.findings.map { it.code }.distinct() }.groupingBy { it }.eachCount()

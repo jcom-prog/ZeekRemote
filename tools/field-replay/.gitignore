@@ -1,0 +1,6 @@
+# Field logs and everything derived from them stay on the developer's machine (never publish).
+*
+!.gitignore
+!README.md
+!extract_episodes.py
+!compare.py
