@@ -156,6 +156,14 @@ class UnlockedSafetyNetsTest {
         assertEquals(300_000L, MeasurementMode.DURATION_MS)
     }
 
+    @Test fun aShortShallowRunAtFiveHertzDoesNotRestartTheClock() {
+        // Simulator stress F04/F01 (0.3.2): sampled at 5 Hz 20-30 m away, -86/-87 come in short runs.
+        val w = StationaryFarWatch()
+        var t = 0L; var alarm = false
+        repeat(400) { i -> alarm = alarm or w.observe(t, if (i % 20 >= 17) -86 else -91, -82); t += 200L }
+        assertTrue(alarm)
+    }
+
     @Test fun aSingleSlightlyStrongerReadingFarAwayDoesNotRestartTheClock() {
         val w = StationaryFarWatch()
         var t = 0L; var alarm = false
@@ -165,9 +173,15 @@ class UnlockedSafetyNetsTest {
     }
 
     @Test fun twoShallowReadingsInARowOrAStrongOneStillRestart() {
-        val w = StationaryFarWatch()
+        // At the 3 s idle cadence two shallow readings in a row restart the clock; at 5 Hz a shallow
+        // run of 2 s does (0.3.2: a count made the 5 Hz watch far stricter than the idle one).
+        val idle = StationaryFarWatch()
         var t = 0L; var alarm = false
-        repeat(400) { i -> alarm = alarm or w.observe(t, if (i % 20 >= 18) -86 else -91, -82); t += 200L }
+        repeat(60) { i -> alarm = alarm or idle.observe(t, if (i % 6 >= 4) -86 else -91, -82); t += 3_000L }
+        assertFalse(alarm)
+        val w = StationaryFarWatch()
+        t = 0L; alarm = false
+        repeat(400) { i -> alarm = alarm or w.observe(t, if (i % 25 >= 14) -86 else -91, -82); t += 200L }
         assertFalse(alarm)
         val v = StationaryFarWatch(); t = 0L; alarm = false
         repeat(400) { i -> alarm = alarm or v.observe(t, if (i % 20 == 19) -82 else -91, -82); t += 200L }

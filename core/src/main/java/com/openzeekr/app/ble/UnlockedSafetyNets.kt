@@ -99,9 +99,9 @@ internal class StationaryFarWatch {
     private var farSinceMs: Long? = null
     private var deepReadings = 0
     private var raised = false
-    private var shallowRun = 0
+    private var shallowSinceMs: Long? = null
 
-    fun reset() { farSinceMs = null; deepReadings = 0; raised = false; shallowRun = 0 }
+    fun reset() { farSinceMs = null; deepReadings = 0; raised = false; shallowSinceMs = null }
 
     /** Feeds one fresh reading; true once when the alarm is due. */
     fun observe(nowMs: Long, rssi: Int, lockThreshold: Int): Boolean {
@@ -110,15 +110,19 @@ internal class StationaryFarWatch {
         if (rssi <= lockThreshold - DEEP_MARGIN_DB) {
             if (farSinceMs == null) farSinceMs = nowMs
             deepReadings++
-            shallowRun = 0
-        } else if (farSinceMs != null && rssi <= lockThreshold - NEUTRAL_MARGIN_DB && ++shallowRun < MAX_SHALLOW_RUN) {
-            // One slightly stronger reading 20-30 m away (fading) neither counts nor restarts the
-            // clock (simulator 03/10: a +3 dB reading every minute kept the alarm from ever
-            // sounding while the open car was 30 m away). It never starts a clock either.
+            shallowSinceMs = null
+        } else if (farSinceMs != null && rssi <= lockThreshold - NEUTRAL_MARGIN_DB &&
+            nowMs - (shallowSinceMs ?: nowMs) < MAX_SHALLOW_RUN_MS) {
+            // Slightly stronger readings 20-30 m away (fading) neither count nor restart the clock
+            // while they last less than [MAX_SHALLOW_RUN_MS] (simulator 03/10: a +3 dB reading every
+            // minute kept the alarm from ever sounding while the open car was 30 m away). They never
+            // start a clock either. Time, not a count (0.3.2, simulation audit C): sampled at 5 Hz
+            // while the car is open, "two in a row" was 0.4 s and the clock restarted all the time.
+            if (shallowSinceMs == null) shallowSinceMs = nowMs
         } else {
             farSinceMs = null
             deepReadings = 0
-            shallowRun = 0
+            shallowSinceMs = null
         }
         val since = farSinceMs ?: return false
         if (raised || deepReadings < MIN_DEEP_READINGS || nowMs - since < ALARM_AFTER_MS) return false
@@ -127,7 +131,7 @@ internal class StationaryFarWatch {
     }
 
     /** No fresh readings any more (link lost): the clock stops, it does not keep running. */
-    fun onReadingsStopped() { farSinceMs = null; deepReadings = 0; shallowRun = 0 }
+    fun onReadingsStopped() { farSinceMs = null; deepReadings = 0; shallowSinceMs = null }
 
     /** How long the phone has been consistently clearly far (0 when not, or too few readings). */
     fun deepFarForMs(nowMs: Long): Long =
@@ -137,8 +141,8 @@ internal class StationaryFarWatch {
         const val DEEP_MARGIN_DB = 6
         /** Readings between lock-6 and lock-2 dB are neutral once a clock runs, ... */
         const val NEUTRAL_MARGIN_DB = 2
-        /** ... but not two in a row. */
-        const val MAX_SHALLOW_RUN = 2
+        /** ... but not for this long (at the 3 s idle cadence: not two in a row). */
+        const val MAX_SHALLOW_RUN_MS = 2_000L
         const val MIN_DEEP_READINGS = 5
         const val ALARM_AFTER_MS = 60_000L
         /** A link loss after this much clear separation counts as a suspected departure (audible). */
