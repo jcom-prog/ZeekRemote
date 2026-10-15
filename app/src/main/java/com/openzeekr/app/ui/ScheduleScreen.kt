@@ -28,11 +28,11 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,9 +44,12 @@ import androidx.compose.ui.unit.sp
 import com.openzeekr.app.Deps
 import com.openzeekr.app.net.model.BookingTravelSetting
 import com.openzeekr.app.remote.CallResult
+import com.openzeekr.app.remote.CarWrite
 import com.openzeekr.app.remote.DepartureDraft
 import com.openzeekr.app.remote.Departures
+import com.openzeekr.app.remote.ScheduleWrites
 import com.openzeekr.app.ui.theme.Brand
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -65,7 +68,6 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = Modifier) {
-    val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
 
     // ---- charging schedule state (V1: a single daily window per timerId) ----
@@ -78,7 +80,6 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
     var chargeTimerId by remember { mutableStateOf("2") }
     var chargeScheduledTime by remember { mutableStateOf("") }
     var chargeLoading by remember { mutableStateOf(true) }
-    var chargeSaving by remember { mutableStateOf(false) }
 
     // ---- departure schedule state ----
     val departures = remember { mutableStateListOf<BookingTravelSetting>() }
@@ -88,6 +89,11 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
     var editing by remember { mutableStateOf<BookingTravelSetting?>(null) }
     // Durations and levels the official app uses, read from a plan it made (else 15 min defaults).
     val template = Departures.template(departures)
+    // The write in flight (the app waits up to a minute for the car) and a new departure the cloud took
+    // that the car has not shown yet (0.3.8, see ScheduleWrites).
+    val writes = deps.schedule.writes
+    val busy by writes.busy.collectAsState()
+    val awaiting by writes.awaiting.collectAsState()
 
     suspend fun reloadCharge() {
         chargeLoading = true
@@ -106,16 +112,48 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
         chargeLoading = false
     }
 
-    suspend fun reloadDepartures() {
-        depLoading = true
+    /** [quiet]: a background look (after a write, or while a new departure waits): no spinner, no error. */
+    suspend fun reloadDepartures(quiet: Boolean = false) {
+        if (!quiet) depLoading = true
         when (val r = deps.schedule.departures()) {
-            is CallResult.Ok -> { departures.clear(); departures.addAll(r.value) }
-            is CallResult.Err -> snackbar("Couldn't load departures: ${r.message}")
+            is CallResult.Ok -> {
+                departures.clear(); departures.addAll(r.value)
+                if (writes.readBack(r.value)) snackbar("Departure stored on the car ✓")
+            }
+            is CallResult.Err -> if (!quiet) snackbar("Couldn't load departures: ${r.message}")
         }
         depLoading = false
     }
 
     LaunchedEffect(Unit) { reloadCharge(); reloadDepartures() }
+    // After a write ends (also one started before this tab opened), show what the car holds now.
+    var sawBusy by remember { mutableStateOf(false) }
+    LaunchedEffect(busy) {
+        if (busy != null) sawBusy = true
+        else if (sawBusy) { sawBusy = false; reloadDepartures(quiet = true) }
+    }
+    // A new departure waiting for the car: look again every 30 s while this tab is open, so it shows up
+    // once the car has it. The wait ends after ScheduleWrites.HOLD_MS (the cloud may have dropped it).
+    LaunchedEffect(awaiting) {
+        while (writes.stillAwaiting() != null) {
+            delay(RECHECK_MS)
+            if (writes.busy.value == null) reloadDepartures(quiet = true)
+        }
+    }
+
+    /**
+     * Sends a schedule write in the app scope, so it finishes and reports even when you leave the tab:
+     * [done] when the car confirmed it, [notConfirmed] when the cloud took it but the car did not show it
+     * within a minute, and "[failed] ✗ reason" when the cloud refused it.
+     */
+    fun write(done: String, notConfirmed: String, failed: String, call: suspend () -> CallResult<CarWrite>) {
+        deps.appScope.launch {
+            when (val r = call()) {
+                is CallResult.Ok -> snackbar(if (r.value == CarWrite.CONFIRMED) done else notConfirmed)
+                is CallResult.Err -> snackbar("$failed ✗ ${r.message}")
+            }
+        }
+    }
 
     Column(
         modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
@@ -151,22 +189,19 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
                     }
                     Switch(checked = keepCharging, onCheckedChange = { keepCharging = it }, colors = brandSwitchColors())
                 }
-                PrimaryButton(if (chargeSaving) "Saving…" else "Save", Modifier.fillMaxWidth(), enabled = !chargeSaving) {
-                    chargeSaving = true
-                    scope.launch {
-                        val r = deps.schedule.setChargePlan(
-                            enabled = chargeEnabled, startTime = chargeStart, endTime = chargeEnd,
-                            keepCharging = keepCharging, timerId = chargeTimerId, scheduledTime = chargeScheduledTime,
+                val chargeWaiting = busy == ScheduleWrites.Kind.CHARGE
+                PrimaryButton(if (chargeWaiting) "Waiting for the car…" else "Save", Modifier.fillMaxWidth(), enabled = busy == null) {
+                    // The screen keeps the values just saved: the car's read-back lags behind a write.
+                    val on = chargeEnabled; val start = chargeStart; val end = chargeEnd
+                    val keep = keepCharging; val timerId = chargeTimerId; val trigger = chargeScheduledTime
+                    write(done = "Charging schedule saved on the car ✓", notConfirmed = NOT_CONFIRMED_CHARGE, failed = "Save failed") {
+                        deps.schedule.setChargePlan(
+                            enabled = on, startTime = start, endTime = end,
+                            keepCharging = keep, timerId = timerId, scheduledTime = trigger,
                         )
-                        chargeSaving = false
-                        when (r) {
-                            // Applied asynchronously; keep the just-saved state locally rather than
-                            // re-GETting immediately (the car syncs a moment later).
-                            is CallResult.Ok -> snackbar("Charging schedule saved ✓")
-                            is CallResult.Err -> snackbar("Save failed ✗ ${r.message}")
-                        }
                     }
                 }
+                if (chargeWaiting) WaitingRow(WAITING_TEXT)
             }
         }
 
@@ -187,41 +222,30 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
                 shown.forEach { d ->
                     DepartureRow(
                         setting = d,
+                        enabled = busy == null,
                         onEdit = { editing = d },
                         onToggle = { on ->
-                            // Optimistic: the car applies this asynchronously (returns a sessionId) and may
-                            // be asleep, so an immediate re-GET reads the OLD state and would revert the
-                            // toggle. Reflect the intended state locally; the car syncs when it next wakes.
-                            val updated = d.copy(sts = if (on) 1 else 0)
-                            val idx = departures.indexOfFirst { it.btId == d.btId }
-                            scope.launch {
-                                val r = deps.schedule.updateDeparture(Departures.sanitizedForWrite(updated, template))
-                                when (r) {
-                                    is CallResult.Ok -> {
-                                        if (idx >= 0) departures[idx] = updated
-                                        snackbar(if (on) "Departure enabled ✓" else "Departure disabled ✓")
-                                    }
-                                    is CallResult.Err -> snackbar("Update failed ✗ ${r.message}")
-                                }
-                            }
+                            // The whole plan with the new state: sending it twice is harmless. The list shows
+                            // the car's read-back after the write, so an unconfirmed switch shows as it was.
+                            val updated = Departures.sanitizedForWrite(d.copy(sts = if (on) 1 else 0), template)
+                            write(
+                                done = if (on) "Departure switched on ✓" else "Departure switched off ✓",
+                                notConfirmed = NOT_CONFIRMED_CHANGE, failed = "Update failed",
+                            ) { deps.schedule.updateDeparture(updated, ScheduleWrites.Kind.SWITCH) }
                         },
                         onDelete = {
-                            // "Delete" frees the car-side slot (command stop). Optimistic local update for
-                            // the same async/asleep reason as the toggle; a reload hides the freed slot.
-                            val idx = departures.indexOfFirst { it.btId == d.btId }
-                            scope.launch {
-                                val r = deps.schedule.deleteDeparture(Departures.sanitizedForWrite(d, template))
-                                when (r) {
-                                    is CallResult.Ok -> {
-                                        if (idx >= 0) departures[idx] = d.copy(sts = 0)
-                                        snackbar("Departure deleted ✓")
-                                    }
-                                    is CallResult.Err -> snackbar("Delete failed ✗ ${r.message}")
-                                }
+                            // "Delete" frees the car-side slot (command stop); confirmed once the slot reads back empty.
+                            val target = Departures.sanitizedForWrite(d, template)
+                            write(done = "Departure deleted ✓", notConfirmed = NOT_CONFIRMED_DELETE, failed = "Delete failed") {
+                                deps.schedule.deleteDeparture(target)
                             }
                         },
                     )
                 }
+            }
+            awaiting?.let { AwaitingRow(it.plan, confirming = busy == ScheduleWrites.Kind.CREATE) }
+            if (busy == ScheduleWrites.Kind.EDIT || busy == ScheduleWrites.Kind.SWITCH || busy == ScheduleWrites.Kind.DELETE) {
+                WaitingRow(WAITING_TEXT)
             }
             if (!depLoading && departures.isNotEmpty()) {
                 Text(
@@ -230,16 +254,20 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
                     color = Brand.faint, fontSize = 11.5.sp,
                 )
             }
-            PrimaryButton("Add departure", Modifier.fillMaxWidth()) {
-                if (Departures.freeSlotId(departures) == null) snackbar("No free place on the car: delete a departure first.")
-                else creating = true
+            PrimaryButton("Add departure", Modifier.fillMaxWidth(), enabled = busy == null && awaiting == null) {
+                when {
+                    !writes.canCreate() -> snackbar(ScheduleWrites.CREATE_WAITS)
+                    Departures.freeSlotId(departures) == null -> snackbar("No free place on the car: delete a departure first.")
+                    else -> creating = true
+                }
             }
+            if (awaiting != null) Text(ScheduleWrites.CREATE_WAITS, color = Brand.faint, fontSize = 11.5.sp)
         }
 
         Text(
-            "Schedules are stored on the car (via ms-charge-manage), so the car must be AWAKE to save them. " +
-                "If it's been parked a while it may be asleep — wake it (unlock it, open the Zeekr app, or plug " +
-                "in to charge), then save. A save is only confirmed once the car acknowledges it.",
+            "Schedules are stored on the car (via ms-charge-manage), and the car must be awake to take a change. " +
+                "A change only counts once the car shows it. If it does not within a minute, the app says so: the " +
+                "change may still arrive when the car wakes, or the cloud may drop it, so check the list later.",
             color = Brand.faint, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
         )
         Spacer(Modifier.size(8.dp))
@@ -255,25 +283,24 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
             onDismiss = { creating = false; editing = null },
             onSave = { draft ->
                 creating = false; editing = null
-                scope.launch {
-                    if (original == null) {
-                        // A new plan only ever goes into a free slot, never onto a plan in use.
-                        val slot = Departures.freeSlotId(departures)
-                        if (slot == null) { snackbar("No free place on the car: delete a departure first."); return@launch }
-                        when (val r = deps.schedule.createDeparture(Departures.newPlan(draft, slot, template))) {
-                            is CallResult.Ok -> { snackbar("Departure created ✓"); reloadDepartures() }
-                            is CallResult.Err -> snackbar("Create failed ✗ ${r.message}")
-                        }
-                    } else {
-                        val updated = Departures.applied(original, draft, template)
-                        when (val r = deps.schedule.updateDeparture(updated)) {
-                            is CallResult.Ok -> {
-                                val idx = departures.indexOfFirst { it.btId == original.btId }
-                                if (idx >= 0) departures[idx] = updated
-                                snackbar("Departure saved ✓")
+                if (original == null) {
+                    // A new plan only ever goes into a free slot, never onto a plan in use, and not while an
+                    // earlier new plan still waits for the car (a second one would be queued too).
+                    val slot = Departures.freeSlotId(departures)
+                    when {
+                        slot == null -> snackbar("No free place on the car: delete a departure first.")
+                        !writes.canCreate() -> snackbar(ScheduleWrites.CREATE_WAITS)
+                        else -> {
+                            val plan = Departures.newPlan(draft, slot, template)
+                            write(done = "Departure stored on the car ✓", notConfirmed = NOT_CONFIRMED_CREATE, failed = "Create failed") {
+                                deps.schedule.createDeparture(plan)
                             }
-                            is CallResult.Err -> snackbar("Save failed ✗ ${r.message}")
                         }
+                    }
+                } else {
+                    val updated = Departures.applied(original, draft, template)
+                    write(done = "Departure saved on the car ✓", notConfirmed = NOT_CONFIRMED_CHANGE, failed = "Save failed") {
+                        deps.schedule.updateDeparture(updated)
                     }
                 }
             },
@@ -286,6 +313,7 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
 @Composable
 private fun DepartureRow(
     setting: BookingTravelSetting,
+    enabled: Boolean,
     onEdit: () -> Unit,
     onToggle: (Boolean) -> Unit,
     onDelete: () -> Unit,
@@ -300,7 +328,7 @@ private fun DepartureRow(
         if (d.batteryMaintenance) add("battery")
     }
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Brand.surface2).clickable(onClick = onEdit).padding(12.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Brand.surface2).clickable(enabled = enabled, onClick = onEdit).padding(12.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Icon(Icons.Filled.Schedule, null, tint = Brand.accent, modifier = Modifier.size(20.dp))
@@ -318,10 +346,10 @@ private fun DepartureRow(
             )
             if (extras.isNotEmpty()) Text(extras.joinToString(" · "), color = Brand.faint, fontSize = 11.sp)
         }
-        Switch(checked = setting.sts == 1, onCheckedChange = onToggle, colors = brandSwitchColors(Brand.good))
+        Switch(checked = setting.sts == 1, onCheckedChange = onToggle, enabled = enabled, colors = brandSwitchColors(Brand.good))
         Icon(
             Icons.Filled.Delete, "Delete", tint = Brand.faint,
-            modifier = Modifier.size(30.dp).clip(CircleShape).clickable(onClick = onDelete).padding(6.dp),
+            modifier = Modifier.size(30.dp).clip(CircleShape).clickable(enabled = enabled, onClick = onDelete).padding(6.dp),
         )
     }
 }
@@ -452,9 +480,64 @@ private fun LoadingRow() =
         CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp, color = Brand.accent)
     }
 
+/** A write waiting for the car's confirmation (up to a minute, 0.3.8). */
+@Composable
+private fun WaitingRow(text: String) =
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Brand.accent)
+        Text(text, color = Brand.muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+    }
+
+/**
+ * A new departure the cloud took that the car has not shown yet (0.3.8): its name, time and days, and
+ * that it is not confirmed. No controls: it is not on the car (yet).
+ */
+@Composable
+private fun AwaitingRow(plan: BookingTravelSetting, confirming: Boolean) {
+    val d = Departures.draftOf(plan)
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).border(1.dp, Brand.line, RoundedCornerShape(12.dp)).padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        if (confirming) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Brand.accent)
+        else Icon(Icons.Filled.Schedule, null, tint = Brand.faint, modifier = Modifier.size(20.dp))
+        Column(Modifier.weight(1f)) {
+            Text(plan.name.ifBlank { "Departure" }, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Brand.muted)
+            Text(
+                d.time.take(5) + if (d.days.isEmpty()) "" else "  ·  " +
+                    d.days.sorted().joinToString("") { DAY_LABELS[(it - 1).coerceIn(0, 6)] },
+                color = Brand.faint, fontSize = 11.5.sp,
+            )
+            Text(if (confirming) WAITING_TEXT else AWAITING_TEXT, color = Brand.energy, fontSize = 11.5.sp)
+        }
+    }
+}
+
 @Composable
 private fun EmptyRow(text: String) =
     Text(text, color = Brand.faint, fontSize = 12.sp, modifier = Modifier.padding(vertical = 6.dp))
+
+/** How often the list is looked at again while a new departure waits for the car. */
+private const val RECHECK_MS = 30_000L
+
+private const val WAITING_TEXT = "Waiting for the car to confirm… This can take up to a minute."
+private const val AWAITING_TEXT =
+    "Sent, not confirmed: the car has not shown it. It may still arrive when the car wakes, or the cloud may drop it."
+private const val NOT_CONFIRMED_CREATE =
+    "Not confirmed: the car did not show the new departure within a minute. It may still arrive when the car " +
+        "wakes, or the cloud may drop it. Check the list later before adding it again."
+private const val NOT_CONFIRMED_CHANGE =
+    "Not confirmed: the car did not show the change within a minute. It may still arrive when the car wakes, " +
+        "or the cloud may drop it. Check the list later."
+private const val NOT_CONFIRMED_DELETE =
+    "Not confirmed: the car still shows the departure. The delete may still arrive when the car wakes, or the " +
+        "cloud may drop it. Check the list later."
+private const val NOT_CONFIRMED_CHARGE =
+    "Not confirmed: the car did not show the charging schedule within a minute. It may still arrive when the car " +
+        "wakes, or the cloud may drop it. Check again later."
 
 /** Day labels indexed by (stock `CycleTime.day` − 1). `day` is 1-based on the wire (1..7),
  *  day 1 = Monday … day 7 = Sunday, so DAY_LABELS[day-1] is the label. */

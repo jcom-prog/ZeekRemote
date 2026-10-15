@@ -581,6 +581,9 @@ class NavRepository(private val store: ConfigStore, private val client: ApiClien
  */
 class ScheduleRepository(private val store: ConfigStore, private val client: ApiClient) {
 
+    /** The write in flight and a new departure waiting for the car (0.3.8, see [ScheduleWrites]). */
+    val writes = ScheduleWrites()
+
     // ---- scheduled charging (V1 charging-plan; single daily window per timerId) ----
 
     /** Read the current charging plan (V1). Returns the sparse read-back bean; a car with no plan
@@ -608,6 +611,7 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
      * VEHICLE-RELAYED async op: the POST only QUEUES (returns a sessionId); it applies once the CAR
      * is online/awake and acks it — HTTP 200 is NOT "saved". We heartbeat (RVS), then poll
      * getChargingPlan until `command` matches and `dataSource=="APP"` (the car took our write).
+     * Ok([CarWrite.PENDING]) when the car did not show it within [ScheduleWrites.CONFIRM_WAIT_MS].
      */
     suspend fun setChargePlan(
         enabled: Boolean,
@@ -616,36 +620,62 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
         keepCharging: Boolean,
         timerId: String,
         scheduledTime: String,
-    ): CallResult<Unit> =
+    ): CallResult<CarWrite> =
         withContext(Dispatchers.IO) {
             guarded {
                 requireVin()
-                runCatching { com.openzeekr.app.net.AccountLogin(store).heartbeat() }
-                val command = if (enabled) CMD_CREATE else CMD_DELETE   // "start" / "stop"
-                val sched = scheduledTime.ifBlank { nextTriggerMs(startTime) }
-                val resp = client.api.setChargingPlan(
-                    com.openzeekr.app.net.model.ChargingPlanV1Request(
-                        bcCycleActive = false,
-                        bcTempActive = false,
-                        command = command,
-                        // Omit start/end on stop (matches stock: nulls drop from the wire).
-                        startTime = if (enabled) startTime else null,
-                        endTime = if (enabled) endTime else null,
-                        scheduledTime = sched,
-                        target = if (keepCharging) TARGET_KEEP_ON else TARGET_KEEP_OFF,
-                        timerId = timerId.ifBlank { DEFAULT_TIMER_ID },
-                    ),
-                )
-                if (!resp.success && resp.data == null) error(resp.message ?: "charge schedule failed (code=${resp.code})")
-                // Confirm the car actually applied it: read-back command matches + dataSource flipped to APP.
-                val applied = pollUntil {
-                    val cur = client.api.getChargingPlan().data ?: return@pollUntil false
-                    cur.command == command && cur.dataSource.equals("APP", ignoreCase = true)
-                }
-                if (!applied) error(CAR_ASLEEP)
-                Unit
+                writes.exclusive(ScheduleWrites.Kind.CHARGE) { writeChargePlan(enabled, startTime, endTime, keepCharging, timerId, scheduledTime) }
+                    ?: error(ScheduleWrites.BUSY)
             }
         }
+
+    private suspend fun writeChargePlan(
+        enabled: Boolean,
+        startTime: String,
+        endTime: String,
+        keepCharging: Boolean,
+        timerId: String,
+        scheduledTime: String,
+    ): CarWrite {
+        // For the diagnostic line (categories only, see ScheduleDiagnostics).
+        var sent = "error"; var session = "-"; var result = "failed"; var polls = 0; var readback = "none"
+        try {
+            runCatching { com.openzeekr.app.net.AccountLogin(store).heartbeat() }
+            val command = if (enabled) CMD_CREATE else CMD_DELETE   // "start" / "stop"
+            val sched = scheduledTime.ifBlank { nextTriggerMs(startTime) }
+            val resp = client.api.setChargingPlan(
+                com.openzeekr.app.net.model.ChargingPlanV1Request(
+                    bcCycleActive = false,
+                    bcTempActive = false,
+                    command = command,
+                    // Omit start/end on stop (matches stock: nulls drop from the wire).
+                    startTime = if (enabled) startTime else null,
+                    endTime = if (enabled) endTime else null,
+                    scheduledTime = sched,
+                    target = if (keepCharging) TARGET_KEEP_ON else TARGET_KEEP_OFF,
+                    timerId = timerId.ifBlank { DEFAULT_TIMER_ID },
+                ),
+            )
+            if (!resp.success && resp.data == null) {
+                sent = ScheduleDiagnostics.refused(resp.code)
+                error(resp.message ?: "charge schedule failed (code=${resp.code})")
+            }
+            sent = "accepted"
+            session = if (resp.sessionId != null || resp.data != null) "yes" else "no"
+            // Confirm the car actually applied it: read-back command matches + dataSource flipped to APP.
+            val applied = pollUntil {
+                polls++
+                val cur = client.api.getChargingPlan().data ?: return@pollUntil false
+                readback = ScheduleDiagnostics.charge(cur.command, cur.dataSource)
+                cur.command == command && cur.dataSource.equals("APP", ignoreCase = true)
+            }
+            result = if (applied) "confirmed" else "pending"
+            return if (applied) CarWrite.CONFIRMED else CarWrite.PENDING
+        } finally {
+            com.openzeekr.app.util.Logx.d("sched", ScheduleDiagnostics.line(
+                ScheduleWrites.Kind.CHARGE, null, sent, session, result, polls, readback, "-"))
+        }
+    }
 
     /** Epoch-ms of the next occurrence of "HH:mm" from now (local time), as a string. Matches the
      *  stock `scheduledTime` (the next start trigger). Falls back to now+1h if the time is unparseable. */
@@ -675,58 +705,86 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
             }
         }
 
-    /** Create a departure schedule (command "start"). btId is ignored server-side for a create. */
-    suspend fun createDeparture(setting: com.openzeekr.app.net.model.BookingTravelSetting): CallResult<Unit> =
-        sendTravel(CMD_CREATE, setting, verify = true)
+    /** Create a departure schedule (command "start") in a free slot. While the car has not shown it,
+     *  [writes] refuses another Create (a second press would queue a second plan). */
+    suspend fun createDeparture(setting: com.openzeekr.app.net.model.BookingTravelSetting): CallResult<CarWrite> =
+        if (writes.stillAwaiting() != null) CallResult.Err(ScheduleWrites.CREATE_WAITS)
+        else sendTravel(ScheduleWrites.Kind.CREATE, CMD_CREATE, setting) { Departures.landed(it, setting) }
 
-    /** Update an existing departure schedule (command "edit"); [setting].btId picks the entry. */
-    suspend fun updateDeparture(setting: com.openzeekr.app.net.model.BookingTravelSetting): CallResult<Unit> =
-        sendTravel(CMD_UPDATE, setting, verify = true)
+    /** Update an existing departure schedule (command "edit"); [setting].btId picks the entry. The car
+     *  gets the whole plan, so sending it again is harmless. */
+    suspend fun updateDeparture(
+        setting: com.openzeekr.app.net.model.BookingTravelSetting,
+        kind: ScheduleWrites.Kind = ScheduleWrites.Kind.EDIT,
+    ): CallResult<CarWrite> =
+        sendTravel(kind, CMD_UPDATE, setting) { Departures.landed(it, setting) }
 
-    /** Delete a departure schedule (command "stop"); [setting].btId picks the entry. */
-    suspend fun deleteDeparture(setting: com.openzeekr.app.net.model.BookingTravelSetting): CallResult<Unit> =
-        sendTravel(CMD_DELETE, setting, verify = false)
+    /** Delete a departure schedule (command "stop"); [setting].btId picks the entry. Confirmed once the
+     *  slot reads back empty (0.3.8; up to 0.3.7 a delete was never checked). */
+    suspend fun deleteDeparture(setting: com.openzeekr.app.net.model.BookingTravelSetting): CallResult<CarWrite> =
+        sendTravel(ScheduleWrites.Kind.DELETE, CMD_DELETE, setting) { Departures.gone(it, setting.btId) }
 
     /**
      * Same async, vehicle-relayed model as [setChargePlan]: the POST only QUEUES the op
      * (returns a sessionId); it applies only when the car is online/awake and acks it. We heartbeat
-     * (RVS) then, for create/edit, poll the readback until the plan is actually present with the
-     * requested state — otherwise the car is asleep and we return an honest error rather than a false ✓.
+     * (RVS) then poll the read-back until [stored] holds. Err only when the cloud refused the write;
+     * Ok([CarWrite.PENDING]) when it took it but the car did not show it in time (probably asleep).
      */
     private suspend fun sendTravel(
+        kind: ScheduleWrites.Kind,
         command: String,
         setting: com.openzeekr.app.net.model.BookingTravelSetting,
-        verify: Boolean,
-    ): CallResult<Unit> =
+        stored: (List<com.openzeekr.app.net.model.BookingTravelSetting>) -> Boolean,
+    ): CallResult<CarWrite> =
         withContext(Dispatchers.IO) {
             guarded {
                 requireVin()
-                runCatching { com.openzeekr.app.net.AccountLogin(store).heartbeat() }
-                val resp = client.api.setTravelPlan(
-                    com.openzeekr.app.net.model.SetTravelPlanRequest(command = command, serviceId = SERVICE_ID_TRAVEL, setting = setting),
-                )
-                // A travel op is accepted (queued) when the gateway returns success or a sessionId.
-                if (!resp.success && resp.data?.sessionId == null && resp.sessionId == null) {
-                    error(resp.message ?: "departure schedule failed (code=${resp.code})")
-                }
-                if (verify) {
-                    // Confirm the plan actually applied on the car: same name, state, days and time (a plan
-                    // with only the same name, e.g. an older one, does not count).
-                    val applied = pollUntil {
-                        val plans = client.api.getTravelPlans().data ?: emptyList()
-                        Departures.landed(plans, setting)
+                writes.exclusive(kind) {
+                    // For the diagnostic line (categories only, see ScheduleDiagnostics).
+                    var sent = "error"; var session = "-"; var result = "failed"; var polls = 0
+                    var last: List<com.openzeekr.app.net.model.BookingTravelSetting>? = null
+                    try {
+                        runCatching { com.openzeekr.app.net.AccountLogin(store).heartbeat() }
+                        val resp = client.api.setTravelPlan(
+                            com.openzeekr.app.net.model.SetTravelPlanRequest(command = command, serviceId = SERVICE_ID_TRAVEL, setting = setting),
+                        )
+                        // A travel op is accepted (queued) when the gateway returns success or a sessionId.
+                        if (!resp.success && resp.data?.sessionId == null && resp.sessionId == null) {
+                            sent = ScheduleDiagnostics.refused(resp.code)
+                            error(resp.message ?: "departure schedule failed (code=${resp.code})")
+                        }
+                        sent = "accepted"
+                        session = if (resp.data?.sessionId != null || resp.sessionId != null) "yes" else "no"
+                        // Recorded before the wait, so the Create guard holds even if the wait is cut short.
+                        if (kind == ScheduleWrites.Kind.CREATE) writes.createSent(setting)
+                        // Confirm the car actually applied it (for an edit: same name, state, days and time; a
+                        // plan with only the same name, e.g. an older one, does not count).
+                        val applied = pollUntil {
+                            polls++
+                            val plans = client.api.getTravelPlans().data ?: emptyList()
+                            last = plans
+                            stored(plans).also { if (it) writes.readBack(plans) }
+                        }
+                        result = if (applied) "confirmed" else "pending"
+                        if (applied) CarWrite.CONFIRMED else CarWrite.PENDING
+                    } finally {
+                        com.openzeekr.app.util.Logx.d("sched", ScheduleDiagnostics.line(kind, setting.btId, sent, session,
+                            result, polls, ScheduleDiagnostics.slots(last), ScheduleDiagnostics.found(last, setting)))
                     }
-                    if (!applied) error(CAR_ASLEEP)
-                }
-                Unit
+                } ?: error(ScheduleWrites.BUSY)
             }
         }
 
     private fun requireVin() = require(store.current().vin.isNotBlank()) { "VIN not configured" }
 
     /** Poll [check] (tolerant of transient errors) every [delayMs] up to [attempts] times; true on
-     *  the first success. Used to confirm a queued schedule op actually landed on the vehicle. */
-    private suspend fun pollUntil(attempts: Int = 8, delayMs: Long = 2000L, check: suspend () -> Boolean): Boolean {
+     *  the first success. Used to confirm a queued schedule op actually landed on the vehicle: about a
+     *  minute, every 3 s (0.3.8; 16 s up to 0.3.7 was too short to tell a slow car from a sleeping one). */
+    private suspend fun pollUntil(
+        attempts: Int = (ScheduleWrites.CONFIRM_WAIT_MS / ScheduleWrites.CONFIRM_POLL_MS).toInt(),
+        delayMs: Long = ScheduleWrites.CONFIRM_POLL_MS,
+        check: suspend () -> Boolean,
+    ): Boolean {
         repeat(attempts) { i ->
             if (runCatching { check() }.getOrDefault(false)) return true
             if (i < attempts - 1) kotlinx.coroutines.delay(delayMs)
@@ -743,10 +801,6 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
         const val TARGET_KEEP_ON = "1"
         const val TARGET_KEEP_OFF = "2"
         const val DEFAULT_TIMER_ID = "2"      // this car's plan slot; reuse the read-back timerId on edit
-        const val CAR_ASLEEP =
-            "The car didn't confirm the schedule — it's asleep or offline. The cloud queued it but the " +
-                "car must be awake to store it. Wake the car (unlock it, open the Zeekr app, or plug it in " +
-                "to charge) and try again."
     }
 }
 

@@ -60,6 +60,7 @@ on:
       - zeekremote-0.3.5-privacy
       - zeekremote-0.3.6-schedule
       - zeekremote-0.3.7-credits
+      - zeekremote-0.3.8-schedule-writes
 
 permissions:
   contents: read
@@ -255,6 +256,14 @@ jobs:
           if grep -q 'NotificationsNone' app/src/main/java/com/openzeekr/app/ui/AppRoot.kt; then echo 'messages bell is back'; exit 1; fi
           grep -Fq 'fun freeSlotId(' core/src/main/java/com/openzeekr/app/remote/Departures.kt
           grep -Fq 'Departures.freeSlotId(departures)' app/src/main/java/com/openzeekr/app/ui/ScheduleScreen.kt
+          # 0.3.8: schedule writes wait up to a minute for the car, never promise a late arrival, refuse a second
+          # Create while one waits, and leave a privacy-safe journal line (categories and slot numbers only).
+          grep -Fq 'class ScheduleWrites(' core/src/main/java/com/openzeekr/app/remote/ScheduleWrites.kt
+          grep -Fq 'const val CONFIRM_WAIT_MS = 60_000L' core/src/main/java/com/openzeekr/app/remote/ScheduleWrites.kt
+          grep -Fq 'writes.canCreate()' app/src/main/java/com/openzeekr/app/ui/ScheduleScreen.kt
+          grep -Fq 'fun gone(' core/src/main/java/com/openzeekr/app/remote/Departures.kt
+          grep -Fq '"SCHEDULE_WRITE ' core/src/main/java/com/openzeekr/app/util/ProximityDiagnosticJournal.kt
+          if grep -q 'asleep or offline' core/src/main/java/com/openzeekr/app/remote/Repositories.kt; then echo 'the old asleep error is back'; exit 1; fi
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -276,7 +285,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='131' versionName='0.3.7-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='132' versionName='0.3.8-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

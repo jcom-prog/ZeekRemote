@@ -26,7 +26,7 @@ class DeparturesTest {
         temporaryTime = Departures.PLACEHOLDER_TIME,
         cycleTimes = (1..7).map { CycleTime(it, if (it == 2 || it == 5) 1 else 0, "06:40:00") },
         preHeatSts = 0,
-        csSetting = TravelClimateSetting(duration = 15, sts = 1, temp = "27.0"),
+        csSetting = TravelClimateSetting(duration = 15, sts = 1, temp = "23.0"),
         ventiSettings = listOf(TravelSeatSetting(15, 2, 1, 0), TravelSeatSetting(15, 2, 2, 0)),
         heatSettings = listOf(TravelSeatSetting(15, 2, 1, 0), TravelSeatSetting(15, 2, 2, 0), TravelSeatSetting(15, 2, 3, 1), TravelSeatSetting(15, 2, 5, 0)),
         whlSetting = TravelWheelSetting(duration = 15, level = 2, sts = 0),
@@ -66,7 +66,7 @@ class DeparturesTest {
         try {
             Locale.setDefault(Locale("nl", "NL"))
             assertEquals("22.0", Departures.temp(22.0))
-            assertEquals("27.5", Departures.newPlan(DepartureDraft(days = setOf(1), tempC = 27.5), 1).csSetting!!.temp)
+            assertEquals("24.5", Departures.newPlan(DepartureDraft(days = setOf(1), tempC = 24.5), 1).csSetting!!.temp)
         } finally { Locale.setDefault(before) }
         assertEquals("16.0", Departures.temp(10.0))
         assertEquals("28.0", Departures.temp(35.0))
@@ -87,6 +87,13 @@ class DeparturesTest {
         // Switching seat heating on changes only the front seats; the rear seat keeps its own state.
         val s = Departures.applied(p, d.copy(seatHeat = true))
         assertEquals(mapOf(1 to 1, 2 to 1, 3 to 1, 5 to 0), s.heatSettings.associate { it.location to it.sts })
+    }
+
+    @Test fun aDeleteLandsOnceTheSlotReadsBackEmptyOrIsGone() {
+        assertTrue(Departures.gone(listOf(ownPlan(1), emptySlot(2)), 2))
+        assertTrue("slot missing from the read-back", Departures.gone(listOf(ownPlan(1)), 3))
+        assertFalse("the plan is still there", Departures.gone(listOf(ownPlan(1), ownPlan(2, "B")), 2))
+        assertFalse("switched off is not deleted", Departures.gone(listOf(ownPlan(2, "B", sts = 0)), 2))
     }
 
     @Test fun aWriteOnlyCountsWhenNameStateDaysAndTimeAllMatch() {

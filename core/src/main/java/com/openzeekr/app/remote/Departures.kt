@@ -132,6 +132,11 @@ object Departures {
         whlSetting = p.whlSetting ?: TravelWheelSetting(duration = t.wheelMinutes, level = t.wheelLevel, sts = 0),
     )
 
+    /** True when the read-back no longer holds a plan in slot [btId] (the slot reads back empty or is
+     *  missing): the delete landed. */
+    fun gone(plans: List<BookingTravelSetting>, btId: Int): Boolean =
+        plans.none { it.btId == btId && !isEmptySlot(it) }
+
     /** True when the car's read-back holds [want] (same name, state, days and time): the write landed. */
     fun landed(plans: List<BookingTravelSetting>, want: BookingTravelSetting): Boolean = plans.any {
         it.name == want.name && it.sts == want.sts && activeDays(it) == activeDays(want) &&

@@ -35,6 +35,13 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
         private val bleDepartureRevoked = Regex(
             "ble departure revoked \\((strong_near|signal_recovered|time_not_advancing)\\)")
         private val vehicleStatus = Regex("vehicle status observed session=([1-9][0-9]{0,18}) approach=([01]) walkAway=([01]) pe=([01]) ps=([01]) central=([0-3])")
+        // One schedule write (0.3.8): categories and slot numbers only - no name, time or temperature fits.
+        private const val SCHEDULE_SLOT = "[0-9]{1,2}:(?:on|off)/(?:used|empty)/[0-7]"
+        private val scheduleWrite = Regex("schedule write (kind=(?:create|edit|switch|delete|charge) " +
+            "slot=(?:[0-9]{1,2}|-) sent=(?:accepted|error|refused code=[A-Za-z0-9_.-]{1,16}) session=(?:yes|no|-) " +
+            "result=(?:confirmed|pending|failed) polls=[0-9]{1,3} " +
+            "readback=(?:none|(?:start|stop|other)/(?:app|other)|$SCHEDULE_SLOT(?:,$SCHEDULE_SLOT){0,9}) " +
+            "found=(?:-|none|slot[0-9]{1,2} name=same days=(?:same|other) time=(?:same|other) on=(?:same|other)))")
         private val outcomes = setOf("fine_permission_missing", "provider_cancelled", "provider_failure",
             "provider_no_fix", "accuracy_missing", "mock_rejected", "fix_received", "security_exception",
             "request_timeout", "session_disabled", "window_expired_before_request",
@@ -128,6 +135,7 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                 message.startsWith("onConnectionStateChange status=133 ") -> "BLE_STATUS_133"
                 else -> null
             }
+            if (area == "sched") return scheduleWrite.matchEntire(message)?.let { "SCHEDULE_WRITE ${it.groupValues[1]}" }
             if (area == "ctl") return Regex("(LOCK|UNLOCK): cloud request failed \\(key link ([A-Z_]{1,20})\\)")
                 .matchEntire(message)?.let { "CLOUD_${it.groupValues[1]}_FAILED ${it.groupValues[2]}" }
             if (area == "svc") return when (message) {
