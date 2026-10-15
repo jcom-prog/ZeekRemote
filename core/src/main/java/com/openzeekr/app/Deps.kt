@@ -1,7 +1,6 @@
 package com.openzeekr.app
 
 import android.content.Context
-import com.openzeekr.app.ble.CalibrationTestController
 import com.openzeekr.app.ble.DkBleManager
 import com.openzeekr.app.ble.DkIdentity
 import com.openzeekr.app.ble.DkLockController
@@ -106,9 +105,6 @@ class Deps(context: Context) {
     // Remote parking: the car allows it only from a Digital Key 3.0 (iPhone Wallet/UWB) for now, so the
     // controller ignores every command (user decision 15/10: keep the screen, greyed, for when Android follows).
     val rpa = RpaController(ble.session, appScope, phoneStatus::stateByte, rssi = ble::pollRemoteRssi, available = false)
-    /** BLE self-calibration test harness (0x0190-0x0199) + BLE lock/unlock, driven from the Parking tab.
-     *  Teaches the car THIS phone's RSSI/ranging model so passive entry / RPA localization can converge. */
-    val calibTest = CalibrationTestController(appCtx, ble, appScope)
     /** Wakelock-free motion state (still vs moving) for proximity cadence gating. */
     val motion = com.openzeekr.app.ble.MotionMonitor(appCtx)
     val proximity: ProximityController = ProximityController(

@@ -11,9 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -30,7 +28,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.NotificationsNone
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.VpnKey
@@ -47,7 +44,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -55,7 +51,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -138,28 +133,13 @@ fun AppRoot(deps: Deps) {
     var renaming by remember { mutableStateOf(false) }
     var draftName by remember { mutableStateOf("") }
 
-    // Message center (charging done, abnormal parking, alarms, OTA, …) — a bell in the
-    // top bar with an unread badge; opening it takes over the screen.
-    var showInbox by remember { mutableStateOf(false) }
-    var unread by remember { mutableIntStateOf(0) }
-    val refreshUnread: () -> Unit = {
-        if (loggedIn) deps.appScope.launch {
-            when (val r = deps.inbox.unreadCount()) {
-                is com.openzeekr.app.remote.CallResult.Ok -> unread = r.value
-                is com.openzeekr.app.remote.CallResult.Err -> {}
-            }
-            deps.refreshInvites()
-        }
-    }
-    LaunchedEffect(loggedIn) { refreshUnread() }
+    // 0.3.6 (user decision 15/10): no Messages bell. The Zeekr message centre needs overseas-app keys
+    // this account does not have (as the Software-status tab did); InboxScreen and the inbox repository
+    // stay for a possible return. Shared-car invitations still refresh on login.
+    LaunchedEffect(loggedIn) { if (loggedIn) deps.appScope.launch { deps.refreshInvites() } }
 
     val invites by deps.pendingInvites.collectAsState()
     var inviteBusy by remember { mutableStateOf(false) }
-
-    if (showInbox) {
-        InboxScreen(deps, onBack = { showInbox = false; refreshUnread() }, snackbar = snackbar)
-        return
-    }
 
     // The tabs are pages: tap a tab in the bottom bar, or swipe left/right to the neighbouring tab
     // (0.3.3). Only the page on screen is composed, as before only the active tab was.
@@ -193,30 +173,6 @@ fun AppRoot(deps: Deps) {
                     }
                     Text(if (cfg.vin.isNotBlank()) "VIN ••••${cfg.vin.takeLast(3)}" else "Tap the pencil to name your car",
                         color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                // Notifications bell with an always-readable count badge.
-                Box {
-                    Icon(
-                        Icons.Filled.NotificationsNone, "Messages", tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(38.dp).clip(CircleShape).clickable { showInbox = true }.padding(7.dp),
-                    )
-                    if (unread > 0) {
-                        Box(
-                            Modifier.align(Alignment.TopEnd)
-                                .offset(x = 3.dp, y = (-1).dp)
-                                .defaultMinSize(minWidth = 18.dp, minHeight = 18.dp)
-                                .clip(RoundedCornerShape(9.dp))
-                                .background(Brand.crit)
-                                .border(1.5.dp, MaterialTheme.colorScheme.surface, RoundedCornerShape(9.dp))
-                                .padding(horizontal = 4.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                if (unread > 99) "99+" else "$unread",
-                                color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1,
-                            )
-                        }
-                    }
                 }
                 Spacer(Modifier.width(6.dp))
                 Row(

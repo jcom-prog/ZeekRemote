@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -42,11 +43,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.openzeekr.app.Deps
 import com.openzeekr.app.net.model.BookingTravelSetting
-import com.openzeekr.app.net.model.CycleTime
-import com.openzeekr.app.net.model.TravelClimateSetting
-import com.openzeekr.app.net.model.TravelSeatSetting
-import com.openzeekr.app.net.model.TravelWheelSetting
 import com.openzeekr.app.remote.CallResult
+import com.openzeekr.app.remote.DepartureDraft
+import com.openzeekr.app.remote.Departures
 import com.openzeekr.app.ui.theme.Brand
 import kotlinx.coroutines.launch
 
@@ -57,8 +56,10 @@ import kotlinx.coroutines.launch
  *  - Charging schedule: off-peak charge windows (serviceId "ZAZ"). A single wholesale
  *    setting (priority-to-SOC + a list of start/end windows) you edit and save.
  *  - Departure schedule: precondition-by-departure-time plans (serviceId "ZAO", CRUD via
- *    start/edit/stop). Each has a name, a departure time, recurring weekdays, and an optional
- *    battery-preheat / cabin-preheat block.
+ *    start/edit/stop). Each has a name, a departure time and recurring weekdays (Mon..Sun), plus
+ *    what the official app offers: climate with a target temperature, steering wheel heating, front
+ *    seat heating and battery temperature maintenance. Tap a plan to edit it. The car's unused plan
+ *    slots are hidden, and a new plan only goes into a free slot (see [Departures]).
  *
  * Self-contained: expose [ScheduleScreen] and wire a nav entry in AppRoot (owned by the parent).
  */
@@ -82,7 +83,11 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
     // ---- departure schedule state ----
     val departures = remember { mutableStateListOf<BookingTravelSetting>() }
     var depLoading by remember { mutableStateOf(true) }
-    var showAddDeparture by remember { mutableStateOf(false) }
+    // The departure editor: creating a new plan, or editing [editing].
+    var creating by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<BookingTravelSetting?>(null) }
+    // Durations and levels the official app uses, read from a plan it made (else 15 min defaults).
+    val template = Departures.template(departures)
 
     suspend fun reloadCharge() {
         chargeLoading = true
@@ -172,14 +177,17 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
                 "Have the cabin (and battery) preconditioned by your departure time on the days you pick.",
                 color = Brand.muted, fontSize = 12.sp,
             )
+            val shown = Departures.visible(departures)
+            val freeSlots = departures.count(Departures::isEmptySlot)
             if (depLoading) {
                 LoadingRow()
-            } else if (departures.isEmpty()) {
+            } else if (shown.isEmpty()) {
                 EmptyRow("No departure schedules yet.")
             } else {
-                departures.forEach { d ->
+                shown.forEach { d ->
                     DepartureRow(
                         setting = d,
+                        onEdit = { editing = d },
                         onToggle = { on ->
                             // Optimistic: the car applies this asynchronously (returns a sessionId) and may
                             // be asleep, so an immediate re-GET reads the OLD state and would revert the
@@ -187,7 +195,7 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
                             val updated = d.copy(sts = if (on) 1 else 0)
                             val idx = departures.indexOfFirst { it.btId == d.btId }
                             scope.launch {
-                                val r = deps.schedule.updateDeparture(updated.sanitizedForWrite())
+                                val r = deps.schedule.updateDeparture(Departures.sanitizedForWrite(updated, template))
                                 when (r) {
                                     is CallResult.Ok -> {
                                         if (idx >= 0) departures[idx] = updated
@@ -198,11 +206,11 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
                             }
                         },
                         onDelete = {
-                            // Departures are fixed car-side slots; "delete" disables the slot (command stop).
-                            // Optimistic local update for the same async/asleep reason as the toggle.
+                            // "Delete" frees the car-side slot (command stop). Optimistic local update for
+                            // the same async/asleep reason as the toggle; a reload hides the freed slot.
                             val idx = departures.indexOfFirst { it.btId == d.btId }
                             scope.launch {
-                                val r = deps.schedule.deleteDeparture(d.sanitizedForWrite())
+                                val r = deps.schedule.deleteDeparture(Departures.sanitizedForWrite(d, template))
                                 when (r) {
                                     is CallResult.Ok -> {
                                         if (idx >= 0) departures[idx] = d.copy(sts = 0)
@@ -215,7 +223,17 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
                     )
                 }
             }
-            PrimaryButton("Add departure", Modifier.fillMaxWidth()) { showAddDeparture = true }
+            if (!depLoading && departures.isNotEmpty()) {
+                Text(
+                    if (freeSlots > 0) "$freeSlots free place${if (freeSlots == 1) "" else "s"} on the car for departures. Tap a departure to change it."
+                    else "Every place on the car holds a departure: delete one to add another.",
+                    color = Brand.faint, fontSize = 11.5.sp,
+                )
+            }
+            PrimaryButton("Add departure", Modifier.fillMaxWidth()) {
+                if (Departures.freeSlotId(departures) == null) snackbar("No free place on the car: delete a departure first.")
+                else creating = true
+            }
         }
 
         Text(
@@ -227,17 +245,35 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
         Spacer(Modifier.size(8.dp))
     }
 
-    if (showAddDeparture) {
-        AddDepartureSheet(
+    val original = editing
+    if (creating || original != null) {
+        DepartureEditor(
             ctx = ctx,
-            onDismiss = { showAddDeparture = false },
-            onCreate = { setting ->
-                showAddDeparture = false
+            initial = original?.let(Departures::draftOf) ?: DepartureDraft(),
+            minutesBefore = template.climateMinutes,
+            isNew = original == null,
+            onDismiss = { creating = false; editing = null },
+            onSave = { draft ->
+                creating = false; editing = null
                 scope.launch {
-                    val r = deps.schedule.createDeparture(setting)
-                    when (r) {
-                        is CallResult.Ok -> { snackbar("Departure created ✓"); reloadDepartures() }
-                        is CallResult.Err -> snackbar("Create failed ✗ ${r.message}")
+                    if (original == null) {
+                        // A new plan only ever goes into a free slot, never onto a plan in use.
+                        val slot = Departures.freeSlotId(departures)
+                        if (slot == null) { snackbar("No free place on the car: delete a departure first."); return@launch }
+                        when (val r = deps.schedule.createDeparture(Departures.newPlan(draft, slot, template))) {
+                            is CallResult.Ok -> { snackbar("Departure created ✓"); reloadDepartures() }
+                            is CallResult.Err -> snackbar("Create failed ✗ ${r.message}")
+                        }
+                    } else {
+                        val updated = Departures.applied(original, draft, template)
+                        when (val r = deps.schedule.updateDeparture(updated)) {
+                            is CallResult.Ok -> {
+                                val idx = departures.indexOfFirst { it.btId == original.btId }
+                                if (idx >= 0) departures[idx] = updated
+                                snackbar("Departure saved ✓")
+                            }
+                            is CallResult.Err -> snackbar("Save failed ✗ ${r.message}")
+                        }
                     }
                 }
             },
@@ -250,15 +286,21 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
 @Composable
 private fun DepartureRow(
     setting: BookingTravelSetting,
+    onEdit: () -> Unit,
     onToggle: (Boolean) -> Unit,
     onDelete: () -> Unit,
 ) {
-    val activeDays = setting.cycleTimes.filter { it.sts == 1 }.map { it.day }.toSortedSet()
-    val rawTime = setting.cycleTimes.firstOrNull { it.sts == 1 }?.time
-        ?: setting.temporaryTime.ifBlank { "" }
+    val d = Departures.draftOf(setting)
+    val rawTime = setting.cycleTimes.firstOrNull { it.sts == 1 }?.time ?: setting.temporaryTime
     val time = if (rawTime.isBlank()) "—" else hhmm(rawTime)
+    val extras = buildList {
+        if (d.climate) add("climate ${Departures.temp(d.tempC)}°C")
+        if (d.wheelHeat) add("wheel")
+        if (d.seatHeat) add("seats")
+        if (d.batteryMaintenance) add("battery")
+    }
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Brand.surface2).padding(12.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Brand.surface2).clickable(onClick = onEdit).padding(12.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Icon(Icons.Filled.Schedule, null, tint = Brand.accent, modifier = Modifier.size(20.dp))
@@ -267,14 +309,14 @@ private fun DepartureRow(
             Text(
                 buildString {
                     append(time.take(5))
-                    if (activeDays.isNotEmpty()) {
+                    if (d.days.isNotEmpty()) {
                         append("  ·  ")
-                        append(activeDays.joinToString("") { DAY_LABELS[(it - 1).coerceIn(0, 6)] })
+                        append(d.days.sorted().joinToString("") { DAY_LABELS[(it - 1).coerceIn(0, 6)] })
                     }
-                    if (setting.preHeatSts == 1) append("  ·  preheat")
                 },
                 color = Brand.muted, fontSize = 11.5.sp,
             )
+            if (extras.isNotEmpty()) Text(extras.joinToString(" · "), color = Brand.faint, fontSize = 11.sp)
         }
         Switch(checked = setting.sts == 1, onCheckedChange = onToggle, colors = brandSwitchColors(Brand.good))
         Icon(
@@ -284,23 +326,35 @@ private fun DepartureRow(
     }
 }
 
+/**
+ * New or edited departure, with what the official app offers: days Monday to Sunday, the departure
+ * time, climate with a target temperature, steering wheel and front seat heating, and battery
+ * temperature maintenance. Saving needs a name and at least one day.
+ */
 @Composable
-private fun AddDepartureSheet(
+private fun DepartureEditor(
     ctx: Context,
+    initial: DepartureDraft,
+    minutesBefore: Int,
+    isNew: Boolean,
     onDismiss: () -> Unit,
-    onCreate: (BookingTravelSetting) -> Unit,
+    onSave: (DepartureDraft) -> Unit,
 ) {
-    var name by remember { mutableStateOf("Departure") }
-    var time by remember { mutableStateOf("08:00:00") }
-    val days = remember { mutableStateListOf<Int>() }
-    var preheat by remember { mutableStateOf(true) }
-    var cabin by remember { mutableStateOf(true) }
+    var name by remember { mutableStateOf(initial.name) }
+    var time by remember { mutableStateOf(initial.time) }
+    val days = remember { mutableStateListOf<Int>().apply { addAll(initial.days.sorted()) } }
+    var climate by remember { mutableStateOf(initial.climate) }
+    var temp by remember { mutableStateOf(initial.tempC) }
+    var wheel by remember { mutableStateOf(initial.wheelHeat) }
+    var seats by remember { mutableStateOf(initial.seatHeat) }
+    var battery by remember { mutableStateOf(initial.batteryMaintenance) }
+    val canSave = days.isNotEmpty() && name.isNotBlank()
 
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("New departure") },
+        title = { Text(if (isNew) "New departure" else "Edit departure") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 androidx.compose.material3.OutlinedTextField(
                     value = name, onValueChange = { name = it }, singleLine = true, label = { Text("Name") },
                 )
@@ -308,31 +362,77 @@ private fun AddDepartureSheet(
                     Text("Departure time", fontSize = 13.sp, modifier = Modifier.weight(1f))
                     TimeChip(time.take(5)) { pickTime(ctx, time, withSeconds = true) { time = it } }
                 }
-                Text("Repeat on (pick at least one day)", color = Brand.muted, fontSize = 12.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    // day is 1-based on the wire (1=Mon .. 7=Sun); DAY_LABELS is indexed day-1.
+                Text("Repeat on", color = Brand.muted, fontSize = 12.sp)
+                // day is 1-based on the wire (1 = Monday .. 7 = Sunday); all seven share the row.
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     for (d in 1..7) {
                         val on = d in days
-                        SelectChip(DAY_LABELS[d - 1], on) { if (on) days.remove(d) else days.add(d) }
+                        DayChip(DAY_LABELS[d - 1], on, Modifier.weight(1f)) { if (on) days.remove(d) else days.add(d) }
                     }
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Cabin preheat", fontSize = 13.sp, modifier = Modifier.weight(1f))
-                    Switch(checked = cabin, onCheckedChange = { cabin = it }, colors = brandSwitchColors())
+                if (days.isEmpty()) Text("Pick at least one day to save.", color = Brand.energy, fontSize = 12.sp)
+
+                Text("Cabin comfort", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, modifier = Modifier.padding(top = 4.dp))
+                Text("Switches on automatically $minutesBefore minutes before departure.", color = Brand.muted, fontSize = 12.sp)
+                EditorSwitch("Climate", climate) { climate = it }
+                if (climate) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Target temperature", color = Brand.muted, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                        StepChip("−") { temp = (temp - 0.5).coerceAtLeast(Departures.MIN_TEMP) }
+                        Text("${Departures.temp(temp)} °C", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                        StepChip("+") { temp = (temp + 0.5).coerceAtMost(Departures.MAX_TEMP) }
+                    }
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Battery preheat", fontSize = 13.sp, modifier = Modifier.weight(1f))
-                    Switch(checked = preheat, onCheckedChange = { preheat = it }, colors = brandSwitchColors())
-                }
+                EditorSwitch("Steering wheel heating", wheel) { wheel = it }
+                EditorSwitch("Seat heating (front seats)", seats) { seats = it }
+
+                Text("Other", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, modifier = Modifier.padding(top = 4.dp))
+                EditorSwitch("Battery temperature maintenance", battery) { battery = it }
+                Text(
+                    "Brings the battery to temperature before departure for more range, which can cost extra " +
+                        "energy. Recommended below 0 °C or above 40 °C.",
+                    color = Brand.faint, fontSize = 11.5.sp,
+                )
             }
         },
         confirmButton = {
-            androidx.compose.material3.TextButton(enabled = days.isNotEmpty(), onClick = {
-                onCreate(newRecurringDeparture(name, time, days.toSet(), preheat, cabin))
-            }) { Text("Create") }
+            androidx.compose.material3.TextButton(enabled = canSave, onClick = {
+                onSave(DepartureDraft(name.trim(), time, days.toSet(), climate, temp, wheel, seats, battery))
+            }) { Text(if (isNew) "Create" else "Save") }
         },
         dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+@Composable
+private fun DayChip(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    Box(
+        modifier.height(36.dp).clip(RoundedCornerShape(10.dp))
+            .background(if (selected) Brand.accent.copy(alpha = 0.18f) else Brand.surface2)
+            .border(1.dp, if (selected) Brand.accent.copy(alpha = 0.5f) else Brand.line, RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = if (selected) Brand.accent else Brand.muted, fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
+    }
+}
+
+@Composable
+private fun EditorSwitch(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = onChange, colors = brandSwitchColors())
+    }
+}
+
+@Composable
+private fun StepChip(text: String, onClick: () -> Unit) {
+    Box(
+        Modifier.size(32.dp).clip(CircleShape).background(Brand.surface3).border(1.dp, Brand.line, CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) { Text(text, color = Brand.accent, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
 }
 
 // ---------------------------------------------------------------- small shared bits
@@ -359,69 +459,6 @@ private fun EmptyRow(text: String) =
 /** Day labels indexed by (stock `CycleTime.day` − 1). `day` is 1-based on the wire (1..7),
  *  day 1 = Monday … day 7 = Sunday, so DAY_LABELS[day-1] is the label. */
 private val DAY_LABELS = arrayOf("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")
-
-/**
- * Stock's far-future placeholder for a RECURRING plan's `temporaryTime` (format
- * "yyyy:MM:dd:HH:mm:ss"). The server REJECTS an empty temporaryTime ("单次出行时间不能为空"),
- * so a recurring plan still carries this placeholder — exactly as the stock app does
- * (BookTravelParamsV2.<init> seeds temporaryTime = "2099:12:12:08:00:00").
- */
-private const val TRAVEL_TEMP_PLACEHOLDER = "2099:12:12:08:00:00"
-
-/** Stock seat-heat/venti location codes (HeatSetting/VentiSetting.location):
- *  heat = FL/FR/RL/RR = {1,2,3,5}; venti (front only) = {1,2}. */
-private val HEAT_LOCATIONS = intArrayOf(1, 2, 3, 5)
-private val VENTI_LOCATIONS = intArrayOf(1, 2)
-
-/**
- * Build a byte-valid RECURRING booking-travel entry.
- *
- * The car validates the FULL nested object: `temporaryTime`, `ventiSettings`, `heatSettings` and
- * `whlSetting` must all be present (a 400 code 000002 lists them "cannot be empty" otherwise), and
- * `btId` must be >= 1 on create. Because ApiClient serializes with `encodeDefaults=false`, empty
- * lists / null blocks are DROPPED from the JSON — so we populate every required block with real,
- * disabled (sts=0) entries so they actually serialize. Only `fragSetting` is optional (omitted).
- *
- * A full 7-day `cycleTimes` array (day 1..7) is sent with sts=1 for the picked days and sts=0 for the
- * rest, mirroring the stock builder that emits a complete week.
- */
-private fun newRecurringDeparture(
-    name: String,
-    time: String,            // "HH:mm:00"
-    selectedDays: Set<Int>,  // 1..7 (1=Mon .. 7=Sun)
-    preheat: Boolean,
-    cabin: Boolean,
-): BookingTravelSetting = BookingTravelSetting(
-    btId = 1,                // >= 1 required on create (stock default is 1; server assigns the real id)
-    name = name.trim().ifBlank { "Departure" },
-    sts = 1,
-    displaySts = 1,
-    bookingType = 1,         // 1 = recurring (uses cycleTimes); 0 = one-off (requires a real temporaryTime)
-    temporaryTime = TRAVEL_TEMP_PLACEHOLDER,
-    // day is 1-based (1..7) on the wire — confirmed in the live trace (NOT 0..6).
-    cycleTimes = (1..7).map { CycleTime(day = it, sts = if (it in selectedDays) 1 else 0, time = time) },
-    preHeatSts = if (preheat) 1 else 0,
-    // Always send csSetting; temp is a one-decimal String on the wire ("22.0"); sts drives on/off.
-    csSetting = TravelClimateSetting(duration = 10, sts = if (cabin) 1 else 0, temp = "22.0"),
-    // Required non-empty blocks, all disabled (the UI doesn't expose per-seat/wheel yet).
-    ventiSettings = VENTI_LOCATIONS.map { TravelSeatSetting(duration = 10, level = 1, location = it, sts = 0) },
-    heatSettings = HEAT_LOCATIONS.map { TravelSeatSetting(duration = 10, level = 1, location = it, sts = 0) },
-    whlSetting = TravelWheelSetting(duration = 10, level = 2, sts = 0),
-)
-
-/**
- * Ensure a setting read back from the car still satisfies the write-side validation before we
- * re-send it (edit/delete). Fills only MISSING required blocks (preserving any real per-seat/wheel
- * values the readback carried) and clamps `temporaryTime`/`btId`.
- */
-private fun BookingTravelSetting.sanitizedForWrite(): BookingTravelSetting = copy(
-    btId = if (btId < 1) 1 else btId,
-    temporaryTime = temporaryTime.ifBlank { TRAVEL_TEMP_PLACEHOLDER },
-    csSetting = csSetting ?: TravelClimateSetting(duration = 10, sts = 0, temp = "22.0"),
-    ventiSettings = ventiSettings.ifEmpty { VENTI_LOCATIONS.map { TravelSeatSetting(10, 1, it, 0) } },
-    heatSettings = heatSettings.ifEmpty { HEAT_LOCATIONS.map { TravelSeatSetting(10, 1, it, 0) } },
-    whlSetting = whlSetting ?: TravelWheelSetting(duration = 10, level = 2, sts = 0),
-)
 
 /** Extract "HH:mm" from either a CycleTime "HH:mm:ss" or a temporaryTime "yyyy:MM:dd:HH:mm:ss". */
 private fun hhmm(raw: String): String {

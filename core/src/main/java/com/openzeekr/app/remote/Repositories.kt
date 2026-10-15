@@ -710,10 +710,11 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
                     error(resp.message ?: "departure schedule failed (code=${resp.code})")
                 }
                 if (verify) {
-                    // Confirm the plan actually applied on the car (match by name + requested enable state).
+                    // Confirm the plan actually applied on the car: same name, state, days and time (a plan
+                    // with only the same name, e.g. an older one, does not count).
                     val applied = pollUntil {
                         val plans = client.api.getTravelPlans().data ?: emptyList()
-                        plans.any { it.name == setting.name && it.sts == setting.sts }
+                        Departures.landed(plans, setting)
                     }
                     if (!applied) error(CAR_ASLEEP)
                 }

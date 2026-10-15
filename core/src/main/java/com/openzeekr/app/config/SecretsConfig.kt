@@ -166,7 +166,7 @@ data class SecretsConfig(
     /** Collect + show the on-device BLE log (digital-key / proximity traffic: key material). */
     val logBle: Boolean = false,
     /** Developer mode (enabled by tapping the version 10x in Settings). Gates in-development tools -
-     *  the Hero lab, Remote Parking and Smart calibration - so they aren't shown to normal users
+     *  the Hero lab and Remote Parking - so they aren't shown to normal users
      *  between releases. Default off; a fresh/normal install never sees the dev tools. */
     val devMode: Boolean = false,
     /** User-set display name for the car (shown in the top bar). Blank = use the model

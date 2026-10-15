@@ -58,6 +58,7 @@ on:
       - zeekremote-0.3.3-icons
       - zeekremote-0.3.4-cleanup
       - zeekremote-0.3.5-privacy
+      - zeekremote-0.3.6-schedule
 
 permissions:
   contents: read
@@ -247,6 +248,12 @@ jobs:
           if grep -q 'fun blindProbe' core/src/main/java/com/openzeekr/app/ble/rpa/RpaController.kt; then echo 'blind probe is back'; exit 1; fi
           if grep -q 'probeControl' core/src/main/java/com/openzeekr/app/ble/DkSession.kt; then echo 'probeControl is back'; exit 1; fi
           grep -Fq 'val sensitivityUnlockRssi: Int get() = FAR_UNLOCK_RSSI' core/src/main/java/com/openzeekr/app/config/SecretsConfig.kt
+          # 0.3.6: the Smart-calibration test and the Messages bell are gone; departures never overwrite a plan in use.
+          test ! -e core/src/main/java/com/openzeekr/app/ble/CalibrationTestController.kt
+          if grep -q 'Smart calibration' app/src/main/java/com/openzeekr/app/ui/ParkingScreen.kt; then echo 'calibration test is back'; exit 1; fi
+          if grep -q 'NotificationsNone' app/src/main/java/com/openzeekr/app/ui/AppRoot.kt; then echo 'messages bell is back'; exit 1; fi
+          grep -Fq 'fun freeSlotId(' core/src/main/java/com/openzeekr/app/remote/Departures.kt
+          grep -Fq 'Departures.freeSlotId(departures)' app/src/main/java/com/openzeekr/app/ui/ScheduleScreen.kt
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -268,7 +275,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='129' versionName='0.3.5-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='130' versionName='0.3.6-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
