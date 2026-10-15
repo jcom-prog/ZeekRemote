@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.defaultMinSize
@@ -17,6 +18,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -158,14 +161,18 @@ fun AppRoot(deps: Deps) {
         return
     }
 
-    var tab by remember { mutableIntStateOf(Tab.SETTINGS.ordinal) }
-    LaunchedEffect(loggedIn, provisioned) {
-        tab = when {
-            !provisioned && !loggedIn -> Tab.SETTINGS.ordinal
-            !provisioned -> Tab.KEY.ordinal
-            else -> Tab.VEHICLE.ordinal
-        }
+    // The tabs are pages: tap a tab in the bottom bar, or swipe left/right to the neighbouring tab
+    // (0.3.3). Only the page on screen is composed, as before only the active tab was.
+    val startPage = when {
+        !provisioned && !loggedIn -> Tab.SETTINGS.ordinal
+        !provisioned -> Tab.KEY.ordinal
+        else -> Tab.VEHICLE.ordinal
     }
+    val pager = rememberPagerState(initialPage = startPage) { tabs.size }
+    LaunchedEffect(loggedIn, provisioned) { pager.scrollToPage(startPage) }
+    // Remote parking (developer mode): no tab change by a swipe while a manoeuvre session is open.
+    val rpaState by deps.rpa.state.collectAsState()
+    val swipeTabs = !rpaState.phase.sessionActive
 
     Scaffold(
         topBar = {
@@ -236,11 +243,13 @@ fun AppRoot(deps: Deps) {
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         tabs.forEachIndexed { i, t ->
-                            val selected = tab == i
+                            val selected = pager.currentPage == i
                             val tint = if (selected) Brand.accent else Brand.muted
                             Column(
                                 Modifier.weight(1f).clip(RoundedCornerShape(14.dp))
-                                    .clickable { tab = i }.padding(vertical = 6.dp, horizontal = 2.dp),
+                                    // A tap jumps straight to the tab, without sliding past the ones in between.
+                                    .clickable { scope.launch { pager.scrollToPage(i) } }
+                                    .padding(vertical = 6.dp, horizontal = 2.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(3.dp),
                             ) {
@@ -260,31 +269,39 @@ fun AppRoot(deps: Deps) {
         },
         snackbarHost = { SnackbarHost(snackbarHost) },
     ) { pad ->
-        val m = Modifier.padding(pad)
-        when (tabs[tab]) {
-            Tab.VEHICLE -> VehicleScreen(deps, snackbar, m)
-            Tab.PARKING -> ParkingScreen(deps, m)
-            Tab.SECURITY -> SecurityScreen(deps, snackbar, m)
-            Tab.SCHEDULE -> ScheduleScreen(deps, snackbar, m)
-            Tab.KEY -> androidx.compose.foundation.layout.Box(m) {
-                SetupScreen(
-                    provisioning = deps.provisioning,
-                    ble = deps.ble,
-                    lock = deps.lock,
-                    config = deps.config,
-                    isProvisioned = { deps.dkIdentity.isProvisioned },
-                    dkId = remember(provisioned) { runCatching { deps.dkIdentity.credential()?.dkId }.getOrNull() },
-                    onRemoveKey = {
-                        // Revoke cloud-side (car forgets it) + wipe ALL local material + purge the watch.
-                        scope.launch {
-                            deps.provisioning.removeKey()
-                            com.openzeekr.app.wear.PhoneKeyPush.purgeWatches(pushCtx)
-                        }
-                    },
-                    snackbar = snackbar,
-                )
+        HorizontalPager(
+            state = pager,
+            modifier = Modifier.padding(pad).fillMaxSize(),
+            userScrollEnabled = swipeTabs,
+            verticalAlignment = Alignment.Top,
+            key = { tabs[it].name },
+        ) { page ->
+            val m = Modifier.fillMaxSize()
+            when (tabs[page]) {
+                Tab.VEHICLE -> VehicleScreen(deps, snackbar, m)
+                Tab.PARKING -> ParkingScreen(deps, m)
+                Tab.SECURITY -> SecurityScreen(deps, snackbar, m)
+                Tab.SCHEDULE -> ScheduleScreen(deps, snackbar, m)
+                Tab.KEY -> androidx.compose.foundation.layout.Box(m) {
+                    SetupScreen(
+                        provisioning = deps.provisioning,
+                        ble = deps.ble,
+                        lock = deps.lock,
+                        config = deps.config,
+                        isProvisioned = { deps.dkIdentity.isProvisioned },
+                        dkId = remember(provisioned) { runCatching { deps.dkIdentity.credential()?.dkId }.getOrNull() },
+                        onRemoveKey = {
+                            // Revoke cloud-side (car forgets it) + wipe ALL local material + purge the watch.
+                            scope.launch {
+                                deps.provisioning.removeKey()
+                                com.openzeekr.app.wear.PhoneKeyPush.purgeWatches(pushCtx)
+                            }
+                        },
+                        snackbar = snackbar,
+                    )
+                }
+                Tab.SETTINGS -> SettingsScreen(deps, m)
             }
-            Tab.SETTINGS -> SettingsScreen(deps, m)
         }
     }
 

@@ -157,7 +157,7 @@ private fun RemoteParkingControls(rpa: RpaController, state: RpaController.UiSta
     val phase = state.phase
     val connecting = phase == RpaController.Phase.CONNECTING
     val canConnect = phase == RpaController.Phase.IDLE || phase == RpaController.Phase.ERROR || phase == RpaController.Phase.DONE
-    val active = phase != RpaController.Phase.IDLE && phase != RpaController.Phase.ERROR && phase != RpaController.Phase.DONE
+    val active = phase.sessionActive
     // Plan K4: leaving the screen or the app (screen off, another app on top) ends a hold-to-move.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, rpa) {

@@ -3,6 +3,7 @@ package com.openzeekr.app.ui
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.view.MotionEvent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -47,7 +48,7 @@ import org.maplibre.android.maps.MapView
  * Free, key-less map (MapLibre GL + OpenFreeMap vector tiles) centred on the car.
  * The pin is drawn as a Compose overlay (no annotation plugin needed). The MapView's
  * lifecycle is tied to composition — created when this screen is shown, destroyed when
- * it leaves (AppRoot only composes the active tab).
+ * it leaves (the tab pager composes a page only while it is on screen).
  */
 private const val OPENFREEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty"
 
@@ -56,7 +57,15 @@ fun CarMap(lat: Double?, lng: Double?, modifier: Modifier = Modifier) {
     val ctx = LocalContext.current
     val mapView = remember {
         MapLibre.getInstance(ctx)
-        MapView(ctx).apply { onCreate(null) }
+        MapView(ctx).apply {
+            onCreate(null)
+            // A drag that starts on the map pans the map: without this the tab pager (swipe to the next
+            // tab, 0.3.3) and the page's vertical scroll would take the gesture over.
+            setOnTouchListener { view, event ->
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) view.parent?.requestDisallowInterceptTouchEvent(true)
+                false
+            }
+        }
     }
     DisposableEffect(Unit) {
         mapView.onStart(); mapView.onResume()

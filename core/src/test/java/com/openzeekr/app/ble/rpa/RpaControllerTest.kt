@@ -57,4 +57,11 @@ class RpaControllerTest {
         assertEquals("no RSSI frames after the release", after, session.rssiFrames().size)
         assertTrue(session.moves().all { it.first <= 3_000L })
     }
+
+    @Test fun aSessionIsActiveFromConnectingUntilItEnds() {
+        // 0.3.3: while a session is active the tab pager does not react to swipes.
+        val active = RpaController.Phase.entries.filter { it.sessionActive }
+        assertEquals(listOf(RpaController.Phase.CONNECTING, RpaController.Phase.READY, RpaController.Phase.PARKING_IN,
+            RpaController.Phase.PARKING_OUT, RpaController.Phase.MOVING, RpaController.Phase.PAUSED), active)
+    }
 }

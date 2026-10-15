@@ -32,7 +32,13 @@ class RpaController(
     /** Newly measured BLE RSSI (dBm); awaiting it uses only the separate RSSI stream job. */
     private val rssi: (suspend () -> Int?)? = null,
 ) {
-    enum class Phase { IDLE, CONNECTING, READY, PARKING_IN, PARKING_OUT, MOVING, PAUSED, DONE, ERROR }
+    enum class Phase {
+        IDLE, CONNECTING, READY, PARKING_IN, PARKING_OUT, MOVING, PAUSED, DONE, ERROR;
+
+        /** A manoeuvre session is open (connecting up to paused): Stop is live, and the app must not
+         *  change tab under it by a swipe (0.3.3). */
+        val sessionActive: Boolean get() = this != IDLE && this != DONE && this != ERROR
+    }
 
     data class UiState(
         val phase: Phase = Phase.IDLE,
