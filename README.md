@@ -104,8 +104,8 @@ token of appreciation is genuinely welcome (never expected):
   with the EU keys and SEA was rejected). LA / ME will follow once their keys are added.
 - **Watch stays usable when the phone isn't at the car.** The Wear OS app now only stands down while
   the phone is *actually holding* the car's Bluetooth link (not merely when Lock-on-approach is
-  enabled), so you can still lock/unlock from the watch via the handover otherwise. Thanks to Jan
-  Compen for the report and patch.
+  enabled), so you can still lock/unlock from the watch via the handover otherwise. Thanks to a
+  community member for the report and patch.
 
 ### 0.1.3
 - **Lock / unlock is now confirmed by the car, with self-healing.** The app waits for the car's

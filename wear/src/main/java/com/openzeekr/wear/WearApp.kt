@@ -131,7 +131,7 @@ fun WearApp() {
     // Stand down ONLY when the phone has proximity enabled AND is actually holding the car's BLE link.
     // `present` just means the phone is reachable over the Wear Data Layer - not that it's at the car -
     // so proximity-armed-but-not-connected must still leave the watch usable (via the BLE handover).
-    // (Reported by Jan Compen, Galaxy Watch Ultra.)
+    // (Reported on a Galaxy Watch Ultra.)
     val standDown = phoneStatus?.let { it.present && it.proximityEnabled && it.connected } == true
 
     fun act(lockIt: Boolean) {
@@ -143,7 +143,7 @@ fun WearApp() {
             val ok: Boolean? = when {
                 // Phone reachable + Lock-on-approach on AND actually holding the car link: leave it to
                 // the phone. If proximity is armed but the phone is NOT connected, fall through to the
-                // handover branch so the watch can still act. (Jan Compen's fix.)
+                // handover branch so the watch can still act.
                 status.present && status.proximityEnabled && status.connected -> {
                     phoneStatus = status
                     message = null

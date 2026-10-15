@@ -68,7 +68,7 @@ object CarCatalog {
             PaintColor("Brookblue", c(0x677FA3), "Two-tone"),
         ), bodyAsset = "cars/7x_body.png", detailsAsset = "cars/7x_details.png"),
         // 7GT: keep Crystal White first. Shared-account vehicle-info responses can omit colorName;
-        // colorFor() then deliberately falls back to the first entry. Jan's 7GT is Crystal White,
+        // colorFor() then deliberately falls back to the first entry. The owner's 7GT is Crystal White,
         // so Mystic Lilac here would revive the previously fixed wrong-colour regression.
         // This render is deliberately tracked with the app. Keeping it in the gitignored,
         // optional press-render directory made CI builds silently ship an empty hero card.
