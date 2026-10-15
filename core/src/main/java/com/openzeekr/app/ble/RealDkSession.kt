@@ -85,10 +85,6 @@ class RealDkSession(
     // How long [control] waits for the optional 0x0112 result after the 0x0111 receipt ack.
     private val RESULT_WINDOW_MS = 600L
 
-    // DEBUG: when set (during [probeControl]), every decrypted inbound frame is also handed here so
-    // the probe can log exactly what the car sends back (opcode + body). Null in normal operation.
-    @Volatile private var probeSink: ((Int, ByteArray) -> Unit)? = null
-
     /** 16-byte AES-CMAC key for RPA frames (ECIES-unwrapped once from the credential). */
     @Volatile private var cmacKeyCache: ByteArray? = null
 
@@ -395,28 +391,6 @@ class RealDkSession(
         }
     }
 
-    override suspend fun probeControl(ctrl: Byte, windowMs: Long): String = controlMutex.withLock {
-        if (!isEstablished || !cryptoReady) return "session not ready"
-        val seen = java.util.Collections.synchronizedList(mutableListOf<String>())
-        probeSink = { cmd, body ->
-            // body is nSeq(2)||ts(4)||tail — show the tail, which for a 0x0112 RESULT carries the errCode.
-            val tail = if (body.size >= 6) body.copyOfRange(6, body.size) else body
-            seen.add("${hex(cmd)}[${hexOf(tail).take(64)}]")
-        }
-        return try {
-            val ok = send(DkProtocol.CMD_A2V_CONTROL, byteArrayOf(ctrl))
-            Logx.d("dk", "probe: sent 0x0110 ctrl=0x%02x write=$ok — listening ${windowMs}ms".format(ctrl))
-            delay(windowMs)
-            val summary = if (seen.isEmpty()) "no reply in ${windowMs}ms" else seen.joinToString(" ")
-            Logx.d("dk", "probe 0x0110/0x%02x -> %s".format(ctrl, summary))
-            summary
-        } catch (e: Exception) {
-            Logx.w("dk", "probe error: ${e.message}"); "probe error: ${e.message}"
-        } finally {
-            probeSink = null
-        }
-    }
-
     override fun answerChallenge(randX: Int, randY: Int): ByteArray {
         val ans = RpaGrid.getAnswer(randX, randY)
         return byteArrayOf(((ans.toInt() ushr 8) and 0xFF).toByte(), (ans.toInt() and 0xFF).toByte())
@@ -655,8 +629,6 @@ class RealDkSession(
         if (cmdId == DkProtocol.CMD_V2A_VSTATUS_SYNC && cryptoReady) synchronized(statusGate) {
             vehicleObservations.offer(observationGeneration, body)?.let { applyStatus(it, body) }
         }
-        // Diagnostic tap (active only during a probeControl window): see every frame the car returns.
-        probeSink?.invoke(cmdId, body)
         pending[cmdId]?.let { it.complete(body); return }
         // Known handshake failures: fail the awaited step immediately (don't wait for timeout).
         val failFor = when (cmdId) {

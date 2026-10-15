@@ -187,44 +187,44 @@ private fun RemoteParkingControls(rpa: RpaController, state: RpaController.UiSta
             GhostButton("Stop", Modifier.weight(1f), enabled = active, tint = Brand.crit) { rpa.stop() }
         }
 
-        // DEBUG: fire every maneuver opcode once (skips the REQ_MODE→SYNC gate) to learn if
-        // any command downstream gets a non-0x100a response. RPA is absent from stock Android
-        // (iOS/DK3.0/UWB-gated), so this is exploratory. ⚠️ Keep clear space around the car.
-        GhostButton("Blind probe (debug) — watch logcat", Modifier.fillMaxWidth(), tint = Brand.energy) { rpa.blindProbe() }
-        Text("Fires all park/move opcodes once, ignoring the car's gate. Only run with clear space around the car — if the car accepts an autonomous command it can move.",
-            color = Brand.faint, fontSize = 11.sp)
+        // 0.3.4 (user decision 15/10): no "blind probe" any more, and the park/move controls stay hidden
+        // until a measurement shows that the car opens a remote-parking session for this key at all.
+        if (!SHOW_MANOEUVRE_CONTROLS) {
+            Text("Park and move controls are hidden until a measurement shows that the car opens a " +
+                "remote-parking session for this key.", color = Brand.faint, fontSize = 11.sp)
+        } else {
+            SectionHeader("Park in")
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Tile("Search", Modifier.weight(1f)) { rpa.searchSlot() }
+                Tile("Park in", Modifier.weight(1f)) { rpa.startParkIn() }
+                Tile("Continue", Modifier.weight(1f)) { rpa.continueParking() }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Tile("Pause", Modifier.weight(1f)) { rpa.pause() }
+                Tile("Undo", Modifier.weight(1f)) { rpa.undo() }
+                Spacer(Modifier.weight(1f))
+            }
 
-        SectionHeader("Park in")
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Tile("Search", Modifier.weight(1f)) { rpa.searchSlot() }
-            Tile("Park in", Modifier.weight(1f)) { rpa.startParkIn() }
-            Tile("Continue", Modifier.weight(1f)) { rpa.continueParking() }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Tile("Pause", Modifier.weight(1f)) { rpa.pause() }
-            Tile("Undo", Modifier.weight(1f)) { rpa.undo() }
-            Spacer(Modifier.weight(1f))
-        }
+            SectionHeader("Park out")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(
+                    "Parallel R" to RpaReq.PARALLEL_RIGHT_OUT,
+                    "Parallel L" to RpaReq.PARALLEL_LEFT_OUT,
+                    "Head-Perp R" to RpaReq.HEAD_PERPENDICULAR_RIGHT_OUT,
+                    "Head-Perp L" to RpaReq.HEAD_PERPENDICULAR_LEFT_OUT,
+                    "Tail-Perp R" to RpaReq.TAIL_PERPENDICULAR_RIGHT_OUT,
+                    "Tail-Perp L" to RpaReq.TAIL_PERPENDICULAR_LEFT_OUT,
+                ).forEach { (label, dir) -> Chip(label) { rpa.startParkOut(dir) } }
+            }
 
-        SectionHeader("Park out")
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(
-                "Parallel R" to RpaReq.PARALLEL_RIGHT_OUT,
-                "Parallel L" to RpaReq.PARALLEL_LEFT_OUT,
-                "Head-Perp R" to RpaReq.HEAD_PERPENDICULAR_RIGHT_OUT,
-                "Head-Perp L" to RpaReq.HEAD_PERPENDICULAR_LEFT_OUT,
-                "Tail-Perp R" to RpaReq.TAIL_PERPENDICULAR_RIGHT_OUT,
-                "Tail-Perp L" to RpaReq.TAIL_PERPENDICULAR_LEFT_OUT,
-            ).forEach { (label, dir) -> Chip(label) { rpa.startParkOut(dir) } }
-        }
-
-        SectionHeader("Hold to move")
-        Text("Press and hold; release stops instantly (the car halts the moment the 500 ms heartbeat drops). " +
-            "A hold ends by itself after ${RpaController.MAX_HOLD_MS / 1000} s, and when you leave this screen.",
-            color = Brand.muted, fontSize = 12.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            HoldPad("Forward", Icons.Filled.ArrowUpward, Modifier.weight(1f), onHold = { rpa.holdMove(true) }, onRelease = { rpa.releaseMove() })
-            HoldPad("Backward", Icons.Filled.ArrowDownward, Modifier.weight(1f), onHold = { rpa.holdMove(false) }, onRelease = { rpa.releaseMove() })
+            SectionHeader("Hold to move")
+            Text("Press and hold; release stops instantly (the car halts the moment the 500 ms heartbeat drops). " +
+                "A hold ends by itself after ${RpaController.MAX_HOLD_MS / 1000} s, and when you leave this screen.",
+                color = Brand.muted, fontSize = 12.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                HoldPad("Forward", Icons.Filled.ArrowUpward, Modifier.weight(1f), onHold = { rpa.holdMove(true) }, onRelease = { rpa.releaseMove() })
+                HoldPad("Backward", Icons.Filled.ArrowDownward, Modifier.weight(1f), onHold = { rpa.holdMove(false) }, onRelease = { rpa.releaseMove() })
+            }
         }
     }
 }
@@ -280,3 +280,6 @@ private fun HoldPad(label: String, icon: ImageVector, modifier: Modifier, onHold
         Text(label, color = Brand.accent, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
     }
 }
+
+/** Park in/out and hold-to-move send manoeuvre commands; hidden until a remote-parking session is proven. */
+private const val SHOW_MANOEUVRE_CONTROLS = false

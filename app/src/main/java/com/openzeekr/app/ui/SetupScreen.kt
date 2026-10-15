@@ -82,7 +82,6 @@ fun SetupScreen(
     // Owner vs shared is known from the vehicle-list (`isOwner`) captured at login — no manual pick.
     val owner = cfg.isOwner
     var confirmRemove by remember { mutableStateOf(false) }
-    var probing by remember { mutableStateOf(false) }
 
     val ready = isProvisioned() || prov.step == DkProvisioning.Step.DONE
     val sessionReady = bleState == DkBleManager.State.SESSION_READY
@@ -184,23 +183,6 @@ fun SetupScreen(
                     )
                 }
             }
-            // DEBUG probe: fire 0x0110 / CTRL_RPA_START (0x0A) once and surface the car's reply.
-            // Only meaningful with a live session; never sent in normal operation.
-            if (sessionReady) {
-                GhostButton(
-                    if (probing) "Probing…" else "Probe RPA start (0x0A)",
-                    Modifier.fillMaxWidth(), tint = Brand.muted,
-                ) {
-                    if (!probing) {
-                        probing = true
-                        scope.launch {
-                            val reply = runCatching { lock.probeRpaStart() }.getOrElse { "error: ${it.message}" }
-                            probing = false
-                            snackbar("Car reply: $reply")
-                        }
-                    }
-                }
-            }
         }
 
         // Passive entry.
@@ -212,26 +194,10 @@ fun SetupScreen(
                 }
                 Column(Modifier.weight(1f)) {
                     Text("Approach unlock · verified walk-away Lock", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                    Text("Auto Lock needs verified departure: Bluetooth signal plus walking (sensitivity Far) or phone location. If an expected Lock is not confirmed, an alarm sounds: Lock manually and check the car.",
+                    Text("Auto Lock needs verified departure: Bluetooth signal plus walking, or phone location. If an expected Lock is not confirmed, an alarm sounds: Lock manually and check the car.",
                         color = Brand.crit, fontSize = 12.sp)
                 }
                 Switch(checked = cfg.proximityEnabled, onCheckedChange = { on -> config.update { it.copy(proximityEnabled = on) } }, colors = brandSwitchColors(Brand.good))
-            }
-            if (cfg.proximityEnabled) {
-                Text("Sensitivity — how close before it unlocks", color = Brand.muted, fontSize = 12.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("veryclose" to "Very close", "close" to "Close", "far" to "Far").forEach { (key, label) ->
-                        SelectChip(label, selected = cfg.proximitySensitivity == key) { config.update { it.copy(proximitySensitivity = key) } }
-                    }
-                }
-                Text(
-                    when (cfg.proximitySensitivity) {
-                        "veryclose" -> "Unlocks within arm's reach · most secure"
-                        "far" -> "Unlocks earlier while approaching · verify Lock before leaving"
-                        else -> "Unlocks within ~1–2 m · verify Lock before leaving"
-                    },
-                    color = Brand.faint, fontSize = 11.5.sp,
-                )
             }
             Text(
                 "Runs a low-power scan, then connects & unlocks over the BLE key. Uses a foreground " +

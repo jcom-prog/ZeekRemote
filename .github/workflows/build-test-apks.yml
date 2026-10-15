@@ -145,8 +145,8 @@ jobs:
 
       - name: Verify conditional automatic Lock instructions on both proximity screens
         run: |
-          grep -Fq 'Auto Lock needs verified departure: Bluetooth signal plus walking (sensitivity Far) or phone location. If an expected Lock is not confirmed, an alarm sounds: Lock manually and check the car.' app/src/main/java/com/openzeekr/app/ui/SetupScreen.kt
-          grep -Fq 'Auto Lock needs verified departure: Bluetooth signal plus walking (sensitivity Far) or phone location. If an expected Lock is not confirmed, an alarm sounds: Lock manually and check the car.' app/src/main/java/com/openzeekr/app/ui/ControlsScreen.kt
+          grep -Fq 'Auto Lock needs verified departure: Bluetooth signal plus walking, or phone location. If an expected Lock is not confirmed, an alarm sounds: Lock manually and check the car.' app/src/main/java/com/openzeekr/app/ui/SetupScreen.kt
+          grep -Fq 'Auto Lock needs verified departure: Bluetooth signal plus walking, or phone location. If an expected Lock is not confirmed, an alarm sounds: Lock manually and check the car.' app/src/main/java/com/openzeekr/app/ui/ControlsScreen.kt
           grep -Fq 'AutomaticLockGate(AutomaticLockGate.Mode.ACTUATE)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'DepartureSafetyEvidence.confirmsDeparture(anchor, previous, current, steps, nowMs, bleCorroborated)' core/src/main/java/com/openzeekr/app/ble/DepartureObservationWindow.kt
           grep -Fq 'departureLocationSource.nearAnchor(nearAnchor)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt

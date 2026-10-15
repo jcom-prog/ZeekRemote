@@ -1,7 +1,5 @@
 package com.openzeekr.app.ui
 
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -23,7 +21,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -327,8 +324,9 @@ fun SettingsScreen(deps: Deps, modifier: Modifier = Modifier) {
             // Debug: send a liveness ping (non-actuating 0x0110/0x0A) and report whether the car
             // replied (it acks 0x0111). Verifies the DK COMMAND session is actually alive, not just
             // the GATT link. Needs a live key session - connect on the Key tab first. The full reply
-            // frame is in the log above when BLE logging is on.
-            OutlinedButton(onClick = {
+            // frame is in the log above when BLE logging is on. Developer mode only (0.3.4): the probe
+            // byte is the generic-control "remote parking start", which the car rejects today.
+            if (liveCfg.devMode) OutlinedButton(onClick = {
                 status = "Pinging vehicle…"
                 scope.launch {
                     val ok = runCatching { deps.ble.session.ping(2_000L) }.getOrDefault(false)
@@ -356,7 +354,6 @@ fun SettingsScreen(deps: Deps, modifier: Modifier = Modifier) {
         SettingsCard {
             CardTitle("About")
             val ver = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "—" }
-            val update by deps.updateAvailable.collectAsState()
             // Tap the version 10x to toggle developer mode (Hero lab / Remote Parking / Calibration).
             Box(Modifier.fillMaxWidth().clickable {
                 if (!liveCfg.devMode) {
@@ -371,19 +368,6 @@ fun SettingsScreen(deps: Deps, modifier: Modifier = Modifier) {
                 store.update { it.copy(devMode = false) }; verTaps = 0; status = "Developer mode off"
             }) { InfoRow("Developer mode", "On - tap to turn off") }
             InfoRow("Build", if (baked) "private (keys baked)" else "clean (bring your own keys)")
-            // In-app update check against the GitHub releases (runs once on launch; button re-checks).
-            update?.let { u ->
-                Box(Modifier.fillMaxWidth().clickable {
-                    runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u.url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-                }) { InfoRow("Update available", "${u.version}  ↓ download") }
-            }
-            OutlinedButton(onClick = {
-                status = "Checking for updates…"
-                scope.launch {
-                    val u = deps.checkForUpdate()
-                    status = if (u != null) "Update ${u.version} is available - see the About section." else "You are on the latest version."
-                }
-            }, modifier = Modifier.fillMaxWidth()) { Text("Check for updates") }
             Spacer(Modifier.size(4.dp))
             Text(
                 "ZeekRemote is an independent clean-room research app for your own Zeekr. " +
@@ -391,13 +375,10 @@ fun SettingsScreen(deps: Deps, modifier: Modifier = Modifier) {
                 color = Brand.muted, fontSize = 12.sp,
             )
             Text(
-                "Thanks to the community that mapped the cloud first: Wysie, Fryyyyy, mescon.",
+                "Based on OpenZeekr by borconi (MIT). Thanks to the community that mapped the cloud " +
+                    "first: Wysie, Fryyyyy, mescon.",
                 color = Brand.faint, fontSize = 11.5.sp, modifier = Modifier.padding(top = 6.dp),
             )
-            Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Filled.Favorite, null, tint = Brand.crit, modifier = Modifier.size(14.dp))
-                Text("  Support: revolut.me/emilimpd", color = Brand.accent, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-            }
         }
         Spacer(Modifier.height(16.dp))
     }

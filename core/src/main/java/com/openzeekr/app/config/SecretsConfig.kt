@@ -137,9 +137,11 @@ data class SecretsConfig(
     val lockRssi: Int = -70,
     /** If NEAR and no advertisement is seen for this long, treat as walked-away. */
     val proximityLostMs: Long = 8000,
-    /** Approach sensitivity preset (user-facing) — maps to unlock/lock RSSI below.
-     *  One of: "veryclose", "close", "far". */
-    val proximitySensitivity: String = "close",
+    /** Former approach sensitivity preset ("veryclose", "close", "far"). Since 0.3.4 only "far" exists:
+     *  it is the one preset the BLE departure route, the simulator and every field test since 0.2.x were
+     *  calibrated on. Kept so stored configs still load; [sensitivityUnlockRssi]/[sensitivityLockRssi]
+     *  ignore it. */
+    val proximitySensitivity: String = "far",
     /**
      * Hardware-offloaded presence scan: when idle (no live DK session), hand the car's
      * advert filter (0xFDFD / company 0x06FE) to the Bluetooth controller via a
@@ -269,16 +271,10 @@ data class SecretsConfig(
      */
     val effectiveLockRssi: Int get() = effectiveUnlockRssi - LOCK_RSSI_GAP_DB
 
-    /** Unlock RSSI for the chosen sensitivity preset (hidden from the user). */
-    val sensitivityUnlockRssi: Int
-        get() = when (proximitySensitivity) {
-            "veryclose" -> -58
-            // Field-calibrated on the Zeekr 7GT. -80 dBm improved the first test but still
-            // opened too close to the car. -86 dBm starts the confirmed-unlock path roughly
-            // twice as far out, leaving time for the BLE command to finish before arrival.
-            "far" -> -86
-            else -> -66 // close
-        }
+    /** Unlock RSSI (the "far" preset, the only one since 0.3.4). Field-calibrated on the Zeekr 7GT:
+     *  -80 dBm improved the first test but still opened too close to the car; -86 dBm starts the
+     *  confirmed-unlock path roughly twice as far out, leaving time for the BLE command to finish. */
+    val sensitivityUnlockRssi: Int get() = FAR_UNLOCK_RSSI
 
     /**
      * Walk-away thresholds are deliberately calibrated independently from approach unlock.
@@ -286,14 +282,13 @@ data class SecretsConfig(
      * together with the earlier `far` unlock would make a proven-good walk-away lock occur
      * too late. The controller's direction latch + cooldown provide the remaining hysteresis.
      */
-    val sensitivityLockRssi: Int
-        get() = when (proximitySensitivity) {
-            "veryclose" -> -66
-            "far" -> -82
-            else -> -74 // close
-        }
+    val sensitivityLockRssi: Int get() = FAR_LOCK_RSSI
 
     companion object {
+        /** Approach unlock threshold (dBm): the calibrated "far" preset. */
+        const val FAR_UNLOCK_RSSI = -86
+        /** Walk-away lock threshold (dBm) of the "far" preset; BleDepartureRoute is replayed against it. */
+        const val FAR_LOCK_RSSI = -82
         /** Unlock can never be set weaker (more negative) than this — safety floor. */
         const val UNLOCK_RSSI_FLOOR = -65
         /** Lock threshold sits this many dB weaker than unlock (fixed hysteresis gap). */

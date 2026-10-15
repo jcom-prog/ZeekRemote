@@ -69,19 +69,6 @@ class DkLockController(
         }
     }
 
-    /**
-     * DEBUG: send `0x0110` with sub-opcode `CTRL_RPA_START (0x0A)` and report what the car replies.
-     * The stock EU RPA flow never sends this (it drives RPA entirely on the 0x0113 channel), so this
-     * is purely to observe the car's answer to the generic-control RPA-start byte. Non-committal:
-     * one frame, no follow-up, no CMAC — worst case the car NAKs it.
-     */
-    suspend fun probeRpaStart(windowMs: Long = 4000): String {
-        Logx.d("lock", "RPA-start probe (0x0110 / CTRL_RPA_START 0x0A) requested")
-        ensureSession()
-        return session.probeControl(DkProtocol.CTRL_RPA_START, windowMs)
-            .also { Logx.d("lock", "RPA-start probe reply: $it") }
-    }
-
     /** Ensure a live session: use the current one if established, else establish on the live GATT,
      *  else fall back to a full refresh (fresh link + handshake). Returns whether a session is up. */
     private suspend fun ensureSession(): Boolean {

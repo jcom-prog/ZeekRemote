@@ -21,39 +21,19 @@ import com.openzeekr.app.remote.RemoteControlRepository
 import com.openzeekr.app.remote.SentryRepository
 import com.openzeekr.app.remote.ShareRepository
 import com.openzeekr.app.remote.VehicleStatusHolder
-import com.openzeekr.app.net.ReleaseInfo
-import com.openzeekr.app.net.UpdateChecker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /** Tiny manual DI container — one instance held by [App]. */
 class Deps(context: Context) {
     private val appCtx = context.applicationContext
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    /** Installed app version (for the GitHub update check). */
+    /** Installed app version (shown in the header and in Settings > About). */
     val appVersion: String =
         runCatching { appCtx.packageManager.getPackageInfo(appCtx.packageName, 0).versionName }.getOrNull() ?: ""
-    /** A newer GitHub release than the installed build, or null. Set by [checkForUpdate]; observed by Settings. */
-    val updateAvailable = MutableStateFlow<ReleaseInfo?>(null)
-
-    /** Query GitHub for a newer release, update [updateAvailable], and return it (or null if up to date). */
-    suspend fun checkForUpdate(): ReleaseInfo? {
-        val latest = withContext(Dispatchers.IO) { UpdateChecker.fetchLatest() }
-        val newer = latest != null && UpdateChecker.isNewer(appVersion, latest.version)
-        updateAvailable.value = if (newer) latest else null
-        return if (newer) latest else null
-    }
-
-    init {
-        // One quiet check on launch (off the main thread); failures are ignored (offline is fine).
-        appScope.launch { runCatching { checkForUpdate() } }
-    }
-
     val config: ConfigStore = ConfigStore.get(context)
         .also {
             com.openzeekr.app.util.Logx.attachDiagnosticJournal(

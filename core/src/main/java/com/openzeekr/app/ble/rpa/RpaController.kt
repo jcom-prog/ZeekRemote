@@ -131,49 +131,6 @@ class RpaController(
 
     private fun stopReqModePoll() { reqModeJob?.cancel(); reqModeJob = null }
 
-    /**
-     * DEBUG: fire every maneuver opcode once, spaced out, WITHOUT waiting for the car's
-     * 0x0117 SYNC. RPA is absent from the stock Android app (iOS/DK3.0/UWB-gated), so the
-     * car very likely NAKs everything with 0x100a — but this is the only way to learn if
-     * *any* command downstream of REQ_MODE elicits a different response (a real status, a
-     * 0x0115 challenge, or a 0x0117 SYNC) on this key. Watch `logcat -s dk,ble`: each
-     * "RPA probe -> NAME" is followed by the car's `<- frame` (0xfffe + status, or other).
-     *
-     * ⚠️ If the car actually accepts an autonomous command (START_PARKING_IN/OUT), it can
-     * move itself. Only run with clear space around the car.
-     */
-    fun blindProbe() {
-        scope.launch {
-            _state.value = _state.value.copy(phase = Phase.CONNECTING, message = "blind probe — watch logcat -s dk,ble")
-            runCatching { if (!session.isEstablished) session.establish() }.onFailure { fail(it); return@launch }
-            startRssiStream() // some gates only open while RSSI is streaming
-            val steps: List<Pair<String, ByteArray>> = listOf(
-                "PRKG_ON" to block(RpaReq.CMD_RPA_PRKG_ON),
-                "REQ_MODE" to block(RpaReq.CMD_RPA_REQ_MODE),
-                "PARKIN_REQUEST" to block(RpaReq.CMD_RPA_PARKIN_REQUEST),
-                "SEARCH_SLOT" to block(RpaReq.CMD_RPA_START_SEARCHING_SLOT),
-                "START_PARKING_IN" to block(RpaReq.CMD_RPA_START_PARKING_IN),
-                "PARK_OUT_REQUEST" to block(RpaReq.CMD_RPA_PARK_OUT_REQUEST),
-                "OUT_MODE_SET(tailPerpR)" to block(RpaReq.CMD_RPA_OUT_MODE_SET, outMode = RpaReq.TAIL_PERPENDICULAR_RIGHT_OUT),
-                "START_PARKING_OUT" to block(RpaReq.CMD_RPA_START_PARKING_OUT),
-                "RSPA_REQUEST" to block(RpaReq.CMD_NONE, RpaReq.CMD_RSPA_REQUEST),
-                "RSPA_FORWARD" to block(RpaReq.CMD_NONE, RpaReq.CMD_RSPA_FORWARD),
-                "RSPA_BACKWARD" to block(RpaReq.CMD_NONE, RpaReq.CMD_RSPA_BACKWARD),
-                "RSPA_RELEASE" to block(RpaReq.CMD_NONE, RpaReq.CMD_RSPA_BOTTOM_RELEASE),
-                "STOP" to block(RpaReq.CMD_RPA_STOP),
-            )
-            for ((name, blk) in steps) {
-                if (!isActive) break
-                com.openzeekr.app.util.Logx.d("dk", "RPA probe -> $name block=${blk.joinToString("") { "%02x".format(it) }}")
-                runCatching { session.sendFrame(DkOpcodes.CMD_A2V_RPA_REQ, blk) }
-                    .onFailure { com.openzeekr.app.util.Logx.w("dk", "probe $name send failed: ${it.message}") }
-                delay(1200)
-            }
-            stopRssiStream()
-            _state.value = _state.value.copy(phase = Phase.IDLE, message = "blind probe done — check log for any non-0x100a response")
-        }
-    }
-
     fun startParkIn() = oneShot(RpaReq.CMD_RPA_START_PARKING_IN, Phase.PARKING_IN)
     fun searchSlot() = oneShot(RpaReq.CMD_RPA_START_SEARCHING_SLOT, Phase.PARKING_IN)
     fun continueParking() = oneShot(RpaReq.CMD_RPA_CONTINUE, Phase.PARKING_IN)

@@ -52,14 +52,6 @@ interface DkSession {
         get() = kotlinx.coroutines.flow.emptyFlow()
 
     /**
-     * DEBUG probe: send a single `0x0110 CMD_A2V_CONTROL` frame carrying an arbitrary sub-opcode
-     * [ctrl] and collect every frame the car sends back over [windowMs], decrypted, into a
-     * human-readable summary. Diagnostic only — used to see how the car answers an opcode we don't
-     * normally send (e.g. `CTRL_RPA_START = 0x0A`). Default no-op for placeholder sessions.
-     */
-    suspend fun probeControl(ctrl: Byte, windowMs: Long): String = "probe unsupported (no real session)"
-
-    /**
      * Compute the RPA challenge answer. The car sends CMD_V2A_RPA_CHALLENGE with
      * (randX, randY); the app must reply via a fixed grid lookup
      * (RpaCtrlCmd.getAnswer/checkX/checkY), CMAC-signed. The lookup table is not
