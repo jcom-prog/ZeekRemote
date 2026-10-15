@@ -821,6 +821,7 @@ internal class SimWorld(
         val alarmSounding get() = alarmShowingUntil > now()
         override fun clear() { if (alarmSounding) record("ALARM_STOP", "clear"); alarmRaisedAt = 0L; alarmShowingUntil = -1L }
         override fun silenceAlarm() { if (alarmSounding) record("ALARM_STOP", "silence"); alarmRaisedAt = 0L; alarmShowingUntil = -1L }
+        override fun newAlarmEpisode() { alarmRaisedAt = 0L }
         override fun carLocked() { record("LOCKED_CHIME") }
     }
 

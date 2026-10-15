@@ -110,13 +110,15 @@ internal object LockAlertPolicy {
 
     /**
      * Plan K7: only news that the situation is resolved may stop a sounding alarm - the car reports
-     * locked, or the user is back at the car. Other quiet updates (a missing GNSS reference, a
-     * shadowed departure candidate, a stationary link loss) used to silence an alarm about an open car.
+     * locked. Other quiet updates (a missing GNSS reference, a shadowed departure candidate, a
+     * stationary link loss) used to silence an alarm about an open car. The user back at the car ends
+     * it through the controller (a strong reading at the car). 0.3.10: a withheld Lock
+     * ([Event.PROXIMITY_RECOVERED_BEFORE_LOCK]) no longer does - it is also withheld for weak reasons
+     * (simulator, silent step counter: "only 0 steps since the car" at 20-80 m silenced the alarm).
      */
     fun resolvesAlarm(event: Event): Boolean = when (event) {
         Event.AUTO_LOCK_CLOUD_CONFIRMED,
-        Event.AUTO_LOCK_STATE_UNVERIFIED,
-        Event.PROXIMITY_RECOVERED_BEFORE_LOCK -> true
+        Event.AUTO_LOCK_STATE_UNVERIFIED -> true
         else -> false
     }
 

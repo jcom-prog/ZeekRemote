@@ -107,6 +107,12 @@ internal object UnverifiedLockNotifier {
     /** The outcome is in: a later audible warning is a new episode and sounds again. */
     fun onUserLockFinished() { alarmRaisedAtElapsedMs = 0L }
 
+    /**
+     * 0.3.10: the user looks back at the car, but the evidence is weak: a later audible warning is a
+     * new episode and sounds at once, while a sounding alarm keeps sounding (no sound is stopped here).
+     */
+    fun newAlarmEpisode() { alarmRaisedAtElapsedMs = 0L }
+
     /** Neither the key link nor the cloud locked the car: the full alarm again, with the Lock button. */
     fun showLockFailed(context: Context) {
         post(context, CHANNEL_ID, NOTIFICATION_ID, LOCK_FAILED_TITLE, LOCK_FAILED_TEXT, alarm = false, lockButton = true)

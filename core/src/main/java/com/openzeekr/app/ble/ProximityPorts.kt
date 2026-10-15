@@ -55,6 +55,11 @@ internal interface ProximityAlerts {
     fun show(event: LockAlertPolicy.Event, bleDepartureRouteActive: Boolean = false): Boolean
     fun clear()
     fun silenceAlarm()
+    /**
+     * 0.3.10: a new alarm episode - the next audible event may sound at once (the reminder interval
+     * starts again), while an alarm that is sounding keeps sounding.
+     */
+    fun newAlarmEpisode()
     /** The car itself reported locked: the audible "Auto gesloten" notification (user request 05/10). */
     fun carLocked()
 }
@@ -64,6 +69,7 @@ internal class AndroidProximityAlerts(private val context: android.content.Conte
         UnverifiedLockNotifier.show(context, event, bleDepartureRouteActive)
     override fun clear() = UnverifiedLockNotifier.clear(context)
     override fun silenceAlarm() = UnverifiedLockNotifier.silenceAlarm(context)
+    override fun newAlarmEpisode() = UnverifiedLockNotifier.newAlarmEpisode()
     override fun carLocked() = CarLockedNotifier.show(context)
 }
 

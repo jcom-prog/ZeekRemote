@@ -55,6 +55,17 @@ class ProximityDiagnosticJournalTest {
         assertNull(ProximityDiagnosticJournal.event("prox", "link back 42 s at home, then lost out of range -> alarm episode closed"))
     }
 
+    @Test fun anAlarmThatKeepsSoundingAfterWeakEvidenceIsRecorded() {
+        assertEquals("ALARM_EPISODE_CLOSED signal kept", ProximityDiagnosticJournal.event("prox",
+            "sustained signal at the car after an alarm (user back) -> alarm episode closed (a sounding alarm keeps sounding)"))
+        assertEquals("ALARM_EPISODE_CLOSED presence kept", ProximityDiagnosticJournal.event("prox",
+            "presence hit at the car after an alarm (user back) -> alarm episode closed (a sounding alarm keeps sounding)"))
+        assertEquals("ALARM_EPISODE_CLOSED link kept", ProximityDiagnosticJournal.event("prox",
+            "link back 42 s, then lost out of range -> alarm episode closed (a sounding alarm keeps sounding)"))
+        assertNull(ProximityDiagnosticJournal.event("prox",
+            "sustained signal at the car after an alarm (user back) -> alarm episode closed (a sounding alarm at home)"))
+    }
+
     @Test fun vehicleStatusRecordsOnlyWhitelistedRawBits() {
         val line = "vehicle status observed session=42 approach=1 walkAway=0 pe=1 ps=0 central=3"
         assertEquals("VEHICLE_STATUS 42 1 0 1 0 3", ProximityDiagnosticJournal.event("dk", line))

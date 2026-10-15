@@ -69,7 +69,9 @@ class LockAlertPolicyTest {
 
     @Test fun onlyAResolvedSituationStopsAnAlarm() {
         assertTrue(LockAlertPolicy.resolvesAlarm(Event.AUTO_LOCK_CLOUD_CONFIRMED))
-        assertTrue(LockAlertPolicy.resolvesAlarm(Event.PROXIMITY_RECOVERED_BEFORE_LOCK))
+        // 0.3.10: a withheld Lock is no proof the user is back (simulator, silent step counter: "only 0
+        // steps since the car" at 20-80 m silenced the alarm about the open car).
+        assertFalse(LockAlertPolicy.resolvesAlarm(Event.PROXIMITY_RECOVERED_BEFORE_LOCK))
         assertFalse(LockAlertPolicy.resolvesAlarm(Event.LOCATION_REFERENCE_UNAVAILABLE))
         assertFalse(LockAlertPolicy.resolvesAlarm(Event.DEPARTURE_CANDIDATE_UNVERIFIED))
         assertFalse(LockAlertPolicy.resolvesAlarm(Event.LINK_LOST_STATIONARY))

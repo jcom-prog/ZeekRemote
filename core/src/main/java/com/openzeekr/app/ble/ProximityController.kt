@@ -117,6 +117,7 @@ class ProximityController internal constructor(
                 port.show(event, bleDepartureRouteActive).also { if (LockAlertPolicy.audible(event)) startAlarmCloudWatch() }
             override fun clear() = port.clear()
             override fun silenceAlarm() = port.silenceAlarm()
+            override fun newAlarmEpisode() = port.newAlarmEpisode()
             override fun carLocked() = port.carLocked()
         }
     }
@@ -755,7 +756,7 @@ class ProximityController internal constructor(
             // use up its alarm (simulator stress F39). A link flapping at the range edge stays one episode.
             if (armedUnlocked && unverifiedLockAlertRaised && !linkLostNearCar && linkRestoredAtMs != 0L &&
                 linkLostAtMs - linkRestoredAtMs >= NEW_EPISODE_LINK_UP_MS)
-                closeAlarmEpisode("link back ${(linkLostAtMs - linkRestoredAtMs) / 1000} s, then lost out of range")
+                closeAlarmEpisode("link back ${(linkLostAtMs - linkRestoredAtMs) / 1000} s, then lost out of range", linkLostAgain = true)
             deepFarAtLinkLossMs = stationaryFar.deepFarForMs(linkLostAtMs)
             // Locked car, link torn down clearly far from it (out of range): a physical round trip.
             // A fresh session later arriving sustained strong-near at the door may reopen once
@@ -964,14 +965,18 @@ class ProximityController internal constructor(
         if (rssi >= STRONG_NEAR_DIAGNOSTIC_RSSI) markStrongNear()
     }
 
-    /** A strong at-the-car reading; after a gap it is the user's return, which ends an alarm (plan K7). */
+    /**
+     * A strong at-the-car reading; after a gap it is the user's return, which ends an alarm (plan K7) -
+     * 0.3.10: also one that kept sounding after weak evidence closed its episode ([closeAlarmEpisode]).
+     */
     private fun markStrongNear() {
         val now = clock.wallMs()
         val returning = lastStrongNearAtMs == 0L || now - lastStrongNearAtMs > RETURN_GAP_MS
         lastStrongNearAtMs = now
-        if (returning && armedUnlocked && unverifiedLockAlertRaised) {
+        if (returning && armedUnlocked && (unverifiedLockAlertRaised || now < alarmMaySoundUntilMs)) {
             alerts.silenceAlarm()
             unverifiedLockAlertRaised = false
+            alarmMaySoundUntilMs = 0L
             Logx.d("prox", "strong signal at the car after an alarm -> user back; alarm silenced")
         }
     }
@@ -1009,10 +1014,39 @@ class ProximityController internal constructor(
     private fun stepCountStale(): Boolean =
         lastMovingSeenAtMs != 0L && lastMovingSeenAtMs > lastStrongNearAtMs && lastStepAdvanceAtMs <= lastStrongNearAtMs
 
-    private fun closeAlarmEpisode(reason: String) {
-        alerts.silenceAlarm()
+    /**
+     * Weak evidence that the user is back at the car (0.3.9) ends the alarm episode, so a departure that
+     * follows sounds its own alarm. 0.3.10: it no longer stops a sounding alarm unless it looks like a
+     * return ([looksLikeReturn]) - a strong phone reaches the unlock level at 10-30 m too (simulator
+     * stress F10/F13/F31: alarm silenced while the user stood there with the car open), and a link that
+     * came back and was lost again is the user leaving ([linkLostAgain]). A sounding alarm then ends
+     * with the Lock, a strong reading at the car, the user's tap or its own timeout.
+     */
+    private var alarmMaySoundUntilMs = 0L
+    private fun closeAlarmEpisode(reason: String, linkLostAgain: Boolean = false) {
+        val silence = !linkLostAgain && looksLikeReturn()
+        if (silence) alerts.silenceAlarm() else {
+            alerts.newAlarmEpisode()
+            alarmMaySoundUntilMs = clock.wallMs() + LockAlertPolicy.ALARM_EPISODE_MS
+        }
         unverifiedLockAlertRaised = false
-        Logx.d("prox", "$reason -> alarm episode closed")
+        Logx.d("prox", "$reason -> alarm episode closed" + if (silence) "" else " (a sounding alarm keeps sounding)")
+    }
+
+    /**
+     * 0.3.10: walking now or within [RETURN_MOVING_MS], and the signal [RETURN_RISE_DB] above its best
+     * reading [RETURN_EARLIER_FROM_MS]..[RETURN_EARLIER_TO_MS] ago - or no reading then (the link was
+     * down). Walking around the car or straight back passes; standing at 10-30 m or walking away does not.
+     */
+    private fun looksLikeReturn(): Boolean {
+        val now = clock.wallMs()
+        val moving = motion.state.value == MotionMonitor.Motion.MOVING ||
+            (lastMovingSeenAtMs != 0L && now - lastMovingSeenAtMs <= RETURN_MOVING_MS)
+        if (!moving) return false
+        val latest = recentReadings.lastOrNull()?.second ?: return true
+        val earlier = recentReadings.filter { now - it.first in RETURN_EARLIER_FROM_MS..RETURN_EARLIER_TO_MS }
+            .maxOfOrNull { it.second } ?: return true
+        return latest >= earlier + RETURN_RISE_DB
     }
 
     /** The last few seconds of raw readings (wall ms, dBm) for the Lock veto. */
@@ -2629,6 +2663,12 @@ class ProximityController internal constructor(
         private const val NEAR_AFTER_ALARM_MS = 2_000L
         /** 0.3.9: the link back this long before an out-of-range loss makes that loss a new alarm episode. */
         private const val NEW_EPISODE_LINK_UP_MS = 10_000L
+        /** 0.3.10: weak evidence silences an alarm only like a return - walking now or this recently, ... */
+        private const val RETURN_MOVING_MS = 10_000L
+        /** ... and the signal this much above its best reading in this window before (or none then). */
+        private const val RETURN_RISE_DB = 6
+        private const val RETURN_EARLIER_FROM_MS = 8_000L
+        private const val RETURN_EARLIER_TO_MS = 15_000L
         /** Plan K9: steps since the last strong reading at the car that mean "walked away" (~20 m;
          *  50 missed a 30 m walk the hub counter counted as 44, stress F20). */
         private const val WALKED_AWAY_STEPS = 30L

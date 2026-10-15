@@ -149,7 +149,8 @@ internal object SimReport {
         val farHand = farUnlocks(hand)
         val unwanted = rs.count { has(it, "UNWANTED_UNLOCK", "UNLOCK_WHILE_LOITERING") }
         val lockNear = rs.count { has(it, "LOCK_WHILE_NEAR", "LOCK_WHILE_RETURNING", "UNWANTED_LOCK_NEAR") }
-        val silent = rs.count { has(it, "DEPARTURE_NO_LOCK_SILENT", "OPEN_FAR_NO_ALARM", "GONE_BUT_UNLOCKED") }
+        // 0.3.10: an alarm silenced too early while the car is open and the user away is silent too.
+        val silent = rs.count { has(it, "DEPARTURE_NO_LOCK_SILENT", "OPEN_FAR_NO_ALARM", "GONE_BUT_UNLOCKED", "ALARM_SILENCED_AWAY") }
         return listOf(
             Target("never opens from > 20 m, phone in a pocket", share(farPocket, pocket.size), "0", farPocket == 0),
             Target("never opens from > 20 m, phone in the hand", share(farHand, hand.size), "0", farHand == 0),

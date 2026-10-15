@@ -43,6 +43,10 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
             "longest wait ([0-9]{1,5}[.,][0-9]) s\\); detector=([0-9]{1,7}) counter=([0-9]{1,7}|none)")
         // Activity Recognition (Google Play) transitions: the activity type and enter/exit only.
         private val arTransition = Regex("AR transition: activity=([0-9]{1,2}) trans=([01])")
+        // Why an alarm episode ended (0.3.9) and whether a sounding alarm kept sounding (0.3.10).
+        private val alarmEpisodeClosed = Regex("(presence hit at the car after an alarm \\(user back\\)|" +
+            "sustained signal at the car after an alarm \\(user back\\)|link back [0-9]{1,6} s, then lost out of range)" +
+            " -> alarm episode closed( \\(a sounding alarm keeps sounding\\))?")
         private val AR_ACTIVITIES = mapOf("0" to "vehicle", "1" to "bicycle", "2" to "on_foot", "3" to "still",
             "7" to "walking", "8" to "running")
         // One schedule write (0.3.8): categories and slot numbers only - no name, time or temperature fits.
@@ -109,12 +113,15 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                         "locked via cloud; a newer cloud report confirms it").matches(message) -> "AUTO_LOCK_CLOUD_VERIFIED"
                     Regex("(ble-departure): cloud Lock backed by a fresh BLE departure proof").matches(message) ->
                         "CLOUD_LOCK_BLE_BACKED"
-                    // 0.3.9: why an alarm episode ended (the user back at the car, or a new departure).
+                    // 0.3.9: why an alarm episode ended (the user back at the car, or a new departure);
+                    // 0.3.10: "kept" when weak evidence left a sounding alarm sounding.
                     message == "strong signal at the car after an alarm -> user back; alarm silenced" -> "ALARM_EPISODE_CLOSED strong"
-                    message == "presence hit at the car after an alarm (user back) -> alarm episode closed" -> "ALARM_EPISODE_CLOSED presence"
-                    message == "sustained signal at the car after an alarm (user back) -> alarm episode closed" -> "ALARM_EPISODE_CLOSED signal"
-                    Regex("link back [0-9]{1,6} s, then lost out of range -> alarm episode closed").matches(message) ->
-                        "ALARM_EPISODE_CLOSED link"
+                    alarmEpisodeClosed.matches(message) -> alarmEpisodeClosed.matchEntire(message)?.let { m ->
+                        val why = m.groupValues[1].let {
+                            when { it.startsWith("presence") -> "presence"; it.startsWith("sustained") -> "signal"; else -> "link" }
+                        }
+                        "ALARM_EPISODE_CLOSED $why" + if (m.groupValues[2].isEmpty()) "" else " kept"
+                    } ?: "ALARM_EPISODE_CLOSED"
                     message.startsWith("manual cloud Lock verified (") -> "MANUAL_CLOUD_LOCK_VERIFIED"
                     message == "car reported locked -> 'Auto gesloten' notification" -> "CAR_LOCKED_CHIME"
                     message.startsWith("car reported unlocked without our Unlock (") -> "CAR_REOPENED"

@@ -259,7 +259,8 @@ internal object SimOracle {
 
     /** Safety: the car opens or locks wrongly, or is open with the user away and nobody knows. */
     val SAFETY = setOf("LOCK_WHILE_NEAR", "LOCK_WHILE_RETURNING", "UNWANTED_LOCK_NEAR", "UNLOCK_WHILE_FAR",
-        "UNWANTED_UNLOCK", "UNLOCK_WHILE_LOITERING", "DEPARTURE_NO_LOCK_SILENT", "OPEN_FAR_NO_ALARM", "GONE_BUT_UNLOCKED")
+        "UNWANTED_UNLOCK", "UNLOCK_WHILE_LOITERING", "DEPARTURE_NO_LOCK_SILENT", "OPEN_FAR_NO_ALARM", "GONE_BUT_UNLOCKED",
+        "ALARM_SILENCED_AWAY")
     fun tier(code: String) = if (code in SAFETY) "SAFETY" else "COMFORT"
     /** After a stop mark, a key command this soon still belongs to the walk up (see expect-stay-locked). */
     const val STOP_GRACE_MS = 2_500L
@@ -306,6 +307,32 @@ internal object SimOracle {
                 // The user stayed at the car for the next 30 s: alarm for nothing.
                 val near = samples.filter { it.atMs in e.atMs..(e.atMs + 30_000) }.all { it.distanceM <= 4.0 }
                 if (near && e.distanceM <= 4.0) out += f("ALARM_WHILE_AT_CAR", e)
+            }
+        }
+        // 0.3.10: a sounding alarm silenced while the car is still open (its own lock events, not the 1 s
+        // samples: a confirmed Lock silences in the same tick) and the user is >= 10 m away, with >= 10 s of
+        // the alarm left, no Lock within 1 s, no new alarm within 30 s and the user not back at the car
+        // (<= 4 m) within 30 s (stress F15: silenced at 30 m by "2 s at the unlock level", 70 s without an
+        // alarm). The end of an alarm followed by a new one (F41) is no gap; a silence in the last 30 s of
+        // a run cannot be judged.
+        run {
+            val runEnd = samples.lastOrNull()?.atMs ?: 0L
+            var carLocked = samples.firstOrNull()?.carLocked ?: true
+            var alarmAt = -1L
+            for (e in ev) {
+                when (e.kind) {
+                    "CAR_LOCKED" -> carLocked = true
+                    "CAR_UNLOCKED" -> carLocked = false
+                    "ALARM" -> alarmAt = e.atMs
+                }
+                if (e.kind != "ALARM_STOP" || e.detail != "silence" || e.distanceM < 10.0 || carLocked || alarmAt < 0) continue
+                if (runEnd < e.atMs + 30_000) continue
+                val left = alarmAt + com.openzeekr.app.ble.LockAlertPolicy.ALARM_EPISODE_MS - e.atMs
+                val lockedNow = ev.any { it.kind == "CAR_LOCKED" && it.atMs in e.atMs..(e.atMs + 1_000) }
+                val realarm = ev.any { it.kind == "ALARM" && it.atMs in e.atMs..(e.atMs + 30_000) }
+                val back = samples.any { it.atMs in e.atMs..(e.atMs + 30_000) && it.distanceM <= 4.0 }
+                if (left >= 10_000 && !lockedNow && !realarm && !back)
+                    out += f("ALARM_SILENCED_AWAY", e, "alarm silenced at %.1f m with the car open, %d s early".format(e.distanceM, left / 1000))
             }
         }
         // Alarm hygiene: one alarm per episode, and it stops once the car is locked or the user is back.
