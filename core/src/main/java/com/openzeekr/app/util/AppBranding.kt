@@ -24,6 +24,12 @@ object AppBranding {
         LICHTLIJN("LauncherLichtlijn", R.drawable.ic_stat_lichtlijn),
         SLEUTEL("LauncherSleutel", R.drawable.ic_stat_sleutel),
         FOTO("LauncherFoto", R.drawable.ic_stat_foto),
+        // 0.3.3: cut from two 7GT studio photos (branding/icons/photo_icons.py)
+        VELG("LauncherVelg", R.drawable.ic_stat_velg),
+        WIEL("LauncherWiel", R.drawable.ic_stat_wiel),
+        FRONT("LauncherFront", R.drawable.ic_stat_front),
+        PLAAT("LauncherPlaat", R.drawable.ic_stat_plaat),
+        PROFIEL("LauncherProfiel", R.drawable.ic_stat_profiel),
     }
 
     private val _design = MutableStateFlow<Design?>(null)

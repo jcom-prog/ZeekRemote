@@ -201,7 +201,15 @@ fun SettingsScreen(deps: Deps, modifier: Modifier = Modifier) {
                             }
                         }
                     }
+                    // Keep the last row's tiles the same width as the full rows above.
+                    repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
                 }
+            }
+            val fixed = com.openzeekr.app.AppIcon.APPLICATION_ICON
+            if (chosen != fixed) {
+                Text("De melding van de digitale sleutel en Instellingen › Apps tonen altijd het vaste " +
+                    "app-icoon \u201c${fixed.label}\u201d. Dat kan Android niet laten meewisselen.",
+                    color = Brand.muted, fontSize = 12.sp)
             }
         }
 

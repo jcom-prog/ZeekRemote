@@ -25,6 +25,22 @@ class AppBrandingTest {
         ))
     }
 
+    @Test fun aPhotoDesignIsFoundLikeAnyOther() {
+        // 0.3.3: the five photo designs; Velg comes before Oranje wiel in the enum, but only the
+        // enabled alias counts.
+        assertEquals(Design.WIEL, resolve(
+            "LauncherDefault" to PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+            "LauncherVelg" to PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+            "LauncherWiel" to PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+        ))
+        // A new alias the user never touched stays at its manifest default (disabled): it does not
+        // take over from the design picked before the update.
+        assertEquals(Design.SLEUTEL, resolve(
+            "LauncherDefault" to PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+            "LauncherSleutel" to PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+        ))
+    }
+
     @Test fun nothingEnabledFallsBackToTheOriginalMark() {
         assertEquals(Design.DEFAULT, resolve(*Design.entries
             .map { it.alias to PackageManager.COMPONENT_ENABLED_STATE_DISABLED }.toTypedArray()))
@@ -32,7 +48,7 @@ class AppBrandingTest {
 
     @Test fun everyDesignHasItsOwnAliasAndStatusIcon() {
         assertEquals(Design.entries.size, Design.entries.map { it.alias }.toSet().size)
-        // Silhouet and Foto look alike in one colour, but each design has its own resource.
+        // Silhouet/Foto and Velg/Oranje wiel look alike in one colour, but each design has its own resource.
         assertEquals(Design.entries.size, Design.entries.map { it.statusIcon }.toSet().size)
     }
 }

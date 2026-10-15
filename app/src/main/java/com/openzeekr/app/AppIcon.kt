@@ -8,17 +8,24 @@ import com.openzeekr.app.util.AppBranding
 /**
  * The launcher icon the user picked in Settings. Every option is an `<activity-alias>` of
  * [MainActivity] in the manifest and exactly one of them is enabled; [DEFAULT] is enabled in the
- * manifest itself, so a fresh install shows the familiar icon. The five car icons are generated from
- * the 7GT render by branding/icons/icons.py. The alias and the matching status-bar icon live in
- * [AppBranding.Design] (core), so notifications and the top-bar badge follow the choice (0.3.1).
+ * manifest itself, so a fresh install shows the familiar icon. Five car icons are generated from
+ * the 7GT render by branding/icons/icons.py, five more from two 7GT photos by photo_icons.py (0.3.3).
+ * The alias and the matching status-bar icon live in [AppBranding.Design] (core), so the status-bar
+ * icon and the top-bar badge follow the choice (0.3.1). The icon in the notification card and in
+ * Android's app settings is the application icon from the manifest, which cannot change at run time.
  */
 enum class AppIcon(val design: AppBranding.Design, val label: String, val iconRes: Int) {
-    DEFAULT(AppBranding.Design.DEFAULT, "Huidig", R.mipmap.ic_launcher),
+    DEFAULT(AppBranding.Design.DEFAULT, "Origineel", R.mipmap.ic_launcher),
     SILHOUET(AppBranding.Design.SILHOUET, "Silhouet", R.mipmap.ic_launcher_silhouet),
     CLOSEUP(AppBranding.Design.CLOSEUP, "Close-up", R.mipmap.ic_launcher_closeup),
     LICHTLIJN(AppBranding.Design.LICHTLIJN, "Lichtlijn", R.mipmap.ic_launcher_lichtlijn),
     SLEUTEL(AppBranding.Design.SLEUTEL, "Digitale sleutel", R.mipmap.ic_launcher_sleutel),
-    FOTO(AppBranding.Design.FOTO, "Foto", R.mipmap.ic_launcher_foto);
+    FOTO(AppBranding.Design.FOTO, "Foto", R.mipmap.ic_launcher_foto),
+    VELG(AppBranding.Design.VELG, "Velg", R.mipmap.ic_launcher_velg),
+    WIEL(AppBranding.Design.WIEL, "Oranje wiel", R.mipmap.ic_launcher_wiel),
+    FRONT(AppBranding.Design.FRONT, "Front", R.mipmap.ic_launcher_front),
+    PLAAT(AppBranding.Design.PLAAT, "7GT", R.mipmap.ic_launcher_plaat),
+    PROFIEL(AppBranding.Design.PROFIEL, "Profiel", R.mipmap.ic_launcher_profiel);
 
     val alias: String get() = design.alias
 
@@ -27,6 +34,10 @@ enum class AppIcon(val design: AppBranding.Design, val label: String, val iconRe
         ComponentName(context.packageName, "${MainActivity::class.java.`package`!!.name}.$alias")
 
     companion object {
+        /** The design of the manifest's application icon (`<application android:icon>`): the icon in
+         *  the notification card and in Android's app settings, whatever the launcher shows. */
+        val APPLICATION_ICON = SLEUTEL
+
         fun current(context: Context): AppIcon = of(AppBranding.current(context))
 
         fun of(design: AppBranding.Design): AppIcon = entries.first { it.design == design }

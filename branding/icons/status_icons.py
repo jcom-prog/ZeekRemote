@@ -1,10 +1,10 @@
-"""Status-bar (notification) icons for the five launcher designs, plus preview sheets.
+"""Status-bar (notification) icons for the launcher designs, plus preview sheets.
 
 Android draws the status-bar icon of a notification as a one-colour silhouette (alpha only), so
 each design's monochrome layer (the themed-icon layer written by icons.py) is cropped to its
 artwork and fitted into the 22 dp live area of a 24 dp icon. "Huidig" keeps ic_logo.
 
-Run:  python3 branding/icons/status_icons.py   (after icons.py; needs numpy and pillow)
+Run:  python3 branding/icons/status_icons.py   (after icons.py and photo_icons.py; needs numpy and pillow)
 Writes core/src/main/res/drawable/ic_stat_<key>.xml and preview sheets in branding/icons/out/.
 """
 import math
@@ -15,6 +15,9 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 import icons as I
+import photo_icons as P
+
+ALL = I.DESIGNS + P.PHOTO_DESIGNS
 
 CORE_DRAWABLE = os.path.join(I.ROOT, 'core', 'src', 'main', 'res', 'drawable')
 LOGO_XML = os.path.join(CORE_DRAWABLE, 'ic_logo.xml')
@@ -201,14 +204,14 @@ def badge(d, px):
 
 def main():
     os.makedirs(CORE_DRAWABLE, exist_ok=True)
-    for d in I.DESIGNS:
+    for d in ALL:
         open(os.path.join(CORE_DRAWABLE, 'ic_stat_%s.xml' % d['key']), 'w').write(status_xml(d))
 
     font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 30)
     fontb = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 34)
     fonts = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 26)
     fontt = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 40)
-    rows = [('Huidig', None)] + [(d['name'], d) for d in I.DESIGNS]
+    rows = [('Origineel', None)] + [(d['name'], d) for d in ALL]
     density = 3          # xxhdpi, like the S24+
     icon_px = 24 * density
 

@@ -150,6 +150,11 @@ def bitmap(path, x, y, w, h):
     return dict(op='bitmap', path=path, x=x, y=y, w=w, h=h)
 
 
+def compound(polys, fill):
+    """Closed polygons filled even-odd: a shape with holes in one colour (monochrome layers)."""
+    return dict(op='compound', polys=polys, fill=fill)
+
+
 # ---------------------------------------------------------------- renderer (previews)
 def _hex(c):
     c = c.lstrip('#')
@@ -210,6 +215,14 @@ def render(ops, size_dp=108):
             for x, y in (pts[0], pts[-1]):
                 d.ellipse([x - r, y - r, x + r, y + r], fill=255)
             paint = op['paint']
+        elif op['op'] == 'compound':
+            acc = np.zeros((n, n), bool)
+            for pts in op['polys']:
+                pm = Image.new('1', (n, n), 0)
+                ImageDraw.Draw(pm).polygon([(x * S, y * S) for x, y in pts], fill=1)
+                acc ^= np.array(pm, bool)
+            m = Image.fromarray((acc * 255).astype(np.uint8), 'L')
+            paint = op['fill']
         elif op['op'] == 'arc':
             c, r, w = op['cx'] * S, op['r'] * S, op['width'] * S
             d.arc([c - r, op['cy'] * S - r, c + r, op['cy'] * S + r], op['a0'], op['a1'], fill=255, width=int(round(w)))
@@ -251,6 +264,8 @@ def _path_d(op):
     if op['op'] in ('poly',):
         pts = op['pts']
         return 'M' + ' L'.join('%s,%s' % (_f(x), _f(y)) for x, y in pts) + ' Z'
+    if op['op'] == 'compound':
+        return ' '.join('M' + ' L'.join('%s,%s' % (_f(x), _f(y)) for x, y in pts) + ' Z' for pts in op['polys'])
     if op['op'] == 'stroke':
         pts = op['pts']
         return 'M' + ' L'.join('%s,%s' % (_f(x), _f(y)) for x, y in pts) + (' Z' if op['closed'] else '')
@@ -282,6 +297,8 @@ def vector_xml(ops):
         is_stroke = op['op'] in ('stroke', 'arc')
         paint = op['paint'] if is_stroke else op['fill']
         attrs = ['android:pathData="%s"' % d]
+        if op['op'] == 'compound':
+            attrs.append('android:fillType="evenOdd"')
         inner = ''
         if is_stroke:
             attrs += ['android:strokeWidth="%s"' % _f(op['width']), 'android:strokeLineCap="round"',
