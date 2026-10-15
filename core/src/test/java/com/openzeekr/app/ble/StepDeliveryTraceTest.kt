@@ -28,6 +28,15 @@ class StepDeliveryTraceTest {
         assertTrue(out[0], out[0].contains("(1 update, longest wait 9"))
     }
 
+    @Test fun theMeasurementLogWritesAtMostOneLinePerTenSecondsPerSensor() {
+        // 0.3.9: a counter that hands over steps every second while walking for a minute.
+        val trace = StepDeliveryTrace(10_000L)
+        val out = (0L..60_000L step 1_000L).mapNotNull { t -> trace.observe(t, 100L + 2L * (t / 1_000L)) }
+        assertEquals(6, out.size)
+        assertTrue(out[0], out[0].startsWith("steps +20 in 10"))
+        assertTrue(out[0], out[0].contains("(10 updates, longest wait 1"))
+    }
+
     @Test fun noStepsOrAStandingPhoneLogNothingAndARestartIsANewBaseline() {
         assertTrue(lines(30_000L) { 100L }.isEmpty())
         val trace = StepDeliveryTrace()

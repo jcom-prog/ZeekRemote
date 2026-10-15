@@ -136,10 +136,19 @@ internal data class SimPhysics(
      * line; the log-distance model alone always kept rising. SIM_PLATEAU_P.
      */
     val approachPlateauP: Double = env("SIM_PLATEAU_P", 0.0),
+    /**
+     * 0.3.9 worst case (field 15/10, 0.3.6: 151.6 s): after a 0-6 s burst of prompt updates the hub step
+     * counter goes silent for half to all of this while the user walks, then hands over the total at once.
+     * 0 = always prompt. SIM_HUB_FREEZE_MS.
+     */
+    val hubFreezeMs: Long = env("SIM_HUB_FREEZE_MS", 0.0).toLong(),
+    /** 0.3.9 worst case: the hub step counter never delivers a step. SIM_HUB_NONE=1. */
+    val hubNone: Boolean = System.getenv("SIM_HUB_NONE") == "1",
 ) {
     fun describe() = "%s phone%+.1fdB slope%.1f fade%.1f gnss%s ttff%.0fs hub%.0fs warm%.0f self%.0fs refuse%.2f cloud%.0fs/fail%.2f/lag%.0fs".format(
         name, phoneOffsetDb, pathSlope, fadeSigmaDb, gnssAccMedianM?.let { "%.1fm".format(it) } ?: "-", gnssTtffMs / 1000.0,
-        hubLagMs / 1000.0, stepWarmup, selfLockMs / 1000.0, keyLockRefuseP, cloudLockDelayMs / 1000.0, cloudFailP, cloudStatusLagMs / 1000.0)
+        hubLagMs / 1000.0, stepWarmup, selfLockMs / 1000.0, keyLockRefuseP, cloudLockDelayMs / 1000.0, cloudFailP, cloudStatusLagMs / 1000.0) +
+        (if (hubNone) " counter-none" else if (hubFreezeMs > 0) " counter-silent%.0fs".format(hubFreezeMs / 1000.0) else "")
 
     companion object {
         private fun env(name: String, default: Double) = System.getenv(name)?.toDouble() ?: default
@@ -259,6 +268,8 @@ internal class SimWorld(
             worldGnssJumpLeft = 3 + (rGnssWorld.nextDouble() * 5).toInt(); worldGnssJump = rGnssWorld.uniform(10.0, 25.0) }
     }
     private val rPlateau = stream(8)
+    /** 0.3.9: when the hub step counter goes silent (own stream, so other draws stay paired). */
+    private val rHub = stream(11)
     /** The flat final approach of the current walk (see [SimPhysics.approachPlateauP]): cap and start. */
     private var plateauCapDb: Double? = null
     private var plateauFromM = 0.0
@@ -383,6 +394,7 @@ internal class SimWorld(
          */
         private var hubSteps = 0.0; private var hubBoutSteps = 0.0
         private var hubSeen = 0L; private var hubSnapMs = 0L
+        private var freezeFromMs = Long.MAX_VALUE; private var freezeUntilMs = Long.MIN_VALUE
         override val observedSteps: Long? get() =
             if (!motionProfile.hasStepDetector) null
             else if (STEP_COUNTER) maxOf(steps, hubSeen) else steps
@@ -403,7 +415,13 @@ internal class SimWorld(
                 hubBoutSteps += dtMs / 550.0
                 if (hubBoutSteps >= physics.stepWarmup) hubSteps += 0.9 * dtMs / 550.0
             } else hubBoutSteps = 0.0
-            if (now() - hubSnapMs >= physics.hubLagMs) { hubSnapMs = now(); hubSeen = hubSteps.toLong() }
+            // 0.3.9 worst cases: a counter that goes silent while the user walks, or never delivers.
+            if (physics.hubFreezeMs > 0 && walking && now() >= freezeUntilMs) {
+                freezeFromMs = now() + rHub.uniform(0.0, 6_000.0).toLong()
+                freezeUntilMs = freezeFromMs + rHub.uniform(physics.hubFreezeMs / 2.0, physics.hubFreezeMs.toDouble()).toLong()
+            }
+            val hubSilent = physics.hubNone || (now() >= freezeFromMs && now() < freezeUntilMs)
+            if (!hubSilent && now() - hubSnapMs >= physics.hubLagMs) { hubSnapMs = now(); hubSeen = hubSteps.toLong() }
             if (walking) {
                 stopStartMs = -1L
                 if (boutStartMs < 0) {

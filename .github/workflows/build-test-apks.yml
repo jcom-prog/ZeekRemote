@@ -61,6 +61,7 @@ on:
       - zeekremote-0.3.6-schedule
       - zeekremote-0.3.7-credits
       - zeekremote-0.3.8-schedule-writes
+      - zeekremote-0.3.9-alarm-gap
 
 permissions:
   contents: read
@@ -68,7 +69,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Check out source
@@ -121,7 +122,9 @@ jobs:
       # SAFETY findings than core/src/test/resources/sim-baseline.json allows; 0.3.2: nor clearly
       # more COMFORT findings (late/missing unlock or lock), with 20 learning visits per run so
       # the self-calibration is active as on the phone, and 15 % flat final approaches (field
-      # 14/10 18:31: the late unlock no simulation showed).
+      # 14/10 18:31: the late unlock no simulation showed). 0.3.9: also the owner's fixed worst cases
+      # (silent or dead step counter, poor GPS, poor Activity Recognition, flat signal at the door) and
+      # the owner's targets in the table (about 14 min instead of 6; the job has 45 minutes).
       - name: Simulation safety gate
         run: SIM_GATE=1 SIM_LEARN_VISITS=20 SIM_PLATEAU_P=0.15 ./gradlew :core:testDebugUnitTest --tests "com.openzeekr.app.ble.sim.SimGateTest" --stacktrace
 
@@ -264,6 +267,21 @@ jobs:
           grep -Fq 'fun gone(' core/src/main/java/com/openzeekr/app/remote/Departures.kt
           grep -Fq '"SCHEDULE_WRITE ' core/src/main/java/com/openzeekr/app/util/ProximityDiagnosticJournal.kt
           if grep -q 'asleep or offline' core/src/main/java/com/openzeekr/app/remote/Repositories.kt; then echo 'the old asleep error is back'; exit 1; fi
+          # 0.3.9: a measurement log of step counter, step detector, Activity Recognition and screen (counts and
+          # seconds only), and no open car without an alarm when the step counter is late, silent or dead.
+          grep -Fq 'private val stepSensor = Regex("step (counter|detector): $STEP_TRACE")' core/src/main/java/com/openzeekr/app/util/ProximityDiagnosticJournal.kt
+          grep -Fq 'private val arTransition = Regex(' core/src/main/java/com/openzeekr/app/util/ProximityDiagnosticJournal.kt
+          grep -Fq '"screen off" -> "SCREEN off"' core/src/main/java/com/openzeekr/app/util/ProximityDiagnosticJournal.kt
+          grep -Fq 'addAction(Intent.ACTION_SCREEN_OFF)' core/src/main/java/com/openzeekr/app/ble/ProximityService.kt
+          grep -Fq 'private fun stepCountStale(): Boolean' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'departurePositionProofAtMs == 0L && !stepCountStale()' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'if (outOfRangeLoss || stepsSinceCarAtLoss >= LOSS_NEAR_MAX_STEPS_SINCE_READING)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          # A running Lock may still hold the link-loss alarm for 120 s (45 s sounded while the cloud Lock was locking the car).
+          grep -Fq 'private const val LINK_LOSS_ALERT_MAX_WAIT_MS = 120_000L' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'the cloud state is unavailable -> alarm (lock not verifiable)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'private fun closeAlarmEpisode(reason: String)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'val WORST_CASES = listOf("steps-silent", "steps-dead", "gps-poor", "ar-poor", "signal-flat")' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
+          for s in steps-silent steps-dead gps-poor ar-poor signal-flat; do grep -Fq "\"$s\": {" core/src/test/resources/sim-baseline.json; done
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -285,7 +303,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='132' versionName='0.3.8-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='133' versionName='0.3.9-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

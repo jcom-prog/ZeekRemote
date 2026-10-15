@@ -14,6 +14,8 @@ import java.io.File
  *
  *   SIM_GATE=1 ./gradlew :core:testDebugUnitTest --tests "com.openzeekr.app.ble.sim.SimGateTest"
  *   SIM_GATE=1 SIM_GATE_WRITE=1 ...   rewrites the baseline after an intended change (ratchet down)
+ *   0.3.9 (user decision 15/10): also the owner's fixed worst cases ([SimRunner.WORST_CASES]: a silent or dead
+ *   step counter, poor GPS, poor Activity Recognition, a flat signal at the door), [WORST_SEEDS] seeds each.
  *   (CI and the baseline use SIM_LEARN_VISITS=20 SIM_PLATEAU_P=0.15: the self-calibration learns as
  * on the phone, and 15 % of the walks to the car end flat as in the field)
  */
@@ -23,21 +25,15 @@ class SimGateTest {
     @Test fun safetyFindingsDoNotRegress() {
         assumeTrue("set SIM_GATE=1 to run the simulation gate", System.getenv("SIM_GATE") == "1")
         val seeds = SimBaseline.seeds(baselineFile) ?: 5
-        val results = SimRunner.run(listOf("calibrated", "stress"), seeds, null)
+        val results = SimRunner.run(MAIN_SUITES, seeds, null) + SimRunner.run(SimRunner.WORST_CASES, WORST_SEEDS, null)
         val now = SimReport.counts(results)
         val outDir = File("build/sim-gate").apply { mkdirs() }
         File(outDir, "report.txt").writeText(SimReport.text(results))
         File(outDir, "summary.json").writeText(SimReport.summaryJson(results))
-        if (System.getenv("SIM_GATE_WRITE") == "1") {
-            baselineFile.parentFile.mkdirs()
-            baselineFile.writeText(SimBaseline.write(seeds, results))
-            println("sim baseline written: ${baselineFile.absolutePath}")
-            return
-        }
         val base = SimBaseline.read(baselineFile)
         val regressions = mutableListOf<String>()
         val table = StringBuilder("Simulation gate (seeds=$seeds): code  baseline -> now\n")
-        for (suite in listOf("calibrated", "stress")) {
+        for (suite in MAIN_SUITES + SimRunner.WORST_CASES) {
             val b = base[suite].orEmpty(); val n = now[suite].orEmpty()
             for (code in (b.keys + n.keys).filter { it != "runs" }.toSortedSet()) {
                 val bv = b[code] ?: 0; val nv = n[code] ?: 0
@@ -54,8 +50,21 @@ class SimGateTest {
         }
         println(table)
         File(outDir, "gate.txt").writeText(table.toString())
+        // The table above compares with the old baseline; a rewrite replaces it after an intended change.
+        if (System.getenv("SIM_GATE_WRITE") == "1") {
+            baselineFile.parentFile.mkdirs()
+            baselineFile.writeText(SimBaseline.write(seeds, results))
+            println("sim baseline written: ${baselineFile.absolutePath}")
+            return
+        }
         if (regressions.isNotEmpty()) fail("Regressions against sim-baseline.json:\n" + regressions.joinToString("\n") +
             "\nSee core/build/sim-gate/report.txt (every finding) and gate.txt.")
+    }
+
+    private companion object {
+        val MAIN_SUITES = listOf("calibrated", "stress")
+        /** The worst-case suites run fewer seeds, so the gate stays within a CI step. */
+        const val WORST_SEEDS = 3
     }
 
     /** Small noise allowance: a changed decision shifts later random draws in the same run. */
@@ -72,7 +81,7 @@ internal object SimBaseline {
     fun read(f: File): Map<String, Map<String, Int>> {
         if (!f.exists()) return emptyMap()
         val text = f.readText()
-        return Regex("\"(calibrated|stress)\"\\s*:\\s*\\{([^}]*)\\}").findAll(text).associate { m ->
+        return Regex("\"([a-z][a-z-]*)\"\\s*:\\s*\\{([^}]*)\\}").findAll(text).associate { m ->
             m.groupValues[1] to Regex("\"([A-Z_a-z]+)\"\\s*:\\s*(\\d+)").findAll(m.groupValues[2])
                 .associate { it.groupValues[1] to it.groupValues[2].toInt() }
         }

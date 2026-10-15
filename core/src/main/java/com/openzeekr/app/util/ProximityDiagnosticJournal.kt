@@ -35,6 +35,16 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
         private val bleDepartureRevoked = Regex(
             "ble departure revoked \\((strong_near|signal_recovered|time_not_advancing)\\)")
         private val vehicleStatus = Regex("vehicle status observed session=([1-9][0-9]{0,18}) approach=([01]) walkAway=([01]) pe=([01]) ps=([01]) central=([0-3])")
+        // Measurement log (0.3.9): when the step sensors deliver - counts and seconds only.
+        private const val STEP_TRACE = "steps \\+([0-9]{1,5}) in ([0-9]{1,5}[.,][0-9]) s \\(([0-9]{1,4}) updates?, " +
+            "longest wait ([0-9]{1,5}[.,][0-9]) s\\)"
+        private val stepSensor = Regex("step (counter|detector): $STEP_TRACE")
+        private val stepSummary = Regex("steps \\+([0-9]{1,5}) in ([0-9]{1,5}[.,][0-9]) s \\(([0-9]{1,4}) updates?, " +
+            "longest wait ([0-9]{1,5}[.,][0-9]) s\\); detector=([0-9]{1,7}) counter=([0-9]{1,7}|none)")
+        // Activity Recognition (Google Play) transitions: the activity type and enter/exit only.
+        private val arTransition = Regex("AR transition: activity=([0-9]{1,2}) trans=([01])")
+        private val AR_ACTIVITIES = mapOf("0" to "vehicle", "1" to "bicycle", "2" to "on_foot", "3" to "still",
+            "7" to "walking", "8" to "running")
         // One schedule write (0.3.8): categories and slot numbers only - no name, time or temperature fits.
         private const val SCHEDULE_SLOT = "[0-9]{1,2}:(?:on|off)/(?:used|empty)/[0-7]"
         private val scheduleWrite = Regex("schedule write (kind=(?:create|edit|switch|delete|charge) " +
@@ -99,6 +109,12 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                         "locked via cloud; a newer cloud report confirms it").matches(message) -> "AUTO_LOCK_CLOUD_VERIFIED"
                     Regex("(ble-departure): cloud Lock backed by a fresh BLE departure proof").matches(message) ->
                         "CLOUD_LOCK_BLE_BACKED"
+                    // 0.3.9: why an alarm episode ended (the user back at the car, or a new departure).
+                    message == "strong signal at the car after an alarm -> user back; alarm silenced" -> "ALARM_EPISODE_CLOSED strong"
+                    message == "presence hit at the car after an alarm (user back) -> alarm episode closed" -> "ALARM_EPISODE_CLOSED presence"
+                    message == "sustained signal at the car after an alarm (user back) -> alarm episode closed" -> "ALARM_EPISODE_CLOSED signal"
+                    Regex("link back [0-9]{1,6} s, then lost out of range -> alarm episode closed").matches(message) ->
+                        "ALARM_EPISODE_CLOSED link"
                     message.startsWith("manual cloud Lock verified (") -> "MANUAL_CLOUD_LOCK_VERIFIED"
                     message == "car reported locked -> 'Auto gesloten' notification" -> "CAR_LOCKED_CHIME"
                     message.startsWith("car reported unlocked without our Unlock (") -> "CAR_REOPENED"
@@ -125,7 +141,22 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
             if (area == "motion") return when (message) {
                 "-> MOVING" -> "MOTION_MOVING"
                 "-> STILL" -> "MOTION_STILL"
-                else -> null
+                // Which sensors drive MOVING/STILL on this phone (0.3.9 measurement log).
+                "step counter active" -> "STEP_COUNTER_SENSOR active"
+                "step counter unavailable" -> "STEP_COUNTER_SENSOR unavailable"
+                "started via trigger sensors" -> "MOTION_SOURCE sensors"
+                "started via wake-up step detector (no trigger sensors)" -> "MOTION_SOURCE step"
+                "no motion source at all — RSSI-steadiness only" -> "MOTION_SOURCE none"
+                // Measurement log (0.3.9): step delivery, numbers only.
+                else -> if (message.startsWith("started via Activity Recognition")) "MOTION_SOURCE activity"
+                else stepSensor.matchEntire(message)?.let { m ->
+                    "STEP_${m.groupValues[1].uppercase()} +${m.groupValues[2]} in=${m.groupValues[3]}s " +
+                        "updates=${m.groupValues[4]} longest=${m.groupValues[5]}s" }
+                    ?: stepSummary.matchEntire(message)?.let { m ->
+                        "STEP_SUMMARY +${m.groupValues[1]} in=${m.groupValues[2]}s updates=${m.groupValues[3]} " +
+                            "longest=${m.groupValues[4]}s detector=${m.groupValues[5]} counter=${m.groupValues[6]}" }
+                    ?: arTransition.matchEntire(message)?.let {
+                        "AR_TRANSITION ${AR_ACTIVITIES[it.groupValues[1]] ?: "other"} ${if (it.groupValues[2] == "0") "enter" else "exit"}" }
             }
             if (area == "ble") return when {
                 message.startsWith("presence scan ARMED (") -> "BLE_PRESENCE_ARMED"
@@ -142,6 +173,8 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                 "departure location foreground=enabled" -> "LOCATION_FOREGROUND_ENABLED"
                 "departure location foreground=unavailable" -> "LOCATION_FOREGROUND_UNAVAILABLE"
                 "departure location foreground=rejected" -> "LOCATION_FOREGROUND_REJECTED"
+                "screen on" -> "SCREEN on"
+                "screen off" -> "SCREEN off"
                 else -> if (message.startsWith("security sleep:")) "SECURITY_SLEEP" else null
             }
             return null

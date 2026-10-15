@@ -10,7 +10,8 @@ import java.io.File
  * any finding (use once the app is expected to pass). The regression gate is [SimGateTest].
  *
  * Environment:
- *   SIM_SUITE   calibrated (default) | stress | both - stress samples a different world per run
+ *   SIM_SUITE   calibrated (default) | stress | both | worst | all - stress samples a different world per
+ *               run; worst = the owner's fixed worst cases (0.3.9, [SimRunner.WORST_CASES])
  *   SIM_SEEDS   seeds per family x carry x motion cell (default 3)
  *   SIM_ONLY    comma-separated family prefixes (e.g. "F28,F37")
  *   SIM_OUT     report directory (default build/sim-report)
@@ -29,7 +30,10 @@ class WholeAppSimulationTest {
         val outDir = File(System.getenv("SIM_OUT") ?: "build/sim-report").apply { mkdirs() }
         val seeds = (System.getenv("SIM_SEEDS") ?: "3").toInt()
         val suites = when (System.getenv("SIM_SUITE") ?: "calibrated") {
-            "both" -> listOf("calibrated", "stress"); else -> listOf(System.getenv("SIM_SUITE") ?: "calibrated") }
+            "both" -> listOf("calibrated", "stress")
+            "worst" -> SimRunner.WORST_CASES
+            "all" -> listOf("calibrated", "stress") + SimRunner.WORST_CASES
+            else -> listOf(System.getenv("SIM_SUITE") ?: "calibrated") }
         val only = System.getenv("SIM_ONLY")?.split(",")
         val traces = SimReport.TraceWriter(outDir, System.getenv("SIM_TRACE_EVERY_SEED") == "1")
         val results = SimRunner.run(suites, seeds, only, traces::accept)
@@ -57,12 +61,32 @@ internal data class SimResult(val suite: String, val scenario: Scenario, val car
 
 internal object SimRunner {
     val LEARN_VISITS = (System.getenv("SIM_LEARN_VISITS") ?: "0").toInt()
+    /** 0.3.9 (user decision 15/10): the uncertain phone behaviour as fixed worst cases, each on the calibrated world. */
+    val WORST_CASES = listOf("steps-silent", "steps-dead", "gps-poor", "ar-poor", "signal-flat")
+
+    /** The world of a run. A stress world depends on the seed only, so two app versions meet the same world. */
+    fun physicsFor(suite: String, seed: Long): SimPhysics = when (suite) {
+        "stress" -> SimPhysics.random(SimRandom(seed xor 0x5EED_0F_57E55L))
+        // Field 15/10: the counter was silent for 151.6 s while walking.
+        "steps-silent" -> SimPhysics(name = suite, hubFreezeMs = 180_000L)
+        "steps-dead" -> SimPhysics(name = suite, hubNone = true)
+        // Field 15/10: 16 of 18 fixes at the car were worse than 8 m.
+        "gps-poor" -> SimPhysics(name = suite, gnssAccMedianM = 12.0, gnssAccSpread = 0.35, gnssTtffMs = 15_000L)
+        // The signal stays flat over the last metres to the door in most walks (field: phone in a pocket).
+        "signal-flat" -> SimPhysics(name = suite, approachPlateauP = 0.6)
+        else -> SimPhysics.calibrated()
+    }
+
+    /** "ar-poor": Activity Recognition reports a walk up to 30 s late and misses 40 % of the walks. */
+    fun profileFor(suite: String, p: MotionProfile): MotionProfile = if (suite != "ar-poor") p else
+        p.copy(name = p.name + "-arpoor", onLagMaxMs = maxOf(p.onLagMaxMs, 30_000L), missBoutP = maxOf(p.missBoutP, 0.4))
+
     /** [onRun] sees every run with its full log (traces); the log is dropped afterwards to bound memory. */
     fun run(suites: List<String>, seeds: Int, only: List<String>?, onRun: ((SimResult) -> Unit)? = null): List<SimResult> = suites.flatMap { suite ->
         SimScenarios.matrix(seeds).filter { r -> only == null || only.any { r.first.family.startsWith(it) } }.map { (sc, carry, mp) ->
-            val (profile, seed) = mp
-            // The world of a stress run depends on the seed only, so two app versions meet the same world.
-            val physics = if (suite == "stress") SimPhysics.random(SimRandom(seed xor 0x5EED_0F_57E55L)) else SimPhysics.calibrated()
+            val (baseProfile, seed) = mp
+            val profile = profileFor(suite, baseProfile)
+            val physics = physicsFor(suite, seed)
             val w = SimWorld(seed, profile, carry, sc.startM, sc.gnssAccuracyM, carRefusesKeyLock = sc.carRefusesKeyLock,
                 keyEdgeRssi = sc.keyEdgeRssi, physics = physics, cloudDown = sc.cloudDown)
             // 0.3.1: SIM_LEARN_VISITS ordinary visits in the same world first (self-calibration).
@@ -103,6 +127,11 @@ internal object SimReport {
      */
     data class Target(val name: String, val value: String, val goal: String, val met: Boolean)
 
+    /**
+     * The owner's goals (0.3.9, user decision 15/10): open before the door in >= 98 % and lock by itself at
+     * 10-25 m in >= 98 % (front pocket), never open from more than 20 m, never lock at the car or while
+     * walking back, never an open car with the user away and nobody told.
+     */
     fun targets(rs: List<SimResult>): List<Target> {
         fun has(r: SimResult, vararg codes: String) = r.findings.any { it.code in codes }
         fun expects(r: SimResult, what: String) = r.world.events.any { it.kind == "MARK" && it.detail == what }
@@ -114,21 +143,29 @@ internal object SimReport {
         val approaches = front.filter { expects(it, "expect-unlock") }
         val onTime = approaches.count { !has(it, "APPROACH_UNLOCK_LATE", "APPROACH_UNLOCK_AFTER_DOOR", "APPROACH_NO_UNLOCK") }
         val departures = front.filter { expects(it, "expect-lock") }
-        val autoLocked = departures.count { !has(it, "DEPARTURE_NO_LOCK_ALARMED", "DEPARTURE_NO_LOCK_SILENT", "NOT_LOCKED_BEFORE_RETURN") }
-        val farPocket = pocket.count { has(it, "UNLOCK_WHILE_FAR") }
-        val farHand = hand.count { has(it, "UNLOCK_WHILE_FAR") }
+        val lockedInBand = departures.count { lockedBetween(it, 10.0, 25.0) }
+        fun farUnlocks(set: List<SimResult>) = set.count { r -> r.findings.any { it.code == "UNLOCK_WHILE_FAR" && it.distanceM > 20.0 } }
+        val farPocket = farUnlocks(pocket)
+        val farHand = farUnlocks(hand)
         val unwanted = rs.count { has(it, "UNWANTED_UNLOCK", "UNLOCK_WHILE_LOITERING") }
         val lockNear = rs.count { has(it, "LOCK_WHILE_NEAR", "LOCK_WHILE_RETURNING", "UNWANTED_LOCK_NEAR") }
         val silent = rs.count { has(it, "DEPARTURE_NO_LOCK_SILENT", "OPEN_FAR_NO_ALARM", "GONE_BUT_UNLOCKED") }
         return listOf(
-            Target("never opens from > 15 m, phone in a pocket", share(farPocket, pocket.size), "0", farPocket == 0),
-            Target("never opens from > 15 m, phone in the hand", share(farHand, hand.size), "0", farHand == 0),
+            Target("never opens from > 20 m, phone in a pocket", share(farPocket, pocket.size), "0", farPocket == 0),
+            Target("never opens from > 20 m, phone in the hand", share(farHand, hand.size), "0", farHand == 0),
             Target("never opens where the car should stay locked", share(unwanted, rs.size), "0", unwanted == 0),
             Target("never locks near or while walking back", share(lockNear, rs.size), "0", lockNear == 0),
             Target("never silent while open and away", share(silent, rs.size), "0", silent == 0),
-            Target("front pocket: approach opens before the door", share(onTime, approaches.size), ">= 95%", pctOk(onTime, approaches.size, 95.0)),
-            Target("front pocket: departure locks by itself", share(autoLocked, departures.size), ">= 95%", pctOk(autoLocked, departures.size, 95.0)),
+            Target("front pocket: approach opens before the door", share(onTime, approaches.size), ">= 98%", pctOk(onTime, approaches.size, 98.0)),
+            Target("front pocket: locks by itself at 10-25 m", share(lockedInBand, departures.size), ">= 98%", pctOk(lockedInBand, departures.size, 98.0)),
         )
+    }
+
+    /** The app's own Lock (not the car's self-lock) after the departure mark, between [from] and [to] metres. */
+    private fun lockedBetween(r: SimResult, from: Double, to: Double): Boolean {
+        val mark = r.world.events.firstOrNull { it.kind == "MARK" && it.detail == "expect-lock" } ?: return false
+        val lock = r.world.events.firstOrNull { it.kind == "CAR_LOCKED" && it.atMs >= mark.atMs } ?: return false
+        return lock.detail != "self-lock" && lock.distanceM in from..to
     }
 
     fun text(results: List<SimResult>): String {

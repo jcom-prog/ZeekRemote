@@ -146,11 +146,29 @@ class MotionMonitor(context: Context) : ProximityMotion {
     private val stepStillRunnable = Runnable {
         if (running && (source == Source.STEP || source == Source.ACTIVITY)) setStill()
     }
+    // Measurement log (0.3.9, user decision 15/10): when the step sensors actually deliver - counts and
+    // seconds only. At most one line per sensor per [MEASURE_LOG_MS] while it delivers: a prompt counter
+    // updates every second, and a line for each would push the proximity events out of the bounded
+    // journal. The simulator's assumptions about step delivery are checked against these lines.
+    private val counterTrace = StepDeliveryTrace(MEASURE_LOG_MS)
+    private val detectorTrace = StepDeliveryTrace(MEASURE_LOG_MS)
+    private var detectorSteps = 0L
+
+    private fun logCounter(total: Long) {
+        counterTrace.observe(SystemClock.elapsedRealtime(), total)?.let { Logx.d("motion", "step counter: $it") }
+    }
+
+    private fun logDetectorStep() {
+        detectorSteps++
+        detectorTrace.observe(SystemClock.elapsedRealtime(), detectorSteps)?.let { Logx.d("motion", "step detector: $it") }
+    }
+
     private val onStep = object : SensorEventListener {
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
         override fun onSensorChanged(event: SensorEvent) {
             if (!running) return
             tally.onDetectorStep()
+            logDetectorStep()
             setMoving()
             stillHandler.removeCallbacks(stepStillRunnable)
             stillHandler.postDelayed(stepStillRunnable, STEP_STILL_TIMEOUT_MS)
@@ -159,12 +177,15 @@ class MotionMonitor(context: Context) : ProximityMotion {
     /** When hardware motion triggers own wake-up, count steps without changing that wake policy. */
     private val diagnosticStepListener = object : SensorEventListener {
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
-        override fun onSensorChanged(event: SensorEvent) { if (running) tally.onDetectorStep() }
+        override fun onSensorChanged(event: SensorEvent) { if (running) { tally.onDetectorStep(); logDetectorStep() } }
     }
     private val onStepCounter = object : SensorEventListener {
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
         override fun onSensorChanged(event: SensorEvent) {
-            if (running && event.values.isNotEmpty()) tally.onCounter(event.values[0].toLong())
+            if (running && event.values.isNotEmpty()) {
+                tally.onCounter(event.values[0].toLong())
+                logCounter(event.values[0].toLong())
+            }
         }
     }
 
@@ -349,6 +370,8 @@ class MotionMonitor(context: Context) : ProximityMotion {
         // Must match the <attribution android:tag> declared in the manifest.
         private const val ATTRIBUTION_TAG = "proximity"
         private const val STEP_FLUSH_INTERVAL_MS = 1_000L
+        /** Measurement log: at most one line per step sensor per this interval while it delivers. */
+        private const val MEASURE_LOG_MS = 10_000L
         private const val STEP_STILL_TIMEOUT_MS = 5_000L // no step for this long ⇒ back to STILL
         private const val AR_REQUEST_CODE = 0x2ee6
         @Volatile private var active: MotionMonitor? = null

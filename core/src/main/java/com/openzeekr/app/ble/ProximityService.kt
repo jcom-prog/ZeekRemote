@@ -92,6 +92,9 @@ class ProximityService : Service() {
 
     private val wakeReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
+            // Measurement log (0.3.9): the screen state, for the step-delivery check.
+            if (intent?.action == Intent.ACTION_SCREEN_ON) Logx.d("svc", "screen on")
+            if (intent?.action == Intent.ACTION_SCREEN_OFF) { Logx.d("svc", "screen off"); return }
             val reason = when (intent?.action) {
                 Intent.ACTION_SCREEN_ON -> "screen-on"
                 BluetoothAdapter.ACTION_STATE_CHANGED ->
@@ -395,6 +398,7 @@ class ProximityService : Service() {
         if (wakeReceiverRegistered) return
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
             addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
         }
         runCatching {

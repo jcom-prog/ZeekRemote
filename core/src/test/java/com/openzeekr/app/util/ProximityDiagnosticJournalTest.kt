@@ -15,6 +15,46 @@ class ProximityDiagnosticJournalTest {
         assertEquals("VEHICLE_CAPABILITIES binding_rejected", ProximityDiagnosticJournal.event("dk", "vehicle capabilities observed binding_rejected"))
     }
 
+    @Test fun measurementLogKeepsOnlyCountsAndSeconds() {
+        assertEquals("STEP_COUNTER +16 in=151,6s updates=1 longest=151,6s",
+            ProximityDiagnosticJournal.event("motion", "step counter: steps +16 in 151,6 s (1 update, longest wait 151,6 s)"))
+        assertEquals("STEP_DETECTOR +18 in=10.2s updates=18 longest=0.8s",
+            ProximityDiagnosticJournal.event("motion", "step detector: steps +18 in 10.2 s (18 updates, longest wait 0.8 s)"))
+        assertEquals("STEP_SUMMARY +5 in=12,0s updates=1 longest=12,0s detector=3 counter=none",
+            ProximityDiagnosticJournal.event("motion", "steps +5 in 12,0 s (1 update, longest wait 12,0 s); detector=3 counter=none"))
+        assertEquals("STEP_SUMMARY +16 in=154,0s updates=4 longest=151,6s detector=14 counter=38",
+            ProximityDiagnosticJournal.event("motion", "steps +16 in 154,0 s (4 updates, longest wait 151,6 s); detector=14 counter=38"))
+        assertEquals("AR_TRANSITION walking enter", ProximityDiagnosticJournal.event("motion", "AR transition: activity=7 trans=0"))
+        assertEquals("AR_TRANSITION still enter", ProximityDiagnosticJournal.event("motion", "AR transition: activity=3 trans=0"))
+        assertEquals("AR_TRANSITION other exit", ProximityDiagnosticJournal.event("motion", "AR transition: activity=5 trans=1"))
+        assertNull("trailing text", ProximityDiagnosticJournal.event("motion", "AR transition: activity=7 trans=0 at work"))
+        assertEquals("MOTION_SOURCE sensors", ProximityDiagnosticJournal.event("motion", "started via trigger sensors"))
+        assertEquals("MOTION_SOURCE activity", ProximityDiagnosticJournal.event("motion",
+            "started via Activity Recognition + wake-up significant motion + non-wakeup step assist"))
+        assertEquals("STEP_COUNTER_SENSOR active", ProximityDiagnosticJournal.event("motion", "step counter active"))
+        assertEquals("SCREEN on", ProximityDiagnosticJournal.event("svc", "screen on"))
+        assertEquals("SCREEN off", ProximityDiagnosticJournal.event("svc", "screen off"))
+        assertNull("trailing text", ProximityDiagnosticJournal.event("motion",
+            "step counter: steps +16 in 151,6 s (1 update, longest wait 151,6 s) at home"))
+        assertNull("a colon (clock-like value)", ProximityDiagnosticJournal.event("motion",
+            "step counter: steps +16 in 151:6 s (1 update, longest wait 151,6 s)"))
+        assertNull("a position", ProximityDiagnosticJournal.event("svc", "screen off 12.3456,-65.4321"))
+        assertNull("another area", ProximityDiagnosticJournal.event("http",
+            "step counter: steps +16 in 151,6 s (1 update, longest wait 151,6 s)"))
+    }
+
+    @Test fun theEndOfAnAlarmEpisodeIsRecorded() {
+        assertEquals("ALARM_EPISODE_CLOSED presence", ProximityDiagnosticJournal.event("prox",
+            "presence hit at the car after an alarm (user back) -> alarm episode closed"))
+        assertEquals("ALARM_EPISODE_CLOSED signal", ProximityDiagnosticJournal.event("prox",
+            "sustained signal at the car after an alarm (user back) -> alarm episode closed"))
+        assertEquals("ALARM_EPISODE_CLOSED link", ProximityDiagnosticJournal.event("prox",
+            "link back 42 s, then lost out of range -> alarm episode closed"))
+        assertEquals("ALARM_EPISODE_CLOSED strong", ProximityDiagnosticJournal.event("prox",
+            "strong signal at the car after an alarm -> user back; alarm silenced"))
+        assertNull(ProximityDiagnosticJournal.event("prox", "link back 42 s at home, then lost out of range -> alarm episode closed"))
+    }
+
     @Test fun vehicleStatusRecordsOnlyWhitelistedRawBits() {
         val line = "vehicle status observed session=42 approach=1 walkAway=0 pe=1 ps=0 central=3"
         assertEquals("VEHICLE_STATUS 42 1 0 1 0 3", ProximityDiagnosticJournal.event("dk", line))
