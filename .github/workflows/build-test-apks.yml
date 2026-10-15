@@ -56,6 +56,7 @@ on:
       - zeekremote-0.3.1-calibration
       - zeekremote-0.3.2-approach
       - zeekremote-0.3.3-icons
+      - zeekremote-0.3.4-cleanup
 
 permissions:
   contents: read
@@ -239,6 +240,12 @@ jobs:
           # Exactly one launcher alias is enabled by the manifest (LauncherDefault), so an update never adds a second entry.
           test "$(awk '/<activity-alias/{a=1} a && /android:enabled="true"/{n++} /<\/activity-alias>/{a=0} END{print n+0}' app/src/main/AndroidManifest.xml)" = 1
           awk '/android:name=".LauncherDefault"/{f=1} f && /android:enabled=/{print; exit}' app/src/main/AndroidManifest.xml | grep -Fq 'android:enabled="true"'
+          # 0.3.4: remote parking is built unavailable (Digital Key 3.0 only) and the test probes are gone.
+          grep -Fq 'available = false)' core/src/main/java/com/openzeekr/app/Deps.kt
+          grep -Fq 'val available: Boolean = true,' core/src/main/java/com/openzeekr/app/ble/rpa/RpaController.kt
+          if grep -q 'fun blindProbe' core/src/main/java/com/openzeekr/app/ble/rpa/RpaController.kt; then echo 'blind probe is back'; exit 1; fi
+          if grep -q 'probeControl' core/src/main/java/com/openzeekr/app/ble/DkSession.kt; then echo 'probeControl is back'; exit 1; fi
+          grep -Fq 'val sensitivityUnlockRssi: Int get() = FAR_UNLOCK_RSSI' core/src/main/java/com/openzeekr/app/config/SecretsConfig.kt
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -260,7 +267,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='127' versionName='0.3.3-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='128' versionName='0.3.4-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

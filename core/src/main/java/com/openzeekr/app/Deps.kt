@@ -103,7 +103,9 @@ class Deps(context: Context) {
         onLockConfirmed = { proximity.onExternalLockConfirmed("manual key control") },
     )
     val phoneStatus = PhoneStatusProvider(appCtx)
-    val rpa = RpaController(ble.session, appScope, phoneStatus::stateByte, rssi = ble::pollRemoteRssi)
+    // Remote parking: the car allows it only from a Digital Key 3.0 (iPhone Wallet/UWB) for now, so the
+    // controller ignores every command (user decision 15/10: keep the screen, greyed, for when Android follows).
+    val rpa = RpaController(ble.session, appScope, phoneStatus::stateByte, rssi = ble::pollRemoteRssi, available = false)
     /** BLE self-calibration test harness (0x0190-0x0199) + BLE lock/unlock, driven from the Parking tab.
      *  Teaches the car THIS phone's RSSI/ranging model so passive entry / RPA localization can converge. */
     val calibTest = CalibrationTestController(appCtx, ble, appScope)

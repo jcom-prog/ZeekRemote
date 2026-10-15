@@ -64,4 +64,16 @@ class RpaControllerTest {
         assertEquals(listOf(RpaController.Phase.CONNECTING, RpaController.Phase.READY, RpaController.Phase.PARKING_IN,
             RpaController.Phase.PARKING_OUT, RpaController.Phase.MOVING, RpaController.Phase.PAUSED), active)
     }
+
+    @Test fun anUnavailableControllerSendsNothing() {
+        // 0.3.4: remote parking needs a Digital Key 3.0 for now; the app's controller is built unavailable.
+        val scope = TestScope()
+        val session = FakeSession(scope)
+        val rpa = RpaController(session, scope, rssi = { -60 }, available = false)
+        rpa.begin(); rpa.searchSlot(); rpa.startParkIn(); rpa.continueParking(); rpa.pause(); rpa.undo()
+        rpa.startParkOut(RpaReq.PARALLEL_LEFT_OUT); rpa.holdMove(true); rpa.releaseMove(); rpa.stop(); rpa.reportRssi(-60)
+        scope.advanceTimeBy(RpaController.MAX_HOLD_MS + 30_000L); scope.runCurrent()
+        assertTrue("no frame may reach the car", session.frames.isEmpty())
+        assertEquals(RpaController.Phase.IDLE, rpa.state.value.phase)
+    }
 }

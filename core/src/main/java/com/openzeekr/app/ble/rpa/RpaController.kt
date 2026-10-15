@@ -31,6 +31,12 @@ class RpaController(
     private val phoneStatus: () -> Byte = { PhoneStatus.NORMAL.code.toByte() },
     /** Newly measured BLE RSSI (dBm); awaiting it uses only the separate RSSI stream job. */
     private val rssi: (suspend () -> Int?)? = null,
+    /**
+     * False while the car allows remote parking only from a Digital Key 3.0 (UWB key in an iPhone's
+     * Wallet; Zeekr EU, 15/10/2026). Every command is then ignored and nothing is sent to the car; the
+     * screen shows the controls greyed out. Set true once the function is released for Android.
+     */
+    val available: Boolean = true,
 ) {
     enum class Phase {
         IDLE, CONNECTING, READY, PARKING_IN, PARKING_OUT, MOVING, PAUSED, DONE, ERROR;
@@ -62,6 +68,13 @@ class RpaController(
         session.onInbound { cmd, payload -> handleInbound(cmd, payload) }
     }
 
+    /** True (and logged) when remote parking is not available: the caller must not send anything. */
+    private fun blocked(what: String): Boolean {
+        if (available) return false
+        com.openzeekr.app.util.Logx.d("dk", "RPA $what ignored: remote parking is not available for this key")
+        return true
+    }
+
     /** The 4-byte RPA control block: rpaControl | rspaControl | outMode | phoneStatus. */
     private fun block(rpaCtrl: Byte, rspaCtrl: Byte = 0, outMode: Byte = 0): ByteArray =
         byteArrayOf(rpaCtrl, rspaCtrl, outMode, phoneStatus())
@@ -78,6 +91,7 @@ class RpaController(
      * EEC_cmdMatchErr, exactly what we saw at the car. See RPA_SEQUENCE_FINDINGS.md.)
      */
     fun begin() {
+        if (blocked("begin")) return
         scope.launch {
             _state.value = _state.value.copy(phase = Phase.CONNECTING, message = "requesting RPA mode…")
             runCatching { if (!session.isEstablished) session.establish() }
@@ -138,12 +152,14 @@ class RpaController(
     fun undo() = oneShot(RpaReq.CMD_RPA_UNDO, Phase.READY)
 
     fun stop() {
+        if (blocked("stop")) return
         stopHeartbeat(); stopRssiStream(); stopReqModePoll(); gesture = 0; rssiStartedByHold = false
         oneShot(RpaReq.CMD_RPA_STOP, Phase.READY)
     }
 
     /** Set park-out direction then start the park-out maneuver. */
     fun startParkOut(direction: Byte) {
+        if (blocked("park out")) return
         scope.launch {
             runCatching {
                 session.sendFrame(DkOpcodes.CMD_A2V_RPA_REQ,
@@ -163,6 +179,7 @@ class RpaController(
      * cancelled by the system, a frozen UI - must not leave the car moving).
      */
     fun holdMove(forward: Boolean) {
+        if (blocked("hold to move")) return
         if (heartbeat?.isActive == true) return
         val rspa = if (forward) RpaReq.CMD_RSPA_FORWARD else RpaReq.CMD_RSPA_BACKWARD
         gesture = rspa
@@ -189,6 +206,7 @@ class RpaController(
 
     /** Finger-up: send BOTTOM_RELEASE and cancel the heartbeat (car halts). */
     fun releaseMove(message: String? = null) {
+        if (blocked("release")) return
         stopHeartbeat()
         gesture = 0
         if (rssiStartedByHold) { stopRssiStream(); rssiStartedByHold = false }
@@ -204,6 +222,7 @@ class RpaController(
 
     /** Send one RSSI-sync frame (header + int32 BE, GCM). */
     fun reportRssi(rssiDbm: Int) {
+        if (blocked("rssi")) return
         scope.launch {
             runCatching { session.sendFrame(DkOpcodes.CMD_A2V_RSSI_SYNC, intToBytes(rssiDbm)) }
         }
@@ -228,6 +247,7 @@ class RpaController(
     private fun stopRssiStream() { rssiJob?.cancel(); rssiJob = null }
 
     private fun oneShot(ctrl: Byte, phase: Phase) {
+        if (blocked("command 0x%02x".format(ctrl))) return
         scope.launch {
             val blk = block(ctrl)
             com.openzeekr.app.util.Logx.d("dk", "RPA cmd -> ctrl=0x%02x block=%s".format(ctrl, blk.joinToString("") { "%02x".format(it) }))
@@ -238,6 +258,7 @@ class RpaController(
     }
 
     private fun handleInbound(cmd: Int, payload: ByteArray) {
+        if (!available) return   // no session can exist; stay quiet (status pushes arrive every few seconds)
         when (cmd) {
             DkOpcodes.CMD_V2A_RPA_SYNC -> {
                 // The car has opened the RPA session — stop polling REQ_MODE and go READY.
