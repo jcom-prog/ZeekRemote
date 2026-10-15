@@ -60,7 +60,7 @@ class VehicleControl(
                 .getOrDefault(ControlResult.WRITE_FAILED)
             Logx.d("ctl", "${cmd.name}: BLE control 0x%02x -> $r".format(b))
             if (r == ControlResult.NOT_EXECUTED) {
-                // The car received the Lock but did not report locked (field 05/10 16:08): try the
+                // The car received the Lock but did not report locked (field test): try the
                 // key once more; a second refusal goes to the cloud, which is then checked.
                 r = runCatching { ble.session.control(b, BLE_ACK_TIMEOUT_MS) }
                     .getOrDefault(ControlResult.WRITE_FAILED)
@@ -82,7 +82,7 @@ class VehicleControl(
             if (cmd == Command.LOCK && result is CallResult.Ok) {
                 onCloudLockAccepted()
             }
-            // Field 04/10 19:08 (0.2.0): in a parking garage the key link was down and a Lock from
+            // Field (0.2.0): in a parking garage the key link was down and a Lock from
             // the app failed without any trace. Category only, no response body.
             if ((cmd == Command.LOCK || cmd == Command.UNLOCK) && result is CallResult.Err) {
                 Logx.w("ctl", "${cmd.name}: cloud request failed (key link ${ble.state.value})")

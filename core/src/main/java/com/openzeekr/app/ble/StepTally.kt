@@ -4,7 +4,7 @@ package com.openzeekr.app.ble
  * Steps walked since the motion monitor started, from two sources.
  *
  * The step DETECTOR fires per step but, on the Galaxy S24+ with the screen off, delivers late or
- * not at all (field 14/10 11:30: a ~30 m walk away gave too few steps for both departure proofs,
+ * not at all (field: a ~30 m walk away gave too few steps for both departure proofs,
  * the car stayed open until the alarm). The step COUNTER is the sensor hub's own pedometer: it keeps
  * counting while the application processor sleeps and hands over its running total on request
  * (SensorManager.flush). The larger of the two is used, so neither source can lower the count.

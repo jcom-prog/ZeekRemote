@@ -3,7 +3,7 @@ package com.openzeekr.app.ble
 /**
  * Another Zeekr nearby (plan H3, 0.3.1). Every Zeekr advertises the same identifiers and, with the
  * screen off, often no name, so the scan cannot tell our car from another before connecting; the
- * key module also rotates its address, so no address can be learned for good. Field 12/10: ~35 s of
+ * key module also rotates its address, so no address can be learned for good. Field: ~35 s of
  * doomed handshakes with a car parked nearby. What can be known: the address whose DK handshake
  * just failed. For [REMEMBER_MS] such an address waits [DEFER_MS] into each scan, so any other
  * candidate - our car - is tried first. It is never refused: our own car can fail a handshake too

@@ -3,9 +3,9 @@ package com.openzeekr.app.ble
 /**
  * When a still phone may put the digital key to sleep (ProximityService security sleep).
  *
- * Field 10/10 16:44-16:51 (0.2.6): the phone lay in the car (-46..-49 dBm) while the user stood
- * beside it with the door open. After 2 min of stillness the key slept, the car no longer found it
- * (~16:48), and only picking the phone up woke it again. A phone at or in the car keeps the key
+ * Field (0.2.6): the phone lay in the car (-46..-49 dBm) while the user stood
+ * beside it with the door open. After 2 min of stillness the key slept, the car no longer found it,
+ * and only picking the phone up woke it again. A phone at or in the car keeps the key
  * awake, bounded so a phone forgotten in a parked car still sleeps.
  */
 object KeySleepPolicy {

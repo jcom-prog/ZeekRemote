@@ -18,7 +18,7 @@ internal class VehicleObservationSession {
     /**
      * Starts a new observation scope and returns the status the car pushed during the handshake,
      * if any, to apply to it. The car pushes its status once at the start of a session, before
-     * "established", and afterwards only on a change (field 10/10 16:51:34 and 16:52:29): dropping
+     * "established", and afterwards only on a change (field test): dropping
      * it left a stale "locked" while the car had been opened with the key asleep.
      */
     @Synchronized fun authenticated(): ByteArray? {

@@ -4,7 +4,7 @@ package com.openzeekr.app.ble
  * Remembers the advertised name of OUR key module and skips other Zeekr cars while scanning.
  *
  * Every Zeekr advertises the same 0xFDFD / 0x06FE identifiers, so the scan used to accept the first
- * Zeekr it heard. Field 12/10 16:41: the app spent ~35 s connecting to another car nearby (its DK
+ * Zeekr it heard. Field: the app spent ~35 s connecting to another car nearby (its DK
  * handshake can never succeed) before it reached ours. The key module rotates its address but keeps
  * its name, so after a successful DK session the name identifies our car.
  *

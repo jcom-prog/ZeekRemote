@@ -4,8 +4,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * The car's 0x0111 only acknowledges that it RECEIVED a Lock, not that it locked. Field 04/10 22:05
- * and 05/10 16:08 / 16:18 (0.2.1-0.2.2): Locks at 15-30 m were received but never executed (no
+ * The car's 0x0111 only acknowledges that it RECEIVED a Lock, not that it locked. Field 
+ * and (0.2.1-0.2.2): Locks at 15-30 m were received but never executed (no
  * "locked" status push, the car stayed open) while the app showed "Locked". Every executed Lock in
  * the journal was followed by the car's own status push central=3 within 0.1-0.9 s (sometimes just
  * before the receipt). A Lock therefore only counts once the car reports locked.

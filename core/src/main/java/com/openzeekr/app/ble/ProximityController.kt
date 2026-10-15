@@ -739,7 +739,7 @@ class ProximityController internal constructor(
             deepFarAtLinkLossMs = stationaryFar.deepFarForMs(linkLostAtMs)
             // Locked car, link torn down clearly far from it (out of range): a physical round trip.
             // A fresh session later arriving sustained strong-near at the door may reopen once
-            // (field 13/10 16:44: a slow reconnect completed at the door, standing still, and the
+            // (field: a slow reconnect completed at the door, standing still, and the
             // departure-ended latch otherwise kept it shut). Needs a real far reading, so a wedged
             // link beside the car or a phone left inside it never arms it.
             val lostFar = lostRssi?.let { it < config().sensitivityLockRssi } ?: false
@@ -838,8 +838,8 @@ class ProximityController internal constructor(
             // Stationary loss so far (e.g. security sleep beside the car). If the user then walks
             // away while the car is still open and out of reach, sound the alarm after all. Waiting
             // on the motion flow needs no wakelock; link restore cancels this job.
-            // The S24 with the screen off can report STILL for a whole walk away (field 09/10
-            // 13:30), so "no motion" does not mean "beside the car". A link that went down on a
+            // The S24 with the screen off can report STILL for a whole walk away (field
+            // test), so "no motion" does not mean "beside the car". A link that went down on a
             // weak signal (out of range, not a deliberate disconnect at the car) and is still down
             // [STATIONARY_LINK_LOSS_CHECK_MS] after the loss is checked with the cloud: car still
             // open -> alarm. A phone beside the car reconnects within seconds.
@@ -855,7 +855,7 @@ class ProximityController internal constructor(
             val checkWl = acquireSafetyWakelock(
                 (if (outOfRangeLoss) checkInMs else NEAR_LOSS_STEP_WATCH_MS) + 30_000L)
             // Plan K8: the S24 with the screen off reports STILL during a whole walk away (field
-            // 09/10 13:30); the hardware step counter still counts. Steps since the loss = walking.
+            // test); the hardware step counter still counts. Steps since the loss = walking.
             val stepsAtLoss = motion.observedSteps
             val counterAtLoss = motion.counterSteps
             fun walkingNow(): Boolean = (motion.state.value == MotionMonitor.Motion.MOVING ||
@@ -1104,7 +1104,7 @@ class ProximityController internal constructor(
 
     /**
      * After the user's cloud Lock (also the fallback when the car received a key Lock but stayed
-     * open, field 05/10 16:08): only a car report newer than the Lock clears the warning; otherwise
+     * open, field): only a car report newer than the Lock clears the warning; otherwise
      * the car is NOT locked and the alarm sounds (user decision 05/10).
      */
     private fun checkManualCloudLock(lockAtMs: Long) {
@@ -1131,8 +1131,8 @@ class ProximityController internal constructor(
     /** The car's own status push: a fresh unlocked -> locked transition means the car locked itself. */
     /**
      * After a gap without the key link the car's lock state is unknown: it may have been opened
-     * by other means (field 10/10 16:48-16:51: phone asleep in the car, door opened, then walked
-     * away; the app still believed the car's self-lock of 16:44:51 and neither locked nor alarmed).
+     * by other means (field: phone asleep in the car, door opened, then walked
+     * away; the app still believed the car's self-lock and neither locked nor alarmed).
      * The car pushes its status at the start of a new session; if none arrives, ask the cloud.
      * A cloud "unlocked" re-arms the departure watch like a reopen seen by the key.
      */
@@ -1317,7 +1317,7 @@ class ProximityController internal constructor(
                 rssi?.let(::noteFreshReading)
                 if (rssi != null && smoothed != null)
                     _state.value = _state.value.copy(rawRssi = rssi, smoothedRssi = smoothed)
-                // Diagnostics (field 05/10 20:43): these readings were invisible in the log.
+                // Diagnostics (field test): these readings were invisible in the log.
                 if (rssi != null && clock.elapsedMs() - verifyLogAtMs >= 1_000L) {
                     verifyLogAtMs = clock.elapsedMs()
                     Logx.d("prox", "rssi=$rssi ema=$smoothed (verifying departure) motion=${motion.state.value}")
@@ -1370,7 +1370,7 @@ class ProximityController internal constructor(
                 Logx.d("prox", "armed idle read rssi=$rssi motion=${motion.state.value}")
                 observeStationaryFar(rssi, lockThresh)
                 // Beyond the lock threshold while the motion signal says STILL: look closer. A slow
-                // walk-away with stops kept Activity Recognition at STILL for 1.5 min (03/10).
+                // walk-away with stops kept Activity Recognition at STILL for 1.5 min (field test).
                 idleFarStreak = if (rssi <= lockThresh) idleFarStreak + 1 else 0
                 if (idleFarStreak >= 2 && idleFastWindows < StationaryFarWatch.MAX_IDLE_FAST_WINDOWS) {
                     idleFarStreak = 0
@@ -1843,7 +1843,7 @@ class ProximityController internal constructor(
                     // keep the CPU so the step assist can report MOVING, and keep sampling.
                     _wakeLockNeeded.value = true; farAsleep = false
                     // A stop ends the previous walk: the next MOVING starts a fresh walk-time backstop.
-                    // Field 04/10 12:02 (0.1.66): the backstop of the walk out to 10 m expired during
+                    // Field (0.1.66): the backstop of the walk out to 10 m expired during
                     // the 40 s stop, the walk back went to far-sleep and the car opened 5 s late.
                     farApproachDeadline = 0L; farApproachRefDist = Double.MAX_VALUE
                     nextIntervalMs = LinkedApproachWatch.WATCH_POLL_MS
@@ -2115,13 +2115,13 @@ class ProximityController internal constructor(
                     break
                 }
                 if (r == ControlResult.NOT_EXECUTED) {
-                    // The link works; the car received the Lock but stayed open (field 05/10 16:08).
+                    // The link works; the car received the Lock but stayed open (field test).
                     // One more try over the key, then the cloud below; no link reset.
                     if (++notExecuted >= MAX_NOT_EXECUTED_LOCKS) break
                     delay(UNLOCK_RETRY_DELAY_MS)
                     continue
                 }
-                // Field 12/10 17:52:37: proof at -102, the key Lock got no answer, four link resets
+                // Field: proof at -102, the key Lock got no answer, four link resets
                 // and status-133 reconnects took 30 s before the cloud locked. At the edge of the
                 // link the key will not get through: go to the cloud while the proof is fresh.
                 val fr = lastFreshRssi
@@ -2150,7 +2150,7 @@ class ProximityController internal constructor(
                 // that keeps holding restarts the loop every cooldown, repeating resets, cloud
                 // requests and notifications on the same proof.
                 // A fresh BLE departure proof backs the cloud Lock when the key link failed right
-                // after it (field 05/10 20:44: proof at -104, the Lock write failed and the link
+                // after it (field: proof at -104, the Lock write failed and the link
                 // dropped; GNSS could not confirm, so nothing locked the car).
                 val cloudStatusLocked = verifyCloudLock(reason,
                     bleProofAtMs = if (reason == "ble-departure") departureProofAtMs else 0L)
@@ -2594,7 +2594,7 @@ class ProximityController internal constructor(
         // Confirmed-lock loop (walk-away). After MAX_LOCK_ATTEMPTS unconfirmed BLE tries, fall back to
         // cloud. Shorter session-wait than unlock: if BLE won't come up we want cloud sooner (car open).
         private const val MAX_LOCK_ATTEMPTS = 5
-        /** Key Locks the car received but did not execute before the cloud is tried (field 05/10). */
+        /** Key Locks the car received but did not execute before the cloud is tried (field test). */
         private const val MAX_NOT_EXECUTED_LOCKS = 2
         /** How long a BLE departure proof may back a cloud Lock after the key link failed. */
         private const val BLE_PROOF_CLOUD_MS = 30_000L

@@ -44,7 +44,7 @@ import kotlin.math.sqrt
 
 /*
  * Whole-app simulator. The REAL ProximityController (and every policy it uses) runs on virtual time.
- * Everything around it is a MODEL, calibrated on the field logs of 30/09-03/10 2026:
+ * Everything around it is a MODEL, calibrated on the field logs:
  *  - the walker (distance to the car, facing, carry),
  *  - radio (path loss, body shadow, slow fading, read noise, multipath spikes),
  *  - the S24+ motion stack (Activity Recognition with long lags, significant motion, step assist),
@@ -114,7 +114,7 @@ internal data class SimPhysics(
     val stepWarmup: Double = 8.0,
     /** The car relocks itself this long after an unlock without a door being opened. */
     val selfLockMs: Long = 120_000L,
-    /** Chance that the car acknowledges a key Lock but does not execute it (field 07/10, 08/10, 12/10). */
+    /** Chance that the car acknowledges a key Lock but does not execute it (field test). */
     val keyLockRefuseP: Double = 0.0,
     val statusPushLossP: Double = 0.0,
     val cloudLockDelayMs: Long = 2_000L,
@@ -131,7 +131,7 @@ internal data class SimPhysics(
     val screenOnWhileWalkingP: Double = 0.0,
     /**
      * 0.3.2: chance per walk up to the car that the signal stays flat over the last metres and only
-     * jumps at the door (field 14/10 18:31, S24+ in the front trouser pocket: -85..-91 smoothed from
+     * jumps at the door (field, S24+ in the front trouser pocket: -85..-91 smoothed from
      * ~12 m to ~1 m, then -77 at the door and -63 at the car). Body and car shadow along the walking
      * line; the log-distance model alone always kept rising. SIM_PLATEAU_P.
      */
@@ -144,13 +144,13 @@ internal data class SimPhysics(
     companion object {
         private fun env(name: String, default: Double) = System.getenv(name)?.toDouble() ?: default
         fun calibrated() = SimPhysics()
-        /** A plausible other world (sensitivity / stress). Ranges from the field logs 28/09-14/10. */
+        /** A plausible other world (sensitivity / stress). Ranges from the field logs. */
         fun random(r: SimRandom) = SimPhysics(
             name = "random",
             phoneOffsetDb = (3.0 * r.gaussian()).coerceIn(-6.0, 6.0),
             pathSlope = r.uniform(13.0, 20.0),
             fadeSigmaDb = r.uniform(1.2, 3.5),
-            // Field: "accuracy over 8 m" in nearly every episode of 14/10.
+            // Field: "accuracy over 8 m" in nearly every episode of one field day.
             gnssAccMedianM = r.uniform(4.0, 11.0),
             gnssAccSpread = 0.35,
             gnssTtffMs = r.uniform(2_000.0, 20_000.0).toLong(),
@@ -182,12 +182,12 @@ internal sealed class Leg {
     object OpenDoor : Leg()
     /** The car is opened without the phone key (inside handle, card, stock app). */
     object ReopenByOther : Leg()
-    /** The phone lies still inside the car, out of the pocket (field 10/10 16:44: -46..-49 dBm). */
+    /** The phone lies still inside the car, out of the pocket (field: -46..-49 dBm). */
     data class PhoneInCar(val ms: Long) : Leg()
     object ManualLock : Leg()
     /** The car is locked without the phone key and without the app noticing (fob, handle, other phone). */
     object LockByOther : Leg()
-    /** The car unlocks itself (parking after a drive: status 2 then 1, field 04/10 18:36). */
+    /** The car unlocks itself (parking after a drive: status 2 then 1, field). */
     object CarUnlocksItself : Leg()
     /** The app process dies (update, One UI, crash); START_STICKY restarts it after [downMs]. */
     data class ProcessRestart(val downMs: Long = 4_000L) : Leg()
@@ -207,13 +207,13 @@ internal class SimWorld(
     startDistanceM: Double,
     val gnssAccuracyM: Float? = 4f,
     val notificationPermission: Boolean = true,
-    /** Field 05/10 16:08/16:18: the car acknowledges a key Lock (0x0111) but does not lock. */
+    /** Field: the car acknowledges a key Lock (0x0111) but does not lock. */
     val carRefusesKeyLock: Boolean = false,
-    /** Field 12/10 17:52:39: at the edge of the link (~-102) the key Lock got no answer although the
+    /** Field: at the edge of the link (~-102) the key Lock got no answer although the
      *  session was still up. Below this true RSSI a key Lock times out without reaching the car. */
     val keyEdgeRssi: Double? = null,
     val physics: SimPhysics = SimPhysics.calibrated(),
-    /** The cloud never answers a Lock (outage) - field 04/10 19:10 (garage). */
+    /** The cloud never answers a Lock (outage) - field (garage). */
     val cloudDown: Boolean = false,
 ) {
     private fun stream(k: Long) = SimRandom(seed * -0x61C8864680B583EBL + k * 0x2545F4914F6CDD1DL)
@@ -309,11 +309,11 @@ internal class SimWorld(
     private var fade = 0.0
     var trueRssi = -120.0; private set
     private fun updateRadio() {
-        // Field (03/10 18:20:31-42, standing at ~16 m): raw readings -87..-91, one -94 dip.
+        // Field (standing at ~16 m): raw readings -87..-91, one -94 dip.
         fade = 0.95 * fade + sqrt(1 - 0.9025) * physics.fadeSigmaDb * (rFade ?: rRadio).gaussian()
         val d = max(distanceM, 0.7)
         // Fitted on the field pocket readings: ~-79 at 2.5 m, -83 at 5 m, -85 at 7 m (approach ARM),
-        // -87 at 10 m, -88..-90 facing at 15 m, -92..-98 walking away at 15-20 m (03/10 logs).
+        // -87 at 10 m, -88..-90 facing at 15 m, -92..-98 walking away at 15-20 m (field logs).
         trueRssi = -71.0 - physics.pathSlope * log10(d) + carryNow.db + facing.db + extraShadowDb + fade + physics.phoneOffsetDb
         plateauCapDb?.let { cap -> if (distanceM in 1.0..plateauFromM) trueRssi = minOf(trueRssi, cap + fade) }
     }
@@ -361,7 +361,7 @@ internal class SimWorld(
         }
         fun openDoor() { if (!locked) { doorOpenedSinceUnlock = true; record("DOOR_OPENED") } }
         fun tick() {
-            // The 7GT relocks itself ~2 min after an unlock when no door was opened (field 03/10).
+            // The 7GT relocks itself ~2 min after an unlock when no door was opened (field test).
             if (!locked && unlockedAtMs >= 0 && !doorOpenedSinceUnlock && now() - unlockedAtMs >= physics.selfLockMs)
                 actuate(true, "self-lock")
         }
@@ -515,7 +515,7 @@ internal class SimWorld(
         override suspend fun pollRemoteRssi(): Int? = rssiPollLock.withLock { pollRemoteRssiNow() }
         private suspend fun pollRemoteRssiNow(): Int? {
             if (_state.value != DkBleManager.State.SESSION_READY && _state.value != DkBleManager.State.CONNECTED) return null
-            // A real GATT RSSI read takes 25-55 ms: field 03/10 19:57 (0.1.63) the 1 s cadence ran
+            // A real GATT RSSI read takes 25-55 ms: field (0.1.63) the 1 s cadence ran
             // 988-1018 ms apart, so a span of two readings is just as often 995 ms as 1005 ms.
             linkOps++
             try {
@@ -525,8 +525,8 @@ internal class SimWorld(
         }
         override fun reconnectLast(): Boolean { connect(null); return true }
         /**
-         * Direct connect from an offloaded presence result. SIM_PRESENCE_EDGE=1 replays field 13/10
-         * 19:41: the controller hears the car at -100 dBm, but a link cannot be established below
+         * Direct connect from an offloaded presence result. SIM_PRESENCE_EDGE=1 replays a field
+         * case: the controller hears the car at -100 dBm, but a link cannot be established below
          * about -94 - each attempt ends in status 133 after ~0.7 s, plus one immediate retry.
          */
         fun connectFromPresence(advertRssi: Int) {
@@ -877,7 +877,7 @@ internal class SimWorld(
 
     // ---------------- the real controller ----------------
     val config = SecretsConfig(proximityEnabled = true, proximitySensitivity = "far")
-    // The cloud Lock works whether or not the key link does (field 05/10 16:19: the stock app's cloud
+    // The cloud Lock works whether or not the key link does (field: the stock app's cloud
     // Lock locked a car that had ignored two key Locks); it takes ~2 s and reports its status.
     var btOn = true; private set
     var appAlive = true; private set

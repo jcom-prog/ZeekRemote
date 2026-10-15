@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.asStateFlow
  *
  * The cloud status lags behind key (BLE) commands: after a proximity unlock the cloud can still
  * report "locked" for minutes, and a tile that trusts it turns a tap meant to Lock into an Unlock
- * (field test 0.1.52, 02/10). The newest of two sources wins:
+ * (field test 0.1.52). The newest of two sources wins:
  *  - the cloud status, timed by its own updateTime;
  *  - the latest Lock/Unlock the car confirmed over the key session ([LocalLockEvidence]).
  * A key receipt is a vehicle acknowledgement, not proof of physical actuation; it is used here only

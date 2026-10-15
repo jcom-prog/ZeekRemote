@@ -49,7 +49,7 @@ class VehicleObservationSessionTest {
     // ---- 0.2.7: the status the car pushes during the handshake ----
 
     @Test fun statusPushedDuringTheHandshakeIsAppliedToTheNewSession() {
-        // Field 10/10 16:51:34: 0x0121 arrived after the session keys, before "established".
+        // Field: 0x0121 arrived after the session keys, before "established".
         val s = VehicleObservationSession()
         val pushed = body(64)
         assertNull("held, not applied yet", s.offer(s.capture(), pushed))

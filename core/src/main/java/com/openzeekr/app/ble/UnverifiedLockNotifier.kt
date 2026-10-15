@@ -22,7 +22,7 @@ import com.openzeekr.core.R
  */
 internal object UnverifiedLockNotifier {
     /**
-     * The visible record. Field 05/10 16:08 (0.2.2): posted as a silent notification it never showed
+     * The visible record. Field (0.2.2): posted as a silent notification it never showed
      * on the Samsung lock screen (One UI hides silent notifications there). Its own high-importance
      * channel without sound keeps it in the alerting section; the alarm channel makes the sound.
      */

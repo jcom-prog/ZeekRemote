@@ -3,9 +3,9 @@ package com.openzeekr.app.ble
 /**
  * Never start a key connection from an advert heard at the edge of radio range.
  *
- * Field 13/10 19:41-20:06 (0.2.15, phone at home, car parked outside): 54 status-133 failures, all
+ * Field (0.2.15, phone indoors, car parked outside): 54 status-133 failures, all
  * GATT_CONN_FAILED_ESTABLISHMENT, all from adverts at -95 dBm or weaker (presence hits at -98..-100
- * and their immediate retries); across 03/10-13/10 more than half of all connects ended in 133 and
+ * and their immediate retries); across ten days of field logs more than half of all connects ended in 133 and
  * a connection that hit one was ready after ~20 s instead of ~5 s. A link cannot be established
  * that far out, so trying only costs time, wakelocks and a 133 recovery cycle.
  *

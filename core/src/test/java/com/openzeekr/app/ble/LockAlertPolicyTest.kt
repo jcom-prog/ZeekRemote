@@ -7,7 +7,7 @@ import org.junit.Test
 
 class LockAlertPolicyTest {
     @Test fun aLockTheCarDidNotExecuteSoundsAndOffersLockAgain() {
-        // Field 05/10 16:08/16:18: the tile said "Locked", the car stayed open.
+        // Field: the tile said "Locked", the car stayed open.
         assertTrue(LockAlertPolicy.audible(Event.LOCK_NOT_EXECUTED))
         assertTrue(LockAlertPolicy.offersLock(Event.LOCK_NOT_EXECUTED))
     }
@@ -32,7 +32,7 @@ class LockAlertPolicyTest {
     }
 
     @Test fun fieldShapeWalkedAwayThenStoodStillWhileTheLinkDroppedIsAudible() {
-        // 0.1.53 part B: candidate 18:47:42, no strong reading after, link lost 18:49:24 while STILL.
+        // 0.1.53 part B: candidate, no strong reading after, link lost ~100 s later while STILL.
         val candidate = 1_000_000L; val lastStrong = candidate - 25_000L
         val suspected = LockAlertPolicy.departureSuspected(candidate, lastStrong)
         assertTrue(suspected)
@@ -56,11 +56,11 @@ class LockAlertPolicyTest {
     }
 
     @Test fun oneAlarmPerSituationAndAReminderAtMostEveryFiveMinutes() {
-        // 0.1.54 part B: shadow-path alarm 19:29:19.6, watchdog alarm 19:29:41.9 -> second suppressed.
+        // 0.1.54 part B: shadow-path alarm, watchdog alarm 22 s later -> second suppressed.
         val first = 1_000_000L
         assertTrue(LockAlertPolicy.alarmShouldSound(0L, first))
         assertFalse(LockAlertPolicy.alarmShouldSound(first, first + 22_000L))
-        // Field 06/10 (incident #20): ~12 alarms 33 s apart about the same open car. A timed-out or
+        // Field (incident #20): ~12 alarms 33 s apart about the same open car. A timed-out or
         // dismissed alarm no longer lets the next event sound at once (plan K7); a reminder does.
         assertFalse(LockAlertPolicy.alarmShouldSound(first, first + LockAlertPolicy.ALARM_EPISODE_MS))
         assertFalse(LockAlertPolicy.alarmShouldSound(first, first + 22_000L, alarmStillShowing = false))

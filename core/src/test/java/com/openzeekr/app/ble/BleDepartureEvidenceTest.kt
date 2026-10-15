@@ -74,7 +74,7 @@ class BleDepartureEvidenceTest {
     }
 
     @Test fun shieldedWalkingShorterThanTheDeepWindowNeverConfirms() {
-        // Field shape (0.1.42 28/09, private replay): beside the car, deep-far stretches while
+        // Field shape (0.1.42, private replay): beside the car, deep-far stretches while
         // walking lasted at most ~5 s before the signal came back above lock − 3 dB.
         val f = arrivedFeed()
         f.run(10 * 60_000, { at -> if ((at / 200) % 30 < 26) -90 else -80 }) // 5.2 s deep, 0.8 s back
@@ -242,7 +242,7 @@ class BleDepartureEvidenceTest {
     // ---- very deep far alone (0.2.4): no steps, no observed arrival, no GNSS needed ----
 
     @Test fun walkingVeryDeepFarConfirmsWithoutStepsAfterTwelveSeconds() {
-        // Field 05/10 16:07 shape: S24+ screen off, the step detector delivered 2 steps.
+        // Field shape: S24+ screen off, the step detector delivered 2 steps.
         val f = Feed(BleDepartureEvidence(lock))
         f.run(11_800L, raw = { -98 }, stepsAvailable = false)
         assertNull("not before 12 s", f.firstConfirmAt)
@@ -267,7 +267,7 @@ class BleDepartureEvidenceTest {
     }
 
     @Test fun field2043ShortStopsAtTheGateAndTheDoorKeepTheVeryDeepWindow() {
-        // 05/10 20:43 (0.2.4): locking the garden gate (~4.5 s) and opening the back door (~1 s)
+        // Field (0.2.4): locking a gate (~4.5 s) and opening the back door (~1 s)
         // restarted the window; the proof came 12 s after the last stop, too late for the Lock.
         val f = Feed(BleDepartureEvidence(lock))
         f.run(3_000L, raw = { -98 }, stepsAvailable = false)
@@ -309,8 +309,8 @@ class BleDepartureEvidenceTest {
     }
 
     @Test fun field1607ShapeConfirmsAboutFortySecondsAfterLeavingTheCar() {
-        // 05/10 16:07 (0.2.2): in the car, out at 16:07:08, a stop at the car, walking away from
-        // 16:07:20 (-86..-90), a stop, then -98..-100 walking; 2 steps counted in total.
+        // Field (0.2.2): in the car, out, a stop at the car, walking away 12 s later
+        // (-86..-90), a stop, then -98..-100 walking; 2 steps counted in total.
         val f = Feed(BleDepartureEvidence(lock))
         f.run(8_000L, raw = { -58 }, stepsPerSecond = 0.0)
         f.run(12_000L, raw = { -64 }, stepsPerSecond = 0.0)
@@ -325,7 +325,7 @@ class BleDepartureEvidenceTest {
     // ---- 0.2.6: walking away while Activity Recognition hangs on STILL ----
 
     @Test fun gradualDescentToVeryDeepConfirmsEvenWhenMotionSaysStill() {
-        // Synthetic shape of field 09/10 13:30: screen off, AR reported STILL for the whole walk,
+        // Synthetic shape of field: screen off, AR reported STILL for the whole walk,
         // no steps; the signal sank ~1 dB/s from the lock level to below -100 and stayed there.
         val f = arrivedFeed()
         val leaveAt = f.t
@@ -345,7 +345,7 @@ class BleDepartureEvidenceTest {
     }
 
     @Test fun gradualDescentThatStopsAboveTheStillDeepLevelNeverConfirms() {
-        // Sitting at home ~25 m away with the phone still: the signal settles at -95, not -100.
+        // Sitting ~25 m away with the phone still: the signal settles at -95, not -100.
         val f = arrivedFeed()
         val leaveAt = f.t
         f.run(10 * 60_000, { at -> (-70 - (at - leaveAt) / 1000.0).toInt().coerceAtLeast(-95) },

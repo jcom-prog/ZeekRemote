@@ -4,15 +4,15 @@ package com.openzeekr.app.ble
 data class ObservedVehicleStatus(val sessionGeneration: Long, val centralLockCode: Int)
 
 /**
- * The car locks itself (field 03/10 12:28:44: unlocked by approach, no door opened, the car relocked
- * after two minutes; the app still believed "unlocked" and sounded a false "car not locked" alarm at
- * 12:29:30). The key session reports the central lock in its status push: 1 after an Unlock, 3 after a
- * Lock (every confirmed key command since 02/10 showed this within ~0.1 s).
+ * The car locks itself (field: unlocked by approach, no door opened, the car relocked
+ * after two minutes; the app still believed "unlocked" and sounded a false "car not locked" alarm).
+ * The key session reports the central lock in its status push: 1 after an Unlock, 3 after a
+ * Lock (every confirmed key command in the field logs showed this within ~0.1 s).
  *
  * Only a fresh 1 -> 3 transition inside the same authenticated session, seen at least
  * [MIN_AFTER_UNLOCK_MS] after our own confirmed Unlock, counts. Status pushes and receipts interleave:
- * the "1" of an Unlock arrives ~20 ms before its receipt (03/10 12:26:41.958 vs .979), a stale "3" can
- * arrive before it (12:19:39.449), and a first status after a reconnect has no transition. The caller
+ * the "1" of an Unlock arrives ~20 ms before its receipt, a stale "3" can
+ * arrive before it, and a first status after a reconnect has no transition. The caller
  * also lets a manual Lock's own receipt land first (its "3" precedes the receipt by ~20 ms).
  * This only ever stops alarms/departure tracking; it never authorizes an Unlock or Lock.
  */
@@ -42,7 +42,7 @@ internal class CarSelfLockDetector {
      * [Event.SELF_LOCK] for a fresh unlocked -> locked transition after our Unlock; [Event.REOPENED]
      * when, while the app believes the car is locked, the car reports unlocked without our own Unlock
      * (passive entry at the handle, the fob, the inside handle, the car unlocking on parking).
-     * Field 04/10 18:36-19:07 (0.2.0): Unlock by approach, drive; the car locked while driving (3),
+     * Field (0.2.0): Unlock by approach, drive; the car locked while driving (3),
      * unlocked when parked in a garage (2, then 1); the user walked away and nothing watched the
      * open car: the self-lock handling itself had cleared the "self-locked" state, and the "2" in
      * between was not seen as unlocked.
@@ -79,7 +79,7 @@ internal class CarSelfLockDetector {
 
     companion object {
         const val UNLOCKED = 1
-        /** Seen 04/10 18:59:53 between 3 and 1 when the car unlocked on parking (driver door first). */
+        /** Seen between 3 and 1 when the car unlocked on parking (driver door first). */
         const val PARTLY_UNLOCKED = 2
         const val LOCKED = 3
         const val MIN_AFTER_UNLOCK_MS = 2_000L
@@ -88,7 +88,7 @@ internal class CarSelfLockDetector {
 }
 
 /**
- * Slow walk-away without a motion signal (field 03/10 12:26:52-12:28:42: walking slowly with stops,
+ * Slow walk-away without a motion signal (field: walking slowly with stops,
  * Activity Recognition stayed STILL for 1.5 min and the screen-off step assist delivered nothing).
  * Without movement the departure route cannot prove a departure, so no Lock is ever sent from this;
  * it only makes sure the user hears about an unlocked car: the phone has stayed clearly beyond the

@@ -56,7 +56,7 @@ class ProximityDecisionPolicyTest {
 
     @Test
     fun manualLockStillPauseSurvivesMildReboundWhileStanding() {
-        // Field shape 0.1.55 (02/10 20:29, ~20 m walk): FAR while walking away, a 13 s stop at
+        // Field shape 0.1.55 (~20 m walk): FAR while walking away, a 13 s stop at
         // -85..-88 with one -82 orientation rebound, ~1 s STILL before walking back. The rebound
         // erased the qualified pause and the return to the door never rearmed.
         val policy = ProximityDecisionPolicy()
@@ -156,7 +156,7 @@ class ProximityDecisionPolicyTest {
         policy.onPresenceMatch(0L, -87, true, -86)
 
         // 0.2.6: noise just over the Far threshold right after the connect no longer opens (field
-        // 09/10 12:59, ~25 m away); two readings 4 dB inside it do, without any further wait.
+        // test, ~25 m away); two readings 4 dB inside it do, without any further wait.
         assertFalse(policy.shouldUnlock(100L, -86, true, -86))
         assertFalse(policy.shouldUnlock(300L, -86, true, -86))
         assertFalse(policy.shouldUnlock(500L, -82, true, -86))
@@ -180,7 +180,7 @@ class ProximityDecisionPolicyTest {
     fun captured0134MidRangeColdArrivalCanRecoverAfterHandshake() {
         val policy = ProximityDecisionPolicy()
 
-        // 0.1.34-aborted-arrival-no-response.log: the only offloaded presence callback arrived at
+        // Field incident 0.1.34 (aborted arrival): the only offloaded presence callback arrived at
         // -82 dBm while moving. BLE connected and SESSION_READY followed, then RSSI rose as high as
         // -61, but the old -83 entry cut-off had permanently discarded the arrival epoch.
         policy.onPresenceMatch(0L, -82, true, -86)
@@ -251,12 +251,12 @@ class ProximityDecisionPolicyTest {
         var now = 0L
         policy.onUnlockConfirmed(now)
 
-        // Exact EMA sequence from 0.1.31-turnaround-no-lock.log after CTRL_UNLOCK was confirmed.
+        // Synthetic series with the course of field incident 0.1.31 after CTRL_UNLOCK was confirmed.
         // The user never reached the strong-near arrival band and immediately walked away. 0.1.31
         // discarded this evidence during its 15 s grace and later could no longer lock over BLE.
         val turnaround = listOf(
-            -83, -85, -83, -80, -79, -81, -82, -80, -80, -79, -79, -80,
-            -84, -86, -86, -86, -86, -88, -90, -90, -91, -91,
+            -83, -85, -82, -80, -79, -81, -82, -82, -80, -80, -79, -80,
+            -83, -86, -86, -88, -88, -88, -89, -90, -91, -91,
         )
         var decision = ProximityDecisionPolicy.ArmedDecision.NONE
         turnaround.forEach { rssi ->
@@ -406,12 +406,12 @@ class ProximityDecisionPolicyTest {
             now += 200
         }
 
-        // Extract from 0.1.22-deep-sleep-distance-retest.log. Short recoveries to -80/-81 used to
+        // Synthetic series with the course of field incident 0.1.22. Short recoveries to -80/-81 used to
         // erase the entire walk-away timer, and the final rebound from -93 to -84 prevented the
         // required current-vs-start 3 dB drop. The weakest observed sample now preserves direction.
         var decision = ProximityDecisionPolicy.ArmedDecision.NONE
-        listOf(-73, -75, -77, -76, -78, -79, -82, -82, -81, -80, -80, -82,
-            -83, -85, -86, -88, -88, -91, -93, -90, -87, -84).forEach { rssi ->
+        listOf(-73, -74, -75, -77, -79, -80, -82, -82, -80, -80, -80, -83,
+            -83, -84, -85, -88, -91, -91, -93, -90, -87, -84).forEach { rssi ->
             decision = policy.onUnlockedSample(now, rssi, true, -82)
             now += 200
         }
@@ -564,14 +564,14 @@ class ProximityDecisionPolicyTest {
 
         // The car has just locked. A real departure remains continuously FAR long enough to prove
         // that the previous arrival ended, even though Android keeps the authenticated GATT link.
-        // Captured 0.1.32-turnaround-test-1.log: the retained link remained deep FAR after lock.
-        listOf(-100, -100, -100, -100, -99, -100, -101, -102, -103, -103,
-            -102, -103, -103, -102, -103, -103).forEach { rssi ->
+        // Field incident 0.1.32 (synthetic series): the retained link remained deep FAR after lock.
+        listOf(-100, -99, -99, -100, -101, -101, -101, -102, -101, -102,
+            -102, -103, -102, -104, -103, -103).forEach { rssi ->
             assertFalse(policy.shouldUnlock(now, rssi, true, -86))
             now += 210
         }
 
-        // Captured 0.1.32-return-no-response.log begins only once the retained connection is already
+        // The 0.1.32 return (no response) begins only once the retained connection is already
         // near (-59 dBm). The long gap is real: no link-down or fresh presence callback occurred.
         now += 180_000
         var unlocked = false
@@ -631,7 +631,7 @@ class ManualLockDeepFarReturnTest {
     private fun locked() = ProximityDecisionPolicy().apply { onManualLockConfirmed() }
 
     @Test fun walkToFifteenMetresAndBackUnlocksWhileTheMotionSensorSaysStill() {
-        // Field shape 0.1.60 (03/10 16:22, car self-lock): away to ~15 m and back, Activity
+        // Field shape 0.1.60 (car self-lock): away to ~15 m and back, Activity
         // Recognition STILL nearly the whole way; the motion-edge route voided itself at ~10 m.
         val p = locked()
         var t = 0L
@@ -646,7 +646,7 @@ class ManualLockDeepFarReturnTest {
     }
 
     @Test fun twoStrongReadingsAboutOneSecondApartAreAReturnDespiteSamplingJitter() {
-        // Field shape 0.1.63 (03/10 19:57, car self-lock): back from ~25 m on the 1 s linked
+        // Field shape 0.1.63 (car self-lock): back from ~25 m on the 1 s linked
         // watch, -81 then -82 at ~6 m only 995 ms apart; the strict ">= 1000 ms" refused it, the
         // next reading (-84) restarted the count and the car opened only at the door.
         val p = locked()
@@ -695,7 +695,7 @@ class ManualLockDeepFarReturnTest {
     }
 
     @Test fun manualLockThenTurningRoundAtTenMetresStaysLocked() {
-        // Field shape 0.1.64 (04/10 09:37-09:38): manual Lock at the door, walk to ~10 m with the
+        // Field shape 0.1.64: manual Lock at the door, walk to ~10 m with the
         // body between phone and car (down to -97 for ~2 s), stand (STILL), turn round: -82/-81.
         val p = locked()
         var t = 0L
@@ -710,7 +710,7 @@ class ManualLockDeepFarReturnTest {
     }
 
     @Test fun manualLockWalkToTenMetresAndBackToTheDoorOpensAtTheCar() {
-        // Field shape 0.1.65 (04/10 10:24-10:25): Lock, 50 s at the car, walk to ~10 m (-98 behind
+        // Field shape 0.1.65: Lock, 50 s at the car, walk to ~10 m (-98 behind
         // the body), turning round there (Activity Recognition: 0.3 s STILL), back to the door.
         val p = locked()
         var t = 0L
@@ -833,7 +833,7 @@ class ManualLockDeepFarReturnTest {
     // ---- 0.3.2: unlock-safety rules from the simulation audit ----
 
     @Test fun aPresenceEntryAlreadyAtTheBandNeedsTheDoorLevelWhileTheStepsShowStanding() {
-        // Front door ~25 m (simulator F24, field 09/10 12:59): the entry reads -84, readings of -82
+        // A door ~25 m away (simulator F24, field): the entry reads -84, readings of -82
         // used to open the car. Standing (live step count stopped): -78 needed.
         val standing = ProximityDecisionPolicy()
         standing.onPresenceMatch(0L, -84, true, -86)
@@ -956,7 +956,7 @@ class ManualLockDeepFarReturnTest {
     }
 
     /**
-     * Field shape 04/10 22:06 (0.2.1), parked at home: BLE departure Lock confirmed at t=800 ms,
+     * Field shape (0.2.1): BLE departure Lock confirmed at t=800 ms,
      * walking on indoors (-92..-97 for ~9 s, then about -89), a ~1.5 s peak while moving (smoothed
      * -86..-81 from ~15 m) crossed the old arrival edge and reopened the car behind the user.
      * Smoothed readings, 200 ms apart, as (rssi, moving); a far-sleep gap and a 1 s STILL as in the field.
@@ -1029,7 +1029,7 @@ class ManualLockDeepFarReturnTest {
 
     @Test
     fun selfLockAtTheGateReopensOnceWhenWalkingUpToTheDoor() {
-        // Synthetic shape of field 09/10 12:59-13:00: unlocked, the car relocked while the user
+        // Synthetic shape of field: unlocked, the car relocked while the user
         // was busy at the gate ~4 m away (back pocket, ~-84), then walked to the door (~-76).
         val policy = selfLockedAt(-84)
         for (time in 200L..60_000L step 200L) {

@@ -75,7 +75,7 @@ internal object SimScenarios {
             listOf(Walk(12.0), Mark("expect-stay-locked"), Shuffle(180_000, -6.0), Stand(5_000, Facing.TOWARD))),
         Scenario("F14 waiting at 8 m", "car locked; the user waits 2 min at 8 m facing the car, then leaves", 30.0,
             listOf(Walk(8.0), Mark("-"), Stand(120_000, Facing.TOWARD), Walk(30.0), Stand(30_000))),
-        // Rain (user 03/10): the approach is brisk, ~2 m/s, straight to the door.
+        // Rain (user): the approach is brisk, ~2 m/s, straight to the door.
         Scenario("F15 fast approach (rain)", "approach at 2.0 m/s, open the door, later walk away", 30.0,
             approachAndOpen(2.0) + listOf(Mark("expect-lock"), Walk(30.0), Stand(150_000))),
         Scenario("F16 fast return after self-lock", "car relocks; away 25 m, back at 2.0 m/s", 30.0,
@@ -83,24 +83,24 @@ internal object SimScenarios {
                 Mark("expect-unlock"), Walk(1.0, 2.0), Stand(10_000))),
         Scenario("F17 fast approach after long still", "phone still 7 min at 25 m (security sleep), then 2.0 m/s", 25.0,
             listOf(Stand(420_000)) + approachAndOpen(2.0)),
-        // User 04/10: manual Lock, 10 m and turning round (stay locked), then back to the car (open).
+        // Field: manual Lock, 10 m and turning round (stay locked), then back to the car (open).
         Scenario("F18 manual lock, 10 m and back", "manual Lock, 30 s at the car, 10 m turning round 30 s, back to the door", 30.0,
             approachAndOpen() + listOf(ManualLock, Mark("expect-stay-locked"), Stand(30_000), Walk(10.0, 1.0),
                 Shuffle(30_000, -6.0), Stand(3_000, Facing.TOWARD), Mark("-"), Walk(1.0),
                 Mark("expect-unlocked-by-end"), Stand(10_000))),
-        // User 04/10 12:02: the same, standing still (not turning) at 10 m for 40 s, then back.
+        // Field: the same, standing still (not turning) at 10 m for 40 s, then back.
         Scenario("F19 manual lock, 10 m still, back", "manual Lock, 10 m standing still 40 s, back to the door", 30.0,
             approachAndOpen() + listOf(ManualLock, Mark("expect-stay-locked"), Stand(20_000), Walk(10.0, 1.2),
                 Stand(40_000, Facing.AWAY), Mark("expect-unlock"), Walk(1.0), Stand(10_000))),
-        // Field 04/10 22:06 (0.2.1): auto Lock at home, walking on indoors a 1.5 s peak (to about
+        // Field (0.2.1): auto Lock, walking on indoors a 1.5 s peak (to about
         // -80) reopened the car behind the user. Then a real return must still open.
         Scenario("F20 peak while walking away", "auto Lock, 30 m, walking on a 1.5 s signal peak (+$F20_PEAK_DB dB), later back", 30.0,
             approachAndOpen() + listOf(Mark("expect-lock"), Walk(30.0), Stand(40_000, Facing.AWAY), Mark("expect-stay-locked"),
                 Walk(32.0), WalkPeak(1_500, F20_PEAK_DB), Walk(36.0), Stand(20_000), Mark("expect-unlock"), Walk(1.0),
                 Stand(10_000))),
-        // Field 05/10 16:08/16:18 (0.2.2): the car received the key Lock (0x0111) but stayed open,
+        // Field (0.2.2): the car received the key Lock (0x0111) but stayed open,
         // while the app showed "Locked". The departure must end in an alarm, never in silence.
-        // User 05/10 20:44: home, out of the car, a short stop to lock the gate (~4.5 s), on, a
+        // Field: out of the car, a short stop to lock a gate (~4.5 s), on, a
         // short stop at the back door (~1.5 s), then inside (walls). The car must lock.
         Scenario("F22 home: stops at gate and door", "walk 14 m, gate 4.5 s, 18 m, door 1.5 s, inside", 30.0,
             approachAndOpen() + listOf(Mark("expect-lock"), Walk(14.0), Stand(4_500, Facing.AWAY), Walk(18.0),
@@ -110,9 +110,9 @@ internal object SimScenarios {
         Scenario("F23 key Lock fails, no GNSS", "normal departure, car ignores key Locks, no GNSS", 30.0,
             approachAndOpen() + listOf(Mark("expect-lock"), Walk(30.0), Stand(150_000)), gnssAccuracyM = null,
             carRefusesKeyLock = true),
-        // User 09/10 12:59: inside the house 25 m away (walls), then locking the front door ~20 s in
-        // the open with the phone in hand (+6 dB line of sight), 20 m to the garden gate ~3 m from
-        // the car, gate ~25 s, then the door. No unlock at the house; open before the door.
+        // Field: indoors 25 m away (walls), then locking a door ~20 s in
+        // the open with the phone in hand (+6 dB line of sight), 20 m to a gate ~3 m from
+        // the car, gate ~25 s, then the door. No unlock while indoors; open before the car door.
         Scenario("F24 house door, gate, car", "inside 25 m, front door 20 s (LOS), gate at 4 m 25 s, door", 25.0,
             listOf(Stand(150_000, Facing.SIDE, -12.0, indoor = true), Mark("expect-stay-locked"), Fidget(20_000, 6.0),
                 Mark("expect-unlock"), Walk(4.0), Fidget(25_000), Walk(1.0), Stand(10_000))),
@@ -120,27 +120,27 @@ internal object SimScenarios {
         // door must open it again (0.2.6 B).
         Scenario("F25 gate 2.5 min, car relocks", "approach to the gate at 4 m, 150 s there, then the door", 25.0,
             listOf(Mark("-"), Walk(4.0), Fidget(150_000), Walk(1.0), Mark("expect-unlocked-by-end"), Stand(10_000))),
-        // User 10/10 16:44-16:53: unlocked on approach, the phone laid in the car (-46..-49) while the
+        // Field: unlocked on approach, the phone laid in the car (-46..-49) while the
         // user worked beside it; the car relocked itself; the door was then opened by other means
         // (no key Unlock); finally the user took the phone and walked away. The key must stay awake
         // at the car, and the open car must be locked or alarmed after the walk away.
         Scenario("F26 phone in car, reopened, away", "phone still in the car 5 min, car relocks, opened by hand, walk away", 25.0,
             listOf(Mark("expect-unlock"), Walk(0.5), Mark("-"), PhoneInCar(300_000), ReopenByOther, PhoneInCar(60_000),
                 Mark("expect-lock"), Walk(30.0), Stand(150_000))),
-        // Field 12/10 17:52: walk away; the departure is proven at the edge of the link and the key
+        // Field: walk away; the departure is proven at the edge of the link and the key
         // Lock gets no answer there - the cloud must take over promptly.
         Scenario("F27 key Lock unanswered at link edge", "normal departure; key Lock gets no answer below -97", 30.0,
             approachAndOpen() + listOf(Mark("expect-lock"), Walk(60.0), Stand(150_000)), keyEdgeRssi = -97.0),
         Scenario("F21 car ignores key Lock", "normal departure; the car acknowledges but never executes a key Lock", 30.0,
             approachAndOpen() + listOf(Mark("-"), Walk(30.0), Stand(150_000)), carRefusesKeyLock = true),
-        // Field 13/10 16:44: approach + open, walk away ~20 m so the car auto-locks and the link
+        // Field: approach + open, walk away ~20 m so the car auto-locks and the link
         // drops far, then turn straight back. The reconnect only completed at the door while the
         // user stood still; the departure-ended latch kept the car shut and the user had to unlock
         // by hand. A proven away-and-back must reopen at the door (0.2.14 B).
         Scenario("F28 walk-away lock, straight back", "open, away 30 m (auto-lock, link drops far), back to the door", 30.0,
             approachAndOpen() + listOf(Mark("expect-lock"), Walk(30.0), Stand(14_000, Facing.AWAY),
                 Mark("expect-unlock"), Walk(1.0), Stand(20_000))),
-        // Field 14/10 11:30: open by the handle, walk ~35 m away and come back to ~20 m, stand there.
+        // Field: open by the handle, walk ~35 m away and come back to ~20 m, stand there.
         // With the screen off the step detector delivered nothing: the BLE route said too few steps
         // and the location proof needed 12 m clearance without steps, so the car stayed open until
         // the alarm and the user locked from the app. The hub step counter (0.2.17) must lock it.
@@ -186,13 +186,13 @@ internal object SimScenarios {
         Scenario("F41 key Lock refused, cloud down", "normal departure; car refuses key Locks; cloud outage", 30.0,
             approachAndOpen() + listOf(Mark("expect-alarm"), Walk(30.0), Stand(150_000)),
             carRefusesKeyLock = true, cloudDown = true),
-        // Field 04/10 18:36-19:07: arrive by car, the car unlocks itself when parked, walk away.
+        // Field: arrive by car, the car unlocks itself when parked, walk away.
         Scenario("F42 drive in, car unlocks on parking, away", "phone in the car while driving; car unlocks itself; walk away", 2.0,
             listOf(Mark("-"), PhoneInCar(60_000), CarUnlocksItself, OpenDoor, Stand(5_000), Mark("expect-lock"),
                 Walk(30.0), Stand(150_000))),
     )
 
-    /** Every field incident 28/09-14/10 and the families that reproduce it (incident history, 14/10). */
+    /** Every field incident and the families that reproduce it (incident history, 14/10). */
     val fieldCases: List<FieldCase> = listOf(
         FieldCase("#1 28/09 0.1.38", "auto-Lock with the user beside the car", listOf("F05", "F06", "F36")),
         FieldCase("#2 28-30/09 0.1.40-49", "departure never locks / locks 94 s late", listOf("F01", "F04", "F09")),
@@ -295,7 +295,7 @@ internal object SimOracle {
                 if (win.size >= 4 && win.none { it.moving } && win.all { it.distanceM >= 8.0 })
                     out += f("UNLOCK_WHILE_LOITERING", e, "unlock at %.1f m while standing there".format(e.distanceM))
             }
-            // The key went to sleep with the phone at the car (field 10/10 16:47: the car then no
+            // The key went to sleep with the phone at the car (field: the car then no
             // longer recognised the phone lying in it).
             if (e.kind == "SECURITY_SLEEP" && e.distanceM <= 2.0 &&
                 samples.filter { it.atMs in (e.atMs - 30 * 60_000L)..e.atMs }.any { it.distanceM > 2.0 })
@@ -310,7 +310,7 @@ internal object SimOracle {
         }
         // Alarm hygiene: one alarm per episode, and it stops once the car is locked or the user is back.
         val alarms = ev.filter { it.kind == "ALARM" }
-        // More often than every ~3 min (field 06/10: 12 alarms in 17 min).
+        // More often than every ~3 min (field: 12 alarms in 17 min).
         alarms.firstOrNull { a -> alarms.count { it.atMs in a.atMs until a.atMs + 600_000 } > 3 }?.let { a ->
             out += f("ALARM_SPAM", a, "${alarms.count { it.atMs in a.atMs until a.atMs + 600_000 }} alarms within 10 min") }
         for (a in alarms) {

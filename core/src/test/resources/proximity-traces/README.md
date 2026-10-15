@@ -1,24 +1,22 @@
-# Physical-car regression traces
+# Field-incident regression traces (synthetic)
 
-These compact traces are test fixtures derived from the user's complete field logs. They retain the
-observed ordering, RSSI direction and motion state needed by `FieldTraceRegressionTest`; they are not
-synthetic tuning curves.
+These compact series follow the course of field incidents seen with versions 0.1.24 to 0.1.36: the
+order of the phases, the motion state and the direction of the signal. They contain no recorded
+values: each series is rebuilt as a curve through a few anchor points of that course, with small
+fixed noise in between, and the time axis starts at 0. There are no times of day, dates, places or
+references to log files. `FieldTraceRegressionTest` replays them.
 
-| Fixture | Source log SHA-256 | Required invariant |
-|---|---|---|
-| `0.1.24-wrong-direction.csv` | `a92162254c9b305f43585143bb647a0ec71f47beb72a70328b1efcb953398c44` | Departure is never classified as arrival. |
-| `0.1.25-arrival-and-walk-away.csv` | `0f09b860ca905bfafa9956115055673db8d859debe78cd1a0f7dc922fc75f685` | Real approach unlocks and later departure locks. |
-| `0.1.26-close-stationary.csv` | `90e2512867e395ee7b7a711ba029b5f21ef6036ac5d8caa6ac1f9cd94a711839` | Door-range stationary arrival reaches the wire decision. |
-| `0.1.27-still-dip-then-stronger.csv` | `873cd9ebc83d6646600c91f9d6676a86aa18dc6ac307fe144d110943928487ff` | A transient RSSI dip/STILL state cannot erase qualified arrival. |
-| `0.1.28-arrival-late-10s.csv` | `7daa2baea64eb8c5ebc63123ca1d71cc42272ef1d5f7e68f1c446bd651ed73ac` | Presence at range must qualify before the user reaches the door. |
-| `0.1.28-status133-arrival.csv` | `cfc70a4a26248462a0ad3a7df8c317f092b32d6bf1dd1c02d1b18217c72b07dc` | GATT 133 may not lose arrival context or defer unlock until departure. |
-| `0.1.29-post-lock-rebound.csv` | `6b3c0c03c3f4171ccc8dc486c55d3264d94d64fa6540f149b3f6aa0168369e58` | A same-session RSSI rebound after confirmed lock must never emit unlock. |
-| `0.1.29-clean-post-lock.csv` | `aab6f2771ab8478607aafe73486391b664a0961d0adfefa930352b5fb608f9c8` | A clean fast departure remains locked without rearming arrival. |
-| `0.1.30-pending-unlock-dip.csv` | `5f41f677017b8aedb236173527b417caa54c50b95f3ab6618baa6c22a5357dd9` | A short arrival RSSI dip cannot cancel an in-flight unlock. |
-
-The second 0.1.30 trace (`3700182e5f866ad014877fb2d46b576ce4fec7a324660b9ac0c5d576341b17a6`)
-also gates `Status133RecoveryPolicyTest`: one early status 133 gets exactly one recent-route retry,
-then recovery falls back to a fresh presence scan.
-
-The source logs remain external because they total roughly 48 MB and contain unrelated device logcat.
-The hashes make the provenance independently checkable when a fixture is reviewed or regenerated.
+| Fixture | Required invariant |
+|---|---|
+| `0.1.24-wrong-direction.csv` | Departure is never classified as arrival. |
+| `0.1.25-arrival-and-walk-away.csv` | An approach unlocks and a later departure locks. |
+| `0.1.26-close-stationary.csv` | A stationary arrival at door range reaches the wire decision. |
+| `0.1.27-still-dip-then-stronger.csv` | A transient signal dip or STILL state cannot erase a qualified arrival. |
+| `0.1.28-arrival-late-10s.csv` | Presence at range must qualify before the user reaches the door. |
+| `0.1.28-status133-arrival.csv` | GATT 133 may not lose the arrival or defer the unlock until departure. |
+| `0.1.29-post-lock-rebound.csv` | A same-session signal rebound after a confirmed lock never unlocks. |
+| `0.1.29-clean-post-lock.csv` | A clean fast departure stays locked without rearming arrival. |
+| `0.1.30-pending-unlock-dip.csv` | A short arrival dip cannot cancel an unlock in flight. |
+| `0.1.35-manual-lock-wrong-direction.csv` | After a manual Lock, walking the wrong way never unlocks; the return does. |
+| `0.1.35-manual-lock-far-sleep-return.csv` | After a FAR/STILL pause the return unlocks before the door. |
+| `0.1.36-manual-lock-return-failed.csv` | After sleeping near the car the return unlocks before the door. |

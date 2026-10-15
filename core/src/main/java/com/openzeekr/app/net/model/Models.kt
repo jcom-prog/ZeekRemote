@@ -1110,7 +1110,7 @@ data class ElectricStatusVo(
      *  `timeToFullyCharged`). 0/absent when not charging or unknown. */
     val timeToFullyCharged: Int? = null,
 ) {
-    /** Trip computer 2 ("Rit 2") consumption: [averPowerConsumption] (field 10/10: 30.9, as the car).
+    /** Trip computer 2 ("Rit 2") consumption: [averPowerConsumption] (field: 30.9, as the car).
      *  Trip 1's consumption is not in the cloud status for this car (averTraPowerConsumption absent,
      *  no field held the car's 21.3), and a shared account gets no trip history (HTTP 401). */
     val trip2Consumption: Double? get() = averPowerConsumption?.toDoubleOrNull()?.takeIf { it > 0.0 }
@@ -1139,7 +1139,7 @@ data class ElectricStatusVo(
     /**
      * What kind of charge, only when the data proves it: "DC" for a DC session, "3-fase" at a
      * line-to-line voltage (>= 300 V) or above what one phase can carry (32 A x 230 V = 7.4 kW;
-     * field 10/10: 21.3 kW at a 22 kW post had been labelled "1-phase"), else null - at ~230 V and
+     * field: 21.3 kW at a 22 kW post had been labelled "1-phase"), else null - at ~230 V and
      * low power it may be 1 phase or 3 phases at low current.
      */
     val chargeKindLabel: String?

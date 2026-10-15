@@ -52,7 +52,7 @@ class DkLockController(
         }
         if (r == ControlResult.REJECTED) { Logx.w("lock", "$label rejected by the car"); return false }
         if (r == ControlResult.NOT_EXECUTED) {
-            // Received but the car did not report locked (field 05/10): the link is fine, try once more.
+            // Received but the car did not report locked (field test): the link is fine, try once more.
             r = runCatching { session.control(ctrl, ACK_TIMEOUT_MS) }.getOrElse { ControlResult.WRITE_FAILED }
             Logx.d("lock", "$label (retry) -> $r")
             return (r == ControlResult.CONFIRMED).also { if (it) onLockConfirmed() }

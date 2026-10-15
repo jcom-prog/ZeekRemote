@@ -9,7 +9,7 @@ class UnlockedSafetyNetsTest {
     private fun s(gen: Long, code: Int) = ObservedVehicleStatus(gen, code)
 
     @Test fun fieldShapeCarRelockedTwoMinutesAfterApproachUnlock() {
-        // 03/10: stale 3 just before the Unlock receipt, 1 right after, car relocked 2 min later.
+        // Field: stale 3 just before the Unlock receipt, 1 right after, car relocked 2 min later.
         // The "1" arrives ~20 ms BEFORE the Unlock receipt and must still count.
         val d = CarSelfLockDetector()
         assertEquals(CarSelfLockDetector.Event.NONE, d.observe(s(5, 3), 999_500L))          // before our Unlock: ignored
@@ -76,8 +76,8 @@ class UnlockedSafetyNetsTest {
     }
 
     @Test fun fieldShapeDriveSpeedLockThenUnlockOnParkingReArms() {
-        // 04/10 (0.2.0): Unlock by approach 18:32:40, the car locked while driving 18:36:47 (3),
-        // parked 18:59:53: 2, then 1. The self-lock handling calls onLockedByUs() as well.
+        // Field (0.2.0): Unlock by approach, the car locked while driving (3),
+        // then parked: 2, then 1. The self-lock handling calls onLockedByUs() as well.
         val d = CarSelfLockDetector()
         d.observe(s(8, 3), 0L)
         // Our own Unlock's early "1" (REOPENED, ignored by the controller once the receipt arms it).

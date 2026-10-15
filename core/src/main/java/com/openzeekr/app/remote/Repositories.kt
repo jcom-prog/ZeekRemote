@@ -169,7 +169,7 @@ class RemoteControlRepository(
                 val e = st.additionalVehicleStatus?.electricVehicleStatus
                 e?.trip2Consumption?.let { LastKnownTrip2.value = it }
                 // Raw charge readings (numbers only) to check the phase label against the post
-                // (field 10/10: 21.3 kW at a 22 kW post had been labelled "1-phase").
+                // (field: 21.3 kW at a 22 kW post had been labelled "1-phase").
                 val charge = "U=${e?.chargeUAct} I=${e?.chargeIAct} dcU=${e?.dcChargePileUAct} dcI=${e?.dcChargePileIAct}"
                 if (e?.chargingActive == true && charge != lastChargeRaw) {
                     lastChargeRaw = charge
@@ -751,7 +751,7 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
 
 /**
  * The last trip 2 ("Rit 2") consumption the cloud reported. The status leaves it out while the car
- * charges (field 10/10), so the home screen keeps showing this instead of "—" (process lifetime).
+ * charges (field test), so the home screen keeps showing this instead of "—" (process lifetime).
  */
 object LastKnownTrip2 {
     @Volatile var value: Double? = null

@@ -17,7 +17,7 @@ internal class ProximityDecisionPolicy(
     /**
      * How the walking approach route confirms the approach band (0.3.2). [UNBROKEN] holds it for
      * [APPROACH_CONFIRM_MS] without a single reading below it: at the 200 ms walking cadence three
-     * readings in a row. Field 14/10 18:31 (S24+ in the front trouser pocket, the usual carry): over
+     * readings in a row. Field (S24+ in the front trouser pocket, the usual carry): over
      * the last ~10 m the smoothed signal sat at the band edge and reached it twice for two readings,
      * each time followed by a 1-2 dB dip, so the car opened only at the door. [TWO_IN_A_ROW] and
      * [TWO_OF_THREE] (two of the latest three readings, without a FAR reading in between) accept that.
@@ -110,7 +110,7 @@ internal class ProximityDecisionPolicy(
     // A proven away-and-back round trip: the authenticated link dropped far from the car (out of
     // range) while the car was locked, so a later fresh session that comes up sustained strong-near
     // is a genuine return to the door - even when the reconnect completes without an offloaded
-    // presence approach (field 13/10 16:44: after a walk-away lock the link only re-established at
+    // presence approach (field: after a walk-away lock the link only re-established at
     // the door, standing still, and the connected-RSSI return was disabled because the departure
     // had ended the link). Sitting in or beside the car never drops the link out of range.
     private var awayRoundTripPending = false
@@ -216,8 +216,8 @@ internal class ProximityDecisionPolicy(
         if (presenceApproachAtMs != UNSET_MS) {
             presencePeakRssi = maxOf(presencePeakRssi, rssi)
             val improved = presencePeakRssi >= presenceEntryRssi + PRESENCE_RISE_DB
-            // 0.3.2: an entry already at the band proves no rise. Standing at the front door ~25 m
-            // away (simulator F24, field 09/10 12:59: entry -84, two readings of -82 opened the
+            // 0.3.2: an entry already at the band proves no rise. Standing at a door ~25 m
+            // away (simulator F24, field: entry -84, two readings of -82 opened the
             // car) is told apart from a genuine mid-range arrival (field 0.1.28 / 0.1.34: entries
             // of -82..-87 while walking up) by the step counter: while a live count shows the user
             // standing, such an entry needs the door level; walking or no live count keeps +4.
@@ -437,7 +437,7 @@ internal class ProximityDecisionPolicy(
         if (departureLinkEnded) return false // fresh offloaded presence owns this path
 
         // The car locked itself shortly after OUR approach unlock, before the user got in (field
-        // 09/10 12:59: unlocked as the user locked the front door ~25 m away, the car relocked
+        // Field: unlocked as the user locked a door ~25 m away, the car relocked
         // after 58 s, and at the door "stay locked after a self-lock" kept it shut). Walking up to
         // the door afterwards - a clear rise above the level at the self-lock, while moving - opens it again,
         // once. Sitting in the car or standing beside it gives no such rise and stays locked.
@@ -497,7 +497,7 @@ internal class ProximityDecisionPolicy(
                 departureSameLinkFarQualifiedAtMs = nowMs
             }
             // Back AT the car after a clear walk away, while moving: the stop below can be missed
-            // (field 04/10 10:25, 0.1.65: Lock, walk to 10 m (-98), turning round there gave only
+            // (field, 0.1.65: Lock, walk to 10 m (-98), turning round there gave only
             // 0.3 s STILL, back at the door at -62 and the car stayed locked). The level is the
             // strong-near boundary: turning round at 10 m peaked at -78..-81, never near it.
             // Activity Recognition can miss the short walk back entirely (STILL all the way): then
@@ -564,11 +564,11 @@ internal class ProximityDecisionPolicy(
             }
             // This route proves no real departure (a pause at <= the unlock level can be 10 m with
             // the body between phone and car), so the return must keep rising past where turning
-            // round at 10 m plateaus. Field 04/10 09:38 (0.1.64): manual Lock, walk to 10 m (-97
+            // round at 10 m plateaus. Field (0.1.64): manual Lock, walk to 10 m (-97
             // behind the body), stand, turn round: -82/-81 and no higher reopened the car at 10 m.
             // The 0.1.35 field return rose on through -80 to -77. After a proven clear departure
             // (>= 4 s at <= -92, see [tryRearmManualDeepFarReturn]) the 0.1.64 level stays: one
-            // reading at -82 (field 04/10 09:20: open at ~6 m).
+            // reading at -82 (field: open at ~6 m).
             val provenFar = manualDeepFarSeen
             val margin = if (provenFar) MANUAL_DEEP_RETURN_MARGIN_DB else MANUAL_MOTION_RETURN_MARGIN_DB
             val needed = if (provenFar) 1 else MANUAL_MOTION_RETURN_MIN_READINGS
@@ -584,7 +584,7 @@ internal class ProximityDecisionPolicy(
             return true
         } else {
             // After an automatic Lock only the strict routes reopen: the deep-far return above or
-            // the car itself. Field 04/10 22:06 (0.2.1): auto Lock at home, walking away indoors
+            // the car itself. Field (0.2.1): auto Lock, walking away indoors
             // (-93..-99), a 1.5 s peak to -80 from ~15 m crossed the old arrival edge (-85, moving)
             // and reopened the car behind the user. The same at-car level as after a manual Lock.
             manualLowestRssi = minOf(manualLowestRssi, rssi)
@@ -625,7 +625,7 @@ internal class ProximityDecisionPolicy(
      * already proved physical separation (it dropped far from the car); the only thing left to
      * verify is that the phone is now genuinely back at the door. Require a sustained strong-near
      * run; any reading back out of the near band resets it. A slow reconnect that completes only at
-     * the door, standing still, still opens the car - the exact field 16:44 failure.
+     * the door, standing still, still opens the car - the exact field failure.
      * Plan H2 (0.3.1): in a back pocket the door reads -76..-81, never strong-near, and the motion
      * sensor says STILL after the walk back (simulator F28: the car stayed locked at the door). When
      * the step counter shows the walk back since the far loss ([AWAY_RETURN_MIN_STEPS]), a sustained
@@ -646,7 +646,7 @@ internal class ProximityDecisionPolicy(
 
     /**
      * A return after a Lock (own or the car's self-lock), recognised from the signal alone. Field
-     * 03/10 16:22 (0.1.60): after the car locked itself the user walked to ~15 m (-92..-98 dBm) and
+     * Field (0.1.60): after the car locked itself the user walked to ~15 m (-92..-98 dBm) and
      * back; Activity Recognition said STILL for most of the walk both ways, the stand-still/motion-edge
      * route below voided itself at ~10 m and the car stayed locked at the door.
      * Departure: consistently clearly far, at least [MANUAL_DEEP_FAR_MARGIN_DB] beyond the unlock
@@ -708,7 +708,7 @@ internal class ProximityDecisionPolicy(
         }
         if (manualDeepReturnSinceMs == UNSET_MS || gap) { manualDeepReturnSinceMs = nowMs; manualDeepReturnReadings = 0 }
         manualDeepReturnReadings++
-        // The 1 s linked-watch cadence runs 988-1018 ms apart (GATT read time): field 03/10 19:57
+        // The 1 s linked-watch cadence runs 988-1018 ms apart (GATT read time): field 
         // (0.1.63) two readings of -81/-82 at ~6 m were 995 ms apart, were refused, and the car
         // opened only at the door. The span is "about a second", not "at least 1000 ms".
         return manualDeepReturnReadings >= MANUAL_DEEP_RETURN_MIN_READINGS &&
@@ -1031,7 +1031,7 @@ internal class ProximityDecisionPolicy(
         // by ~1.35 s. Keep the two-sample confirmation, but allow readiness at the configured Far
         // threshold; commands still cannot run before SESSION_READY.
         // 0.2.6: right after the wake/connect, two readings 4 dB inside the Far threshold. Field
-        // 09/10 12:59: the link came up as the user locked the front door ~25 m away and noise
+        // Field: the link came up as the user locked a door ~25 m away and noise
         // just over the threshold opened the car 0.2 s after connecting. The captured 0.1.28
         // arrival (-83..-87, -82 twice during the handshake) still qualifies in time.
         const val PRESENCE_READY_MARGIN_DB = 4
@@ -1048,7 +1048,7 @@ internal class ProximityDecisionPolicy(
         const val ABORTED_ARRIVAL_FAR_MS = 1_500L
         const val ABORTED_ARRIVAL_DROP_DB = 8
         const val ABORTED_ARRIVAL_FAR_MARGIN_DB = 4
-        // 0.2.14 C (user 13/10: the Lock takes too long): confirm a receding departure sooner. The
+        // 0.2.14 C (Field: the Lock takes too long): confirm a receding departure sooner. The
         // independent GNSS position proof and the downstream WalkAwayLockConfirmation still gate the
         // actual Lock, so a shorter RSSI sustain only brings the candidate forward, never past the
         // "never lock while near" guard.
@@ -1095,7 +1095,7 @@ internal class ProximityDecisionPolicy(
         const val MANUAL_AT_CAR_STILL_MIN_READINGS = 4
         // Away-and-back reopen (physical separation already proven by the far link loss): a sustained
         // strong-near run at the door. STILL needs more readings because a STILL reconnect at the
-        // door is exactly the ambiguous field 16:44 case.
+        // door is exactly the ambiguous field case.
         const val AWAY_RETURN_MOVING_READINGS = 2
         const val AWAY_RETURN_STILL_READINGS = 4
         /** H2: steps since the far link loss that prove the walk back (~10 m). */

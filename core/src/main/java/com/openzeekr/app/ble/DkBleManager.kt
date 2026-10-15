@@ -468,8 +468,8 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
             val matchesMfr = (rec?.manufacturerSpecificData?.indexOfKey(DK_MFR_COMPANY_ID) ?: -1) >= 0
             if (matchesName || matchesUuid || matchesSvcData || matchesMfr) {
                 // Every Zeekr advertises these identifiers; once we know our own key module's name,
-                // another car nearby is skipped instead of costing a doomed handshake (field 12/10).
-                // An advert at the edge of range cannot carry a connection (field 13/10: every such
+                // another car nearby is skipped instead of costing a doomed handshake (field test).
+                // An advert at the edge of range cannot carry a connection (field: every such
                 // attempt ended in status 133). Keep scanning; the next, stronger advert connects.
                 if (WeakConnectGate.tooWeak(result.rssi)) {
                     if (weakAdvertLogged.add(addr)) Logx.d("ble", "weak advert $addr rssi=${result.rssi} - waiting for a stronger one")
@@ -485,7 +485,7 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
                 }
                 // Only advertisers that match the car are logged (once per MAC per scan). Logging
                 // every headset, TV and watch around filled the phone log within minutes (field
-                // 12/10: the 16:33 key problem had already scrolled out of the log at 16:48).
+                // test: a key problem had already scrolled out of the log 15 min later).
                 if (seenAdvertisers.add(addr)) {
                     val svcData = rec?.serviceData?.keys?.joinToString { it.uuid.toString() } ?: "none"
                     Logx.d("ble", "adv $addr rssi=${result.rssi} name=${name ?: "?"} " +
@@ -589,7 +589,7 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
      * Arm a HARDWARE-OFFLOADED presence scan: the Bluetooth controller watches for the car's
      * advert (same [carScanFilters]) with the CPU asleep and wakes us via [BleScanReceiver] on
      * ALL_MATCHES. This is the zero-CPU idle path — no wakelock, no continuous foreground scan —
-     * for "parked at home for hours". ALL_MATCHES is used because FIRST_MATCH can remain latched
+     * for "parked for hours". ALL_MATCHES is used because FIRST_MATCH can remain latched
      * across a long sleep/re-arm cycle and fail to wake the app when the user returns.
      *
      * Idempotent. Returns true if armed (or already armed).

@@ -228,7 +228,7 @@ fun VehicleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = M
         val n = if (lockIt) "Lock" else "Unlock"
         if (!lockIt) { fire(n) { deps.vehicleControl.send(Command.UNLOCK) }; return }
         // A Lock is only "✓" when the car itself reported locked over the key; a cloud Lock is
-        // checked afterwards (field 05/10 16:08: the tile said "Locked", the car stayed open).
+        // checked afterwards (field: the tile said "Locked", the car stayed open).
         snackbar("$n…")
         scope.launch {
             when (val r = deps.vehicleControl.send(Command.LOCK)) {

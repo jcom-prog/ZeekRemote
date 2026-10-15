@@ -9,13 +9,13 @@ import java.io.File
  * Regression gate (fase 0, 14/10). Runs both suites on the seeds of the committed baseline and fails
  * when any SAFETY finding occurs in more runs than the baseline allows, and (0.3.2) when a COMFORT
  * finding - a late or missing unlock, a lock that does not come - grows beyond a wider allowance: the
- * late unlock of 14/10 18:31 was a comfort finding that no gate looked at. The owner's targets are
+ * late unlock seen in the field was a comfort finding that no gate looked at. The owner's targets are
  * printed with the table. Only runs with SIM_GATE=1 (CI step), so ordinary unit-test runs stay fast.
  *
  *   SIM_GATE=1 ./gradlew :core:testDebugUnitTest --tests "com.openzeekr.app.ble.sim.SimGateTest"
  *   SIM_GATE=1 SIM_GATE_WRITE=1 ...   rewrites the baseline after an intended change (ratchet down)
  *   (CI and the baseline use SIM_LEARN_VISITS=20 SIM_PLATEAU_P=0.15: the self-calibration learns as
- *   on the phone, and 15 % of the walks to the car end flat as on 14/10 18:31)
+ * on the phone, and 15 % of the walks to the car end flat as in the field)
  */
 class SimGateTest {
     private val baselineFile = File("src/test/resources/sim-baseline.json")

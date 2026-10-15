@@ -21,7 +21,7 @@ import java.io.File
  *   SIM_APPROACH  unbroken (0.3.1) | two_in_a_row | two_of_three - walking-approach confirmation (0.3.2)
  *   SIM_KEEP_LEARN_LOG=1  keep the learning period in events and traces (debugging)
  *   SIM_TRACE_CODES=A,B   traces only for these finding codes; SIM_TRACE_SAMPLES=1 adds the 1 s samples
- *   SIM_PLATEAU_P  chance per walk up to the car of a flat final approach (field 14/10 18:31; default 0)
+ * SIM_PLATEAU_P chance per walk up to the car of a flat final approach (field; default 0)
  *   SIM_KEYED=0    sequential noise streams instead of the time-keyed noise (default keyed)
  */
 class WholeAppSimulationTest {
@@ -99,7 +99,7 @@ internal object SimReport {
 
     /**
      * Absolute targets (0.3.2): what the owner should notice, not only "better than the last version".
-     * Field 14/10: the comparison-only view hid that about 1 in 9 front-pocket approaches opened late.
+     * Field: the comparison-only view hid that about 1 in 9 front-pocket approaches opened late.
      */
     data class Target(val name: String, val value: String, val goal: String, val met: Boolean)
 

@@ -21,7 +21,7 @@ package com.openzeekr.app.ble
  *    recede from the level at that point, not from the at-the-car level. Walking back to the car
  *    with a flat deep signal (stress F08/F32) otherwise reads exactly like leaving. A stop alone
  *    is no turn point: the motion sensor reports walking up to 18 s late, so a 4.5 s stop at a
- *    garden gate would look like one (calibrated F22).
+ *    gate would look like one (calibrated F22).
  *
  * The strong-near boundary is never weaker than [minStrongGapDb] above the lock threshold, so a
  * preset whose lock threshold sits close to -72 dBm still has a meaningful near band.
@@ -115,15 +115,15 @@ internal class BleDepartureEvidence(
             if (rawRssi < strongNearRssi && smoothedRssi <= lockThreshold) turnRefSmoothed = smoothedRssi
         }
 
-        // Very deep far alone, without steps or an observed arrival (field 05/10, 0.2.2/0.2.3):
-        // with the screen off the S24+ step detector reported 2 steps for a whole walk away
-        // (16:07), and a pass-by unlock at ~10 m never saw the car up close (17:18); GNSS could
+        // Very deep far alone, without steps or an observed arrival (field, 0.2.2/0.2.3):
+        // with the screen off the S24+ step detector reported 2 steps for a whole walk away,
+        // and a pass-by unlock at ~10 m never saw the car up close; GNSS could
         // not confirm either, so the car stayed open. At the car, even in a back pocket behind the
         // body, the field never read below about -86; a continuously observed run at
         // [veryDeepMarginDb] below the lock threshold for [veryDeepMs] is not standing at the car.
         // Only while walking: standing at the boot behind the car body with the phone in a back
         // pocket can read this deep for a while (simulator F06), walking that long cannot. A short
-        // stop on the way does not restart the window (field 05/10 20:43: locking the garden gate
+        // stop on the way does not restart the window (field: locking a gate
         // ~4.5 s, opening the back door ~1 s, 0.2.4 confirmed only 12 s after the last stop, when
         // the link was too weak for the Lock); a stop of more than [veryDeepStillToleranceMs] does.
         val deepNow = rawRssi < strongNearRssi && smoothedRssi <= lockThreshold - veryDeepMarginDb
@@ -144,13 +144,13 @@ internal class BleDepartureEvidence(
             return decide("confirmed")
         }
 
-        // Motion sensor stuck at STILL during a real walk away (field 09/10 13:30, screen off: STILL
+        // Motion sensor stuck at STILL during a real walk away (field, screen off: STILL
         // for 40 s while the signal fell -64 -> -104 in ~30 s; no Lock, the link dropped). Allowed
         // only for a GRADUAL fall - at least [gradualDescentMs] from the lock threshold down to the
         // very-deep level, as walking produces - and then [veryDeepMs] at [stillDeepMarginDb] or
         // deeper. Standing at the boot the body drops the signal in one step (simulator F06: about
         // 3.5 s), which never qualifies.
-        // A short sampling gap (the post-unlock fast window ending, 13:30:23-29) keeps the descent
+        // A short sampling gap (the post-unlock fast window ending) keeps the descent
         // clock; a long one does not.
         val longGap = previous != UNSET && nowMs - previous > MAX_DESCENT_GAP_MS
         if (longGap || smoothedRssi > lockThreshold) belowLockSinceMs = UNSET

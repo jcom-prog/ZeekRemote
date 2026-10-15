@@ -3,7 +3,7 @@ package com.openzeekr.app.ble
 /**
  * Diagnose (0.3.2): when the step count actually reaches the app while the car is heard.
  *
- * Field 14/10 18:31-18:33 (S24+, front trouser pocket): the self-calibration did not learn the
+ * Field (S24+, front trouser pocket): the self-calibration did not learn the
  * arrival and counted "11 steps" for a ~20 s walk away. The count is the larger of the step detector
  * and the sensor hub's step counter (flushed at most once a second); if the hub hands over its
  * steps late or in batches, a walk looks like a stop followed by a jump. This trace shows that

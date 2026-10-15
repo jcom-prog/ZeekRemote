@@ -48,7 +48,7 @@ internal object DepartureSafetyEvidence {
     /**
      * @param bleCorroborated the key link itself shows a sustained clear separation (see
      *  ProximityController.departureBleCorroborated). It replaces the step count, which the S24+
-     *  does not deliver with the screen off (field 03/10, simulator): the GNSS pair must still be
+     * does not deliver with the screen off (field, simulator): the GNSS pair must still be
      *  clear of the car by twice the reported accuracy, so a stationary GNSS drift alone, or BLE
      *  body shadow alone, never confirms.
      */

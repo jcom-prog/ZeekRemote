@@ -4,7 +4,7 @@ package com.openzeekr.app.ble
  * Which lock warnings exist and which of them must be heard.
  *
  * The user's screen is normally off while walking away, so a silent notification is not a warning
- * (field test 0.1.52, 02/10). Only situations where an automatic Lock was expected — the user is
+ * (field test 0.1.52). Only situations where an automatic Lock was expected — the user is
  * leaving or has left — but the car's Lock is not confirmed sound an audible alarm. Situations in
  * which the user is at the car, or has just operated the app, stay silent. A reminder at every
  * unlock is not posted at all.
@@ -33,7 +33,7 @@ internal object LockAlertPolicy {
         LOCATION_REFERENCE_UNAVAILABLE,
         /**
          * The user's Lock reached the car but the car did not lock (no "locked" status from the car
-         * and no fresh cloud report): field 05/10 16:08 and 16:18, the tile said "Locked", the car
+         * and no fresh cloud report): field, the tile said "Locked", the car
          * stayed open.
          */
         LOCK_NOT_EXECUTED,
@@ -101,7 +101,7 @@ internal object LockAlertPolicy {
      * One alarm per unresolved situation: a second audible event while the car is still open and
      * the user still away only updates the visible record (field test 0.1.54 part B: two alarms 22 s
      * apart), and a reminder sounds at most every [ALARM_REMINDER_MS] - also after the alarm timed out
-     * or was dismissed (field 06/10 14:33-15:30, incident #20: ~12 alarms 33 s apart; plan K7).
+     * or was dismissed (field, incident #20: ~12 alarms 33 s apart; plan K7).
      * A resolved situation (car locked, user back at the car, new unlock) resets it: [lastAlarmAtElapsedMs] 0.
      */
     @Suppress("UNUSED_PARAMETER")

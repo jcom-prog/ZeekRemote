@@ -10,7 +10,7 @@ import org.junit.Test
 
 class WeakConnectGateTest {
     @Test fun `edge-of-range adverts never start a connection (field 13-10 shape)`() {
-        // Phone at home, car outside: presence hits at -98..-100, every connect ended in 133.
+        // Phone car outside: presence hits at -98..-100, every connect ended in 133.
         listOf(-100, -99, -98, -97, -96, -95).forEach {
             assertTrue("$it", WeakConnectGate.tooWeak(it))
             assertEquals(IGNORE, WeakConnectGate.onPresence(it, moving = false))

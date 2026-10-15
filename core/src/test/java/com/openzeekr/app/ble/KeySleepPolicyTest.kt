@@ -8,7 +8,7 @@ class KeySleepPolicyTest {
     private fun still(ms: Long): (Long) -> Boolean = { it <= ms }
 
     @Test fun phoneLyingInTheCarKeepsTheKeyAwakeUpTo30Minutes() {
-        // Field 10/10 16:44-16:47: -46..-49 in the car, slept after 2 min, car no longer found it.
+        // Field: -46..-49 in the car, slept after 2 min, car no longer found it.
         assertTrue(KeySleepPolicy.atCar(true, -48))
         assertFalse(KeySleepPolicy.maySleep(still(29 * 60_000L), atCar = true, sinceAtCarMs = 0L))
         assertTrue(KeySleepPolicy.maySleep(still(30 * 60_000L), atCar = true, sinceAtCarMs = 0L))

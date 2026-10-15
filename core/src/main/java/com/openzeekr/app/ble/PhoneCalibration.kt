@@ -191,7 +191,7 @@ internal class PhoneCalibration(
 
     /**
      * Diagnose (0.3.2): a stop where the signal rose like an arrival but (almost) no steps were
-     * counted - the step count arrived late or not at all (field 14/10 18:31: no line at all).
+     * counted - the step count arrived late or not at all (field: no line at all).
      */
     private fun riseWithoutSteps(stopAtMs: Long, steps: Long): String? {
         val atCar = meanBetween(stopAtMs + 500L, stopAtMs + 3_500L) ?: return null

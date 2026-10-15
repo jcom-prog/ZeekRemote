@@ -2,7 +2,7 @@ package com.openzeekr.app.util
 
 /**
  * The top-bar title: the car's name followed by the installed app version, so the version shown
- * always matches what is installed (user 03/10: it was typed into the car name by hand and went
+ * always matches what is installed (Field: it was typed into the car name by hand and went
  * stale with every install). A version the user typed at the end of the name is dropped from the
  * display; renaming edits only the name.
  */

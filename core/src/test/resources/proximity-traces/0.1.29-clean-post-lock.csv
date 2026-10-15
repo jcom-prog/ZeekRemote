@@ -1,15 +1,15 @@
-# elapsed_ms,rssi,moving
+# Synthetic series: the course of field incident 0.1.29, no recorded values or times. Regression: 
 0,-96,true
-200,-97,true
-400,-98,true
+200,-95,true
+400,-97,true
 600,-97,true
-800,-95,true
-1000,-91,true
-1200,-89,true
+800,-94,true
+1000,-92,true
+1200,-90,true
 1400,-87,true
-1600,-88,true
+1600,-89,true
 1800,-90,true
-2000,-91,true
-2200,-92,true
+2000,-93,true
+2200,-93,true
 2400,-94,true
 2600,-96,true

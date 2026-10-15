@@ -10,7 +10,7 @@ class RelockRecoveryEvidenceTest {
         assertTrue(RelockRecoveryEvidence.confirmsRelock(
             CloudLockSnapshot(true, 150_000), CloudLockSnapshot(true, 150_000),
             unlockedAtMs = 100_000, nowMs = 160_000))
-        // The failed 19:13 return was more than an hour after the 18:06 unlock.
+        // The failed return came more than an hour after the unlock.
         assertTrue(RelockRecoveryEvidence.confirmsRelock(
             CloudLockSnapshot(true, 220_000), CloudLockSnapshot(true, 220_000),
             unlockedAtMs = 100_000, nowMs = 4_200_000))

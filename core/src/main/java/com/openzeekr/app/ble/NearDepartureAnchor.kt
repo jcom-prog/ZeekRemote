@@ -35,7 +35,7 @@ internal class NearDepartureAnchor(private val unlockedAtMs: Long) {
 
     companion object {
         const val WINDOW_MS = 120_000L
-        // At the door with the phone in a trouser pocket the field read -78..-81 (03/10); -72 left
+        // At the door with the phone in a trouser pocket the field read -78..-81; -72 left
         // the GNSS reference (and so every GNSS departure proof) unavailable in that common case.
         // -79 is still the last ~2-3 m to the car; the departure proof keeps its 2x-accuracy margin.
         private const val STRONG_NEAR_RSSI = -79

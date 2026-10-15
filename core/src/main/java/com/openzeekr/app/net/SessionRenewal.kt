@@ -12,7 +12,7 @@ import okhttp3.Interceptor
 import okhttp3.Response
 
 /**
- * When the cloud sign-in is renewed (field 03/10: the TSP bearer expired after about two weeks and
+ * When the cloud sign-in is renewed (field: the TSP bearer expired after about two weeks and
  * every cloud call failed with `079012 Token expired`; the only way back was Sign out, which also
  * revokes the digital key).
  *

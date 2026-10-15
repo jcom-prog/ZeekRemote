@@ -36,8 +36,8 @@ class DkAdvertParserTest {
 
     @Test
     fun `extracts random from the exact deep-sleep car advert shape`() {
-        // Redacted-value reconstruction of the 0x06FE packet shape captured in
-        // 0.1.20-deep-sleep-only.log. This is the packet delivered by the offloaded presence scan;
+        // Redacted-value reconstruction of the 0x06FE packet shape seen in a
+        // 0.1.20 field log. This is the packet delivered by the offloaded presence scan;
         // it must be sufficient for a direct connection without a second foreground scan.
         val random = byteArrayOf(0x13, 0x73, 0xf2.toByte(), 0x9c.toByte(), 0x35, 0x9a.toByte(), 0x68, 0x40)
         val manufacturerData = byteArrayOf(

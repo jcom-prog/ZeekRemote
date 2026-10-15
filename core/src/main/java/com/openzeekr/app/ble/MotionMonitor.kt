@@ -71,7 +71,7 @@ class MotionMonitor(context: Context) : ProximityMotion {
     private val nonWakeStepDetector: Sensor? =
         sensors?.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)?.takeUnless { it.isWakeUpSensor }
     // The sensor hub's pedometer keeps counting while the processor sleeps; the S24+ step DETECTOR
-    // does not deliver screen-off (field 14/10 11:30). Read on demand via flush (see [observedSteps]).
+    // does not deliver screen-off (field test). Read on demand via flush (see [observedSteps]).
     private val stepCounter: Sensor? = sensors?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
     private val tally = StepTally()
     @Volatile private var stepCounterActive = false

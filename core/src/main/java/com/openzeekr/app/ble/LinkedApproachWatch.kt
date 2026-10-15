@@ -3,7 +3,7 @@ package com.openzeekr.app.ble
 /**
  * Keeps the approach observable while the key link is up and the car is still locked.
  *
- * Field test 02/10 19:53–19:56 (0.1.54, phone in trouser pocket, stop-and-go walk with 5 s stops):
+ * Field test (0.1.54, phone in trouser pocket, stop-and-go walk with 5 s stops):
  * the session was READY at 63 m, Activity Recognition kept reporting STILL for two minutes while
  * the user walked to the car and stood there ~20 s, and FAR sleep read no RSSI in between (one
  * safety read at 60 s). At the car the pocketed phone read only -80..-82 dBm, which the distance
@@ -35,7 +35,7 @@ internal object LinkedApproachWatch {
 
     /**
      * Start (elapsed ms) of the current watch without MOVING; 0 = not watching. The watch only counts
-     * while the link is READY and the car is locked: field 03/10 17:05–17:09 (0.1.61) it had started
+     * while the link is READY and the car is locked: field (0.1.61) it had started
      * while the car was still unlocked and survived a link loss, so after the car's self-lock and a
      * walk to ~15 m the [WATCH_MAX_MS] cap was already spent when the link came back, and the walk back
      * went unobserved for 16 s. The caller restarts it at every unlock and lock, and after a real

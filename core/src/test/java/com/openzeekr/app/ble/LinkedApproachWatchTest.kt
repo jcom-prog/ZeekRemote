@@ -7,9 +7,9 @@ import org.junit.Test
 
 class LinkedApproachWatchTest {
     @Test fun pocketedPhoneAtTheCarKeepsTheApproachObservable() {
-        // 02/10 19:55: -80..-82 dBm at the car, AR still reporting STILL, car locked, link READY.
+        // Field: -80..-82 dBm at the car, AR still reporting STILL, car locked, link READY.
         assertTrue(LinkedApproachWatch.holdAwake(sessionReady = true, unlocked = false, wakesOnSteps = false, smoothedRssi = -82))
-        // The safety read at 19:54:58 (-94/-98 smoothed) already sits inside / at the edge of the band.
+        // The safety read (-94/-98 smoothed) already sits inside / at the edge of the band.
         assertTrue(LinkedApproachWatch.holdAwake(true, false, false, -96))
     }
 
@@ -35,9 +35,9 @@ class LinkedApproachWatchTest {
     }
 
     @Test fun theWatchClockCountsOnlyWhileLinkedAndLocked() {
-        // 03/10 17:05:56 (0.1.61): STILL at the unlocked car must not start the clock.
+        // Field (0.1.61): STILL at the unlocked car must not start the clock.
         assertEquals(0L, LinkedApproachWatch.watchStart(0L, 1_000L, sessionReady = true, unlocked = true, moving = false))
-        // Car locked (self-lock 17:07:53): the clock starts now ...
+        // Car locked (self-lock): the clock starts now ...
         assertEquals(5_000L, LinkedApproachWatch.watchStart(0L, 5_000L, true, false, false))
         assertEquals(5_000L, LinkedApproachWatch.watchStart(5_000L, 9_000L, true, false, false))
         // ... and stops on MOVING, an unlock or a link that is not READY.
@@ -47,7 +47,7 @@ class LinkedApproachWatchTest {
     }
 
     @Test fun onlyARealLinkAbsenceRefillsTheWindowAndOnlyAFewTimes() {
-        // 03/10 17:08:50-17:09:13: security sleep, ~23 s without a link, then the walk back.
+        // Field: security sleep, ~23 s without a link, then the walk back.
         assertTrue(LinkedApproachWatch.refillAllowed(linkDownForMs = 23_000L, refillsUsed = 0))
         // A 1 s flap (forced reconnect) never refills.
         assertFalse(LinkedApproachWatch.refillAllowed(1_000L, 0))

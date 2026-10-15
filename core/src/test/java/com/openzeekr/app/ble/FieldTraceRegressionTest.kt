@@ -5,7 +5,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Mandatory replay gates derived from the physical-car logs for 0.1.24 through 0.1.30. */
+/** Mandatory replay gates for the field incidents of 0.1.24 to 0.1.36, on synthetic series that follow
+ *  their course (no recorded values or times; see resources/proximity-traces/README.md). */
 class FieldTraceRegressionTest {
     private data class Sample(
         val elapsedMs: Long,
@@ -113,7 +114,7 @@ class FieldTraceRegressionTest {
         samples.forEach { sample ->
             val unlock = policy.shouldUnlock(sample.elapsedMs, sample.rssi, sample.moving, UNLOCK_RSSI)
             if (sample.elapsedMs < 51_099L) {
-                assertFalse("17:06:45 RSSI rebound while Motion is stale MOVING", unlock)
+                assertFalse("RSSI rebound while Motion is stale MOVING", unlock)
             } else if (unlock && firstReturn == null) {
                 firstReturn = sample.elapsedMs
                 policy.onUnlockConfirmed(sample.elapsedMs)
@@ -124,7 +125,7 @@ class FieldTraceRegressionTest {
                         ProximityDecisionPolicy.ArmedDecision.LOCK)
             }
         }
-        assertTrue("real return after 17:07:01 STILL -> MOVING must unlock", firstReturn != null)
+        assertTrue("real return after STILL -> MOVING must unlock", firstReturn != null)
         assertTrue("return must be recognized before reaching the door", firstReturn!! < 60_000L)
     }
 
@@ -144,7 +145,7 @@ class FieldTraceRegressionTest {
         }
         assertTrue("real return after a 20s FAR/STILL sleep gap must unlock", firstReturn != null)
         // 0.1.65: one sample later (-77 instead of -80): the motion-gated return must rise past
-        // the 10 m turn-round plateau (field 04/10 09:38). The trace still rises further.
+        // the 10 m turn-round plateau (field test). The trace still rises further.
         assertTrue("captured return must unlock before door range", firstReturn!! <= 55_499L)
     }
 

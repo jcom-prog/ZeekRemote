@@ -24,7 +24,7 @@ class LockExecutionWatchTest {
     }
 
     @Test fun field0510ReceivedButNeverLockedIsNotExecuted() = runTest {
-        // 05/10 16:08:55: 0x0111, then status pushes 33 s later still "open".
+        // Field: 0x0111, then status pushes 33 s later still "open".
         val w = LockExecutionWatch(); w.onStatus(1)
         val armed = w.arm()
         val result = async { w.awaitExecuted(armed, 3_000L) }
