@@ -35,8 +35,9 @@ enum class AppIcon(val design: AppBranding.Design, val label: String, val iconRe
 
     companion object {
         /** The design of the manifest's application icon (`<application android:icon>`): the icon in
-         *  the notification card and in Android's app settings, whatever the launcher shows. */
-        val APPLICATION_ICON = SLEUTEL
+         *  the notification card and in Android's app settings, whatever the launcher shows. Keep it
+         *  equal to the manifest (CI checks both). */
+        val APPLICATION_ICON = PROFIEL
 
         fun current(context: Context): AppIcon = of(AppBranding.current(context))
 

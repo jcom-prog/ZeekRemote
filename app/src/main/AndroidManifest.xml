@@ -8,12 +8,13 @@
 
     <!-- The application icon is what Android shows outside the launcher: the icon in Samsung's
          notification card, Settings > Apps, the share sheet. Unlike the launcher aliases below it
-         cannot change at run time, so it is one fixed design (AppIcon.APPLICATION_ICON, 0.3.3). -->
+         cannot change at run time, so it is one fixed design: "Profiel" (AppIcon.APPLICATION_ICON,
+         user's choice 15/10). The launcher icon stays free to pick in Settings > App-icoon. -->
     <application
         android:name=".App"
         android:allowBackup="false"
-        android:icon="@mipmap/ic_launcher_sleutel"
-        android:roundIcon="@mipmap/ic_launcher_sleutel"
+        android:icon="@mipmap/ic_launcher_profiel"
+        android:roundIcon="@mipmap/ic_launcher_profiel"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.OpenZeekr">

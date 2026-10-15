@@ -55,6 +55,7 @@ on:
       - zeekremote-0.3.0-safety
       - zeekremote-0.3.1-calibration
       - zeekremote-0.3.2-approach
+      - zeekremote-0.3.3-icons
 
 permissions:
   contents: read
@@ -230,6 +231,14 @@ jobs:
           grep -Fq 'const val MIN_CAR_DB = -80.0' core/src/main/java/com/openzeekr/app/ble/PhoneCalibration.kt
           grep -Fq 'screenOn = { (appContext.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager)?.isInteractive })' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'walk_back|none)' core/src/main/java/com/openzeekr/app/util/ProximityDiagnosticJournal.kt
+          # 0.3.3: five photo icons; the notification card shows the fixed application icon "Profiel".
+          awk '/<application/{f=1} f && /android:icon=/{print; exit}' app/src/main/AndroidManifest.xml | grep -Fq '"@mipmap/ic_launcher_profiel"'
+          grep -Fq 'val APPLICATION_ICON = PROFIEL' app/src/main/java/com/openzeekr/app/AppIcon.kt
+          grep -Fq 'PROFIEL("LauncherProfiel", R.drawable.ic_stat_profiel),' core/src/main/java/com/openzeekr/app/util/AppBranding.kt
+          test "$(grep -c 'android:name=".Launcher' app/src/main/AndroidManifest.xml)" = 11
+          # Exactly one launcher alias is enabled by the manifest (LauncherDefault), so an update never adds a second entry.
+          test "$(awk '/<activity-alias/{a=1} a && /android:enabled="true"/{n++} /<\/activity-alias>/{a=0} END{print n+0}' app/src/main/AndroidManifest.xml)" = 1
+          awk '/android:name=".LauncherDefault"/{f=1} f && /android:enabled=/{print; exit}' app/src/main/AndroidManifest.xml | grep -Fq 'android:enabled="true"'
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -251,7 +260,8 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='126' versionName='0.3.2-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='127' versionName='0.3.3-work'"
+          printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
           sha256sum "$APK"
