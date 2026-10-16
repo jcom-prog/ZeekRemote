@@ -40,6 +40,7 @@ import kotlin.math.cos
 import kotlin.math.ln
 import kotlin.math.log10
 import kotlin.math.max
+import kotlin.math.exp
 import kotlin.math.sqrt
 
 /*
@@ -158,13 +159,21 @@ internal data class SimPhysics(
      * unlock threshold - where the path-loss fit gives ~-93.5). 0 = off. SIM_SPOT_DB.
      */
     val spotDb: Double = env("SIM_SPOT_DB", 0.0),
+    /**
+     * 0.3.12 (field 16/10, phone in the hand): walking away the signal wobbled 1.9-2.4 dB at the 1 s scale
+     * (arm swing, body shadow; single short bumps), walking back 1.0; pocket walks 0.6-0.9 and
+     * standing 0.8-2.0 match the time fade. Distance-correlated, only while walking with the phone in
+     * the hand, full size facing away and half facing the car. 0 = off. SIM_HAND_WOBBLE_DB.
+     */
+    val handWobbleDb: Double = env("SIM_HAND_WOBBLE_DB", 0.0),
 ) {
     fun describe() = "%s phone%+.1fdB slope%.1f fade%.1f gnss%s ttff%.0fs hub%.0fs warm%.0f self%.0fs refuse%.2f cloud%.0fs/fail%.2f/lag%.0fs".format(
         name, phoneOffsetDb, pathSlope, fadeSigmaDb, gnssAccMedianM?.let { "%.1fm".format(it) } ?: "-", gnssTtffMs / 1000.0,
         hubLagMs / 1000.0, stepWarmup, selfLockMs / 1000.0, keyLockRefuseP, cloudLockDelayMs / 1000.0, cloudFailP, cloudStatusLagMs / 1000.0) +
         (if (hubNone) " counter-none" else if (hubFreezeMs > 0) " counter-silent%.0fs".format(hubFreezeMs / 1000.0) else "") +
         (if (lateStepsMaxMs > 0) " steps-late%.0f-%.0fs".format(lateStepsMinMs / 1000.0, lateStepsMaxMs / 1000.0) else "") +
-        (if (spotDb != 0.0) " spot%+.0fdB".format(spotDb) else "")
+        (if (spotDb != 0.0) " spot%+.0fdB".format(spotDb) else "") +
+        (if (handWobbleDb != 0.0) " hand-wobble%.1fdB".format(handWobbleDb) else "")
 
     companion object {
         private fun env(name: String, default: Double) = System.getenv(name)?.toDouble() ?: default
@@ -264,6 +273,8 @@ internal class SimWorld(
      * each way on unrelated families).
      */
     private val rFade = if (KEYED) stream(9) else null
+    /** 0.3.12: own stream, so runs without the hand wobble draw exactly as before. */
+    private val rWobble = stream(10)
     private var keyedTick = -1L
     private val keyedIdx = IntArray(8)
     private fun keyed(salt: Int): SimRandom {
@@ -339,6 +350,7 @@ internal class SimWorld(
 
     // ---------------- radio ----------------
     private var fade = 0.0
+    private var handWobble = 0.0
     var trueRssi = -120.0; private set
     private fun updateRadio() {
         // Field (standing at ~16 m): raw readings -87..-91, one -94 dip.
@@ -349,6 +361,14 @@ internal class SimWorld(
         trueRssi = -71.0 - physics.pathSlope * log10(d) + carryNow.db + facing.db + extraShadowDb + fade + physics.phoneOffsetDb
         // 0.3.11 worst case: the strong spot (front door) while the user stands there.
         if (physics.spotDb != 0.0 && !walking && distanceM in SimPhysics.SPOT_FROM_M..SimPhysics.SPOT_TO_M) trueRssi += physics.spotDb
+        if (physics.handWobbleDb > 0.0) {
+            if (walking && carryNow == Carry.HAND) {
+                val rho = exp(-walkSpeed * TICK_MS / 1000.0 / HAND_WOBBLE_CORR_M)
+                val sigma = if (facing == Facing.TOWARD) physics.handWobbleDb / 2 else physics.handWobbleDb
+                handWobble = rho * handWobble + sqrt(1 - rho * rho) * sigma * rWobble.gaussian()
+            } else handWobble *= 0.8
+            trueRssi += handWobble
+        }
         plateauCapDb?.let { cap -> if (distanceM in 1.0..plateauFromM) trueRssi = minOf(trueRssi, cap + fade) }
     }
     fun readRssi(): Int {
@@ -1156,6 +1176,8 @@ internal class SimWorld(
 
     companion object {
         const val TICK_MS = 100L
+        /** 0.3.12: the hand wobble decorrelates over this walked distance. */
+        const val HAND_WOBBLE_CORR_M = 1.5
         /** Time-keyed noise for paired comparisons (default on; SIM_KEYED=0 = the sequential streams). */
         val KEYED = System.getenv("SIM_KEYED") != "0"
         const val CONNECT_MIN_RSSI = -96.0

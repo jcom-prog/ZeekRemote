@@ -62,8 +62,10 @@ internal data class SimResult(val suite: String, val scenario: Scenario, val car
 internal object SimRunner {
     val LEARN_VISITS = (System.getenv("SIM_LEARN_VISITS") ?: "0").toInt()
     /** 0.3.9 (user decision 15/10): the uncertain phone behaviour as fixed worst cases, each on the calibrated world.
-     *  0.3.11 (user decision 16/10): two more from the measurement walk of 16/10. */
-    val WORST_CASES = listOf("steps-silent", "steps-dead", "gps-poor", "ar-poor", "signal-flat", "steps-late", "strong-spot")
+     *  0.3.11 (user decision 16/10): two more from the measurement walk of 16/10.
+     *  0.3.12 (user decision 16/10): quick STILL, the hand wobble, and the field of 16/10 in one world. */
+    val WORST_CASES = listOf("steps-silent", "steps-dead", "gps-poor", "ar-poor", "signal-flat", "steps-late", "strong-spot", "ar-quick-still",
+        "hand-wobble", "field-like")
 
     /** The world of a run. A stress world depends on the seed only, so two app versions meet the same world. */
     fun physicsFor(suite: String, seed: Long): SimPhysics = when (suite) {
@@ -80,12 +82,22 @@ internal object SimRunner {
         "steps-late" -> SimPhysics(name = suite, lateStepsMinMs = 8_000L, lateStepsMaxMs = 14_000L)
         // Field 16/10: standing at the front door (~25 m) read -86/-87 in the front pocket - the unlock threshold.
         "strong-spot" -> SimPhysics(name = suite, spotDb = 7.0)
+        // Field 16/10, phone in the hand: walking wobbles 1.9-2.4 dB at the 1 s scale (sim 3 dB -> 2.2).
+        "hand-wobble" -> SimPhysics(name = suite, handWobbleDb = 3.0)
+        // The field of 16/10 together: late steps after standing, quick STILL (profileFor), poor GPS as in
+        // "gps-poor", and the hand wobble.
+        "field-like" -> SimPhysics(name = suite, lateStepsMinMs = 8_000L, lateStepsMaxMs = 14_000L,
+            gnssAccMedianM = 12.0, gnssAccSpread = 0.35, gnssTtffMs = 15_000L, handWobbleDb = 3.0)
         else -> SimPhysics.calibrated()
     }
 
     /** "ar-poor": Activity Recognition reports a walk up to 30 s late and misses 40 % of the walks. */
-    fun profileFor(suite: String, p: MotionProfile): MotionProfile = if (suite != "ar-poor") p else
-        p.copy(name = p.name + "-arpoor", onLagMaxMs = maxOf(p.onLagMaxMs, 30_000L), missBoutP = maxOf(p.missBoutP, 0.4))
+    fun profileFor(suite: String, p: MotionProfile): MotionProfile = when (suite) {
+        "ar-poor" -> p.copy(name = p.name + "-arpoor", onLagMaxMs = maxOf(p.onLagMaxMs, 30_000L), missBoutP = maxOf(p.missBoutP, 0.4))
+        // Field 16/10: Activity Recognition said STILL 1-5 s after a stop.
+        "ar-quick-still", "field-like" -> p.copy(name = p.name + "-arquick", offLagMinMs = 1_000L, offLagMaxMs = 3_000L)
+        else -> p
+    }
 
     /** [onRun] sees every run with its full log (traces); the log is dropped afterwards to bound memory. */
     fun run(suites: List<String>, seeds: Int, only: List<String>?, onRun: ((SimResult) -> Unit)? = null): List<SimResult> = suites.flatMap { suite ->
@@ -150,6 +162,9 @@ internal object SimReport {
         val onTime = approaches.count { !has(it, "APPROACH_UNLOCK_LATE", "APPROACH_UNLOCK_AFTER_DOOR", "APPROACH_NO_UNLOCK") }
         val departures = front.filter { expects(it, "expect-lock") }
         val lockedInBand = departures.count { lockedBetween(it, 10.0, 25.0) }
+        // 0.3.12: the same lock target for the phone in the hand.
+        val handDepartures = hand.filter { expects(it, "expect-lock") }
+        val handLockedInBand = handDepartures.count { lockedBetween(it, 10.0, 25.0) }
         fun farUnlocks(set: List<SimResult>) = set.count { r -> r.findings.any { it.code == "UNLOCK_WHILE_FAR" && it.distanceM > 20.0 } }
         val farPocket = farUnlocks(pocket)
         val farHand = farUnlocks(hand)
@@ -165,6 +180,8 @@ internal object SimReport {
             Target("never silent while open and away", share(silent, rs.size), "0", silent == 0),
             Target("front pocket: approach opens before the door", share(onTime, approaches.size), ">= 98%", pctOk(onTime, approaches.size, 98.0)),
             Target("front pocket: locks by itself at 10-25 m", share(lockedInBand, departures.size), ">= 98%", pctOk(lockedInBand, departures.size, 98.0)),
+            Target("hand: locks by itself at 10-25 m", share(handLockedInBand, handDepartures.size), ">= 98%",
+                pctOk(handLockedInBand, handDepartures.size, 98.0)),
         )
     }
 

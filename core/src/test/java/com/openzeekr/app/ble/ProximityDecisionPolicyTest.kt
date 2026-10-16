@@ -948,6 +948,9 @@ class ManualLockDeepFarReturnTest {
         val p = locked()
         var t = 0L
         repeat(6) { assertFalse(p.shouldUnlock(t, -96, false, -86)); t += 1_000L }
+        // 0.3.12: the walk back rises out of the deep-far level for 3 s (a jump straight to -80 is a peak).
+        assertFalse(p.shouldUnlock(t, -88, false, -86)); t += 1_000L
+        assertFalse(p.shouldUnlock(t, -84, false, -86)); t += 1_000L
         assertFalse(p.shouldUnlock(t, -80, false, -86)); t += 500L
         assertFalse(p.shouldUnlock(t, -80, false, -86)); t += 500L
         assertTrue(p.shouldUnlock(t, -80, false, -86)); t += 1_000L

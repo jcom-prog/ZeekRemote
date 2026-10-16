@@ -64,6 +64,9 @@ internal class BleDepartureEvidence(
     // Unlike the time windows, a not-moving restart or sampling gap does not erase it.
     private var strongRefSmoothed: Int? = null
     private var weakSinceMs = UNSET
+    // 0.3.12: one short bump out of the deep-far band per window ([BUMP_TOLERANCE_MS]).
+    private var bumpSinceMs = UNSET
+    private var bumpUsed = false
     private var veryDeepSinceMs = UNSET
     private var veryDeepStillSinceMs = UNSET
     private var belowLockSinceMs = UNSET
@@ -84,6 +87,9 @@ internal class BleDepartureEvidence(
     /** Categorical reason for the latest decision; never contains a position. */
     var reason: String = "no_samples"
         private set
+
+    /** 0.3.12: the deep-far window of a walk-away is running right now (the walk-away alarm clock). */
+    val weakWindowRunning: Boolean get() = weakSinceMs != UNSET
 
     /** Monotonic time of the latest strong-near sample, or null if none in this epoch. */
     var lastStrongAtMs: Long? = null
@@ -217,10 +223,20 @@ internal class BleDepartureEvidence(
         }
         // The timed window counts only continuous DEEP-far time while walking.
         if (smoothedRssi > lockThreshold - deepFarMarginDb) {
+            // 0.3.12: one bump of at most [BUMP_TOLERANCE_MS] per window, still beyond the lock threshold
+            // (checked above), does not restart it; it never confirms by itself. Field, phone in the hand:
+            // walking away the signal wobbles about 2 dB at the 1 s scale, with single short bumps.
+            if (weakSinceMs != UNSET && !bumpUsed) {
+                if (bumpSinceMs == UNSET) bumpSinceMs = nowMs
+                if (nowMs - bumpSinceMs <= BUMP_TOLERANCE_MS) return decide("bump_tolerated")
+                bumpUsed = true
+            }
             weakSinceMs = UNSET
+            bumpSinceMs = UNSET
             return decide("not_deep_far")
         }
-        if (weakSinceMs == UNSET) { weakSinceMs = nowMs; weakMin = smoothedRssi }
+        if (bumpSinceMs != UNSET) { bumpUsed = true; bumpSinceMs = UNSET }
+        if (weakSinceMs == UNSET) { weakSinceMs = nowMs; weakMin = smoothedRssi; bumpUsed = false }
         else weakMin = minOf(weakMin, smoothedRssi)
 
         return when {
@@ -333,5 +349,7 @@ internal class BleDepartureEvidence(
         const val MAX_RISE_DB = 5
         /** 0.3.1: steps the walk proof needs after an arrival proven by steps + rise (~14 m). */
         const val ANCHORED_MIN_STEPS = 20L
+        /** 0.3.12: one bump out of the deep-far band of at most this long keeps the window (see [observe]). */
+        const val BUMP_TOLERANCE_MS = 2_000L
     }
 }

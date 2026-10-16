@@ -26,6 +26,9 @@ internal class BleDepartureRoute private constructor(lockThreshold: Int) {
     /** Categorical reason of the latest evidence decision; never contains a position. */
     val evidenceReason: String get() = evidence.reason
 
+    /** 0.3.12: the deep-far window of a walk-away is running (see [BleDepartureEvidence.weakWindowRunning]). */
+    val weakWindowRunning: Boolean get() = evidence.weakWindowRunning
+
     /** Which proof confirmed the departure: walk, very_deep or very_deep_gradual. */
     val confirmKind: String get() = evidence.confirmKind
 

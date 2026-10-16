@@ -296,6 +296,14 @@ class ProximityController internal constructor(
     // Latest moving walk-away candidate in this unlock (wall clock); with no strong reading after
     // it, the user has walked away (LockAlertPolicy.departureSuspected).
     private var lastWalkAwayCandidateAtMs = 0L
+    // 0.3.12: the BLE walk-away proof started clearly away from the car (wall clock): the alarm clock runs.
+    private var walkAwayProofStartedAtMs = 0L
+    // 0.3.12: a strong reading after a gap during an alarm waits for walking or a strong signal that lasts.
+    private var returnPending = false
+    private var strongStreakStartMs = 0L
+    private var lastStrongStreakMs = 0L
+    private var weakReadingsInRow = 0
+    private var streakBrokenAtMs = 0L
     private var departureAlarmJob: Job? = null
     private val carSelfLock = CarSelfLockDetector()
     private val stationaryFar = StationaryFarWatch()
@@ -717,6 +725,7 @@ class ProximityController internal constructor(
         lastShadowDepartureAtMs = 0L
         shadowDepartureWarned = false
         lastWalkAwayCandidateAtMs = 0L
+        walkAwayProofStartedAtMs = 0L; returnPending = false
         departureAlarmJob?.cancel(); departureAlarmJob = null
         shadowRecoveryLogged = false
         lastTriggerMs = now
@@ -968,12 +977,25 @@ class ProximityController internal constructor(
     /**
      * A strong at-the-car reading; after a gap it is the user's return, which ends an alarm (plan K7) -
      * 0.3.10: also one that kept sounding after weak evidence closed its episode ([closeAlarmEpisode]).
+     * 0.3.12: that return is pending until the user walks (motion or steps within [RETURN_MOVING_MS]) or
+     * the strong signal lasts [RETURN_STRONG_SUSTAIN_MS] - simulator stress: a 1-2 s strong fade at 30 m,
+     * the user standing, silenced the alarm with the car open. Only two weak readings in a row break that
+     * streak; sparse reads do not (armed idle reads come every ~3 s). See also [observeReturnAtCar].
      */
     private fun markStrongNear() {
         val now = clock.wallMs()
         val returning = lastStrongNearAtMs == 0L || now - lastStrongNearAtMs > RETURN_GAP_MS
         lastStrongNearAtMs = now
-        if (returning && armedUnlocked && (unverifiedLockAlertRaised || now < alarmMaySoundUntilMs)) {
+        val alarmOn = armedUnlocked && (unverifiedLockAlertRaised || now < alarmMaySoundUntilMs)
+        if (lastStrongStreakMs == 0L || now - lastStrongStreakMs > STRONG_STREAK_MAX_GAP_MS ||
+            streakBrokenAtMs > lastStrongStreakMs) strongStreakStartMs = now
+        lastStrongStreakMs = now
+        if (returning) returnPending = true
+        val walking = (lastMovingSeenAtMs != 0L && now - lastMovingSeenAtMs <= RETURN_MOVING_MS) ||
+            (lastStepAdvanceAtMs != 0L && now - lastStepAdvanceAtMs <= RETURN_MOVING_MS)
+        val silence = returnPending && alarmOn && (walking || now - strongStreakStartMs >= RETURN_STRONG_SUSTAIN_MS)
+        if (silence || !alarmOn) returnPending = false
+        if (silence) {
             alerts.silenceAlarm()
             unverifiedLockAlertRaised = false
             alarmMaySoundUntilMs = 0L
@@ -995,6 +1017,26 @@ class ProximityController internal constructor(
         if (now - nearAfterAlarmSinceMs < NEAR_AFTER_ALARM_MS) return
         nearAfterAlarmSinceMs = 0L
         closeAlarmEpisode("sustained signal at the car after an alarm (user back)")
+    }
+
+    /**
+     * 0.3.12: a pending return ([markStrongNear]) is also confirmed by the smoothed signal at the car
+     * ([RETURN_AT_CAR_MARGIN_DB] above the unlock level) for [RETURN_STRONG_SUSTAIN_MS] - the user back
+     * without counted steps or motion (simulator stress: the alarm went on at the car).
+     */
+    private var atCarSinceMs = 0L
+    private fun observeReturnAtCar(smoothed: Int) {
+        val now = clock.wallMs()
+        if (smoothed >= config().sensitivityUnlockRssi + RETURN_AT_CAR_MARGIN_DB) { if (atCarSinceMs == 0L) atCarSinceMs = now }
+        else atCarSinceMs = 0L
+        val alarmOn = armedUnlocked && (unverifiedLockAlertRaised || now < alarmMaySoundUntilMs)
+        if (returnPending && alarmOn && atCarSinceMs != 0L && now - atCarSinceMs >= RETURN_STRONG_SUSTAIN_MS) {
+            returnPending = false
+            alerts.silenceAlarm()
+            unverifiedLockAlertRaised = false
+            alarmMaySoundUntilMs = 0L
+            Logx.d("prox", "${RETURN_STRONG_SUSTAIN_MS / 1000} s at the car after an alarm -> user back; alarm silenced")
+        }
     }
 
     private fun noteStepActivity() {
@@ -1054,6 +1096,8 @@ class ProximityController internal constructor(
     private fun recordReading(rssi: Int) {
         val now = clock.wallMs()
         recentReadings.addLast(now to rssi)
+        // 0.3.12: two weak fresh readings in a row break a strong streak ([markStrongNear]).
+        if (rssi < STRONG_NEAR_DIAGNOSTIC_RSSI) { if (++weakReadingsInRow >= 2) streakBrokenAtMs = now } else weakReadingsInRow = 0
         while (recentReadings.isNotEmpty() && now - recentReadings.first().first > RECENT_READINGS_MS) recentReadings.removeFirst()
     }
 
@@ -1127,7 +1171,8 @@ class ProximityController internal constructor(
     private fun departureSuspected(): Boolean =
         LockAlertPolicy.departureSuspected(lastWalkAwayCandidateAtMs, lastStrongNearAtMs) ||
             maxOf(deepFarAtLinkLossMs, stationaryFar.deepFarForMs(clock.wallMs())) >=
-            StationaryFarWatch.LINK_LOSS_FAR_MS || walkedAwayBySteps()
+            StationaryFarWatch.LINK_LOSS_FAR_MS || walkedAwayBySteps() ||
+            (walkAwayProofStartedAtMs != 0L && walkAwayProofStartedAtMs > lastStrongNearAtMs)
 
     /**
      * Plan K9: the phone has walked a clear distance since it was last strong at the car, and has
@@ -1139,7 +1184,11 @@ class ProximityController internal constructor(
         if (!armedUnlocked) return false
         val steps = stepsAwayFromCar() ?: return false
         val since = if (lastStrongNearAtMs != 0L) lastStrongNearAtMs else unlockObservedAtMs
-        return steps >= WALKED_AWAY_STEPS && clock.wallMs() - since >= WALKED_AWAY_QUIET_MS
+        // 0.3.12: while the signal is weak, fewer steps do (a 25 m walk counts about 20 steps; simulator:
+        // 23 steps, no GPS anchor, Activity Recognition STILL - the car stayed open without an alarm).
+        val weak = _state.value.smoothedRssi?.let { it <= config().sensitivityLockRssi - WALKED_AWAY_WEAK_MARGIN_DB } == true
+        val need = if (weak) WALKED_AWAY_WEAK_STEPS else WALKED_AWAY_STEPS
+        return steps >= need && clock.wallMs() - since >= WALKED_AWAY_QUIET_MS
     }
 
     /** Plan K9: start the departure alarm clock once a step-proven walk-away is under way. */
@@ -1575,6 +1624,7 @@ class ProximityController internal constructor(
         val prev = _state.value.smoothedRssi
         val smoothed = prev?.let { (it + ALPHA_FAST * (rssi - it)).roundToInt() } ?: rssi
         _state.value = _state.value.copy(rawRssi = rssi, smoothedRssi = smoothed, distanceM = rssiToDistance(smoothed))
+        if (armedUnlocked) observeReturnAtCar(smoothed)
     }
 
     private fun stepsSinceUnlock(): Long? = stepsAtUnlock?.let { baseline ->
@@ -1595,6 +1645,20 @@ class ProximityController internal constructor(
         val moving = (motion.state.value == MotionMonitor.Motion.MOVING || departureSteps.walking(now)) &&
             !stoppedNearCar
         val authorized = route.observe(now, rawRssi, smoothedRssi, moving, stepsSinceUnlock())
+        // 0.3.12: once the walk-away proof has really begun - its deep-far window runs, [WALK_AWAY_ALARM_MIN_STEPS]
+        // steps away from the car, the signal clearly away ([WALK_AWAY_ALARM_MARGIN_DB] beyond the lock level,
+        // so never a weak pocket at the car) - the departure alarm clock runs: no Lock and no return within
+        // its delay is an alarm. Simulator: 25 m, phone in the hand, no GPS anchor, 23 steps, Activity
+        // Recognition STILL - the car stayed open without one. Only ever an alarm, never a Lock.
+        if (armedUnlocked && route.weakWindowRunning &&
+            (stepsAwayFromCar() ?: 0L) >= WALK_AWAY_ALARM_MIN_STEPS &&
+            smoothedRssi <= config().sensitivityLockRssi - WALK_AWAY_ALARM_MARGIN_DB) {
+            val wall = clock.wallMs()
+            if (walkAwayProofStartedAtMs <= lastStrongNearAtMs)
+                Logx.d("prox", "walk-away proof started (${motion.stepSummary}) -> departure alarm armed")
+            walkAwayProofStartedAtMs = wall
+            if (departureAlarmJob?.isActive != true && lockJob?.isActive != true) armDepartureAlarm()
+        }
         logBleRouteRevocation(route)
         if (route.evidenceReason != bleDepartureLoggedReason) {
             val nowWall = clock.wallMs()
@@ -1855,6 +1919,7 @@ class ProximityController internal constructor(
                 bleDepartureConfirmed = observeBleDeparture(rssi, smoothed)
             strongestRssiSinceUnlock = maxOf(strongestRssiSinceUnlock, rssi)
             noteNearAfterAlarm(smoothed, config().sensitivityUnlockRssi)
+            observeReturnAtCar(smoothed)
             noteStepActivity()
             if (rssi >= STRONG_NEAR_DIAGNOSTIC_RSSI) {
                 markStrongNear()
@@ -1878,6 +1943,7 @@ class ProximityController internal constructor(
             now, smoothed, motion.state.value == MotionMonitor.Motion.MOVING, unlockThresh,
             if (awayReturnSteps) stepsNow else null, walkingBySteps, stepStall.stalledForMs,
             stepsRising = stepsRisingNow(now, stepsNow),
+            stepsTotal = stepsNow,
         )
         if (!walkingBySteps && !stepStallLogged) {
             stepStallLogged = true
@@ -2673,6 +2739,17 @@ class ProximityController internal constructor(
          *  50 missed a 30 m walk the hub counter counted as 44, stress F20). */
         private const val WALKED_AWAY_STEPS = 30L
         private const val WALKED_AWAY_QUIET_MS = 45_000L
+        /** 0.3.12: ... and while the smoothed signal is this far beyond the lock level, this many. */
+        private const val WALKED_AWAY_WEAK_STEPS = 15L
+        private const val WALKED_AWAY_WEAK_MARGIN_DB = 3
+        /** 0.3.12: the walk-away alarm clock - steps away from the car, and how far beyond the lock level. */
+        private const val WALK_AWAY_ALARM_MIN_STEPS = 8L
+        private const val WALK_AWAY_ALARM_MARGIN_DB = 6
+        /** 0.3.12: a return during an alarm - how long a strong signal (or the signal at the car) must last
+         *  without walking, the longest gap inside a strong streak, and the at-car level above unlock. */
+        private const val RETURN_STRONG_SUSTAIN_MS = 5_000L
+        private const val STRONG_STREAK_MAX_GAP_MS = 4_000L
+        private const val RETURN_AT_CAR_MARGIN_DB = 4
         /** Plan K8: steps after a near-car link loss that mean "walking away", watched for this long. */
         private const val NEAR_LOSS_WALK_STEPS = 20L
         private const val NEAR_LOSS_STEP_WATCH_MS = 5 * 60_000L

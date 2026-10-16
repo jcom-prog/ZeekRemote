@@ -100,6 +100,20 @@ internal class ProximityDecisionPolicy(
     // Per reading (set by [shouldUnlock]): the step total and "counted steps are rising now".
     private var readingSteps: Long? = null
     private var readingStepsRising = false
+    // 0.3.12, also per reading: a live step count shows the walk going on, how long it has stalled,
+    // and the raw step total (the returns after a Lock below; simulator strong spot at 25 m).
+    private var readingWalkingConfirmed = true
+    private var readingStallAgeMs = 0L
+    private var readingStepsTotal: Long? = null
+    // The step total when the manual return's motion began, and the latest deep-far reading after a Lock.
+    private var manualReturnStepsAtMotionStart: Long? = null
+    private var lastDeepFarAtMs = UNSET_MS
+    // The weakest reading since a manual Lock and the step total there (the turn), and a manual return
+    // the step count showed standing: it stays standing until the count advances.
+    private var manualFloorRssi = Int.MAX_VALUE
+    private var manualStepsAtFloor: Long? = null
+    private var manualStandingHeld = false
+    private var manualStandingSteps: Long? = null
     /** Which signal return qualified (deep_return or walk_back). */
     private var signalReturnRoute = "deep_return"
     /** The current arrival epoch replaced a Lock's departure latch (see [onPresenceMatch]). */
@@ -194,8 +208,11 @@ internal class ProximityDecisionPolicy(
         stepStallAgeMs: Long = 0L,
         /** Counted steps are rising now (at least 2 in the last 3 s; false without a step source). */
         stepsRising: Boolean = false,
+        /** The raw step total, whatever route asked for [steps] (null without a step source). */
+        stepsTotal: Long? = null,
     ): Boolean {
         readingSteps = steps; readingStepsRising = stepsRising
+        readingWalkingConfirmed = walkingConfirmed; readingStallAgeMs = stepStallAgeMs; readingStepsTotal = stepsTotal
         if (departureLatched &&
             !tryRearmSameLinkReturn(nowMs, rssi, moving, unlockThreshold) &&
             !(awayRoundTripPending && tryRearmAwayReturn(nowMs, rssi, moving, unlockThreshold, steps))) {
@@ -474,6 +491,8 @@ internal class ProximityDecisionPolicy(
         if (manualDeparture) {
             manualNearPeakRssi = maxOf(manualNearPeakRssi, rssi)
             manualLowestRssi = minOf(manualLowestRssi, rssi)
+            if (rssi < manualFloorRssi) manualFloorRssi = rssi
+            readingStepsTotal?.let { if (rssi <= manualFloorRssi + WALK_BACK_FLOOR_BAND_DB) manualStepsAtFloor = it }
             // A motion sensor can report STILL during departure and allow far-sleep before the
             // ordinary FAR threshold is sampled. Admit that route only after a large drop from
             // the manual-lock near signal, a long stationary interval, a new motion edge, and a
@@ -503,7 +522,23 @@ internal class ProximityDecisionPolicy(
             // Activity Recognition can miss the short walk back entirely (STILL all the way): then
             // a longer run at the car is required instead of the motion.
             if (tryRearmAtCarReturn(nowMs, rssi, moving, unlockThreshold)) return true
-            if (!moving) {
+            // 0.3.12: a live step count that shows standing is no walk back - unless this walk already
+            // counted [MANUAL_RETURN_MIN_WALK_STEPS] (the counter often says "stopped" at the car just
+            // before the signal gets there). Counted from the later of the turn and the motion start:
+            // walking on to a strong spot is no walk back (simulator F03/F16: the stop at 25 m reopened
+            // the car), nor are steps counted before the motion showed (stress F12: late step packets
+            // made 9 and the car opened during a stop at 10 m). Standing holds until the count advances.
+            val walkRef = listOfNotNull(manualStepsAtFloor, manualReturnStepsAtMotionStart).maxOrNull()
+            val standingByCount = !readingWalkingConfirmed && manualReturnMoving &&
+                (readingStepsTotal?.let { s -> walkRef?.let { s - it < MANUAL_RETURN_MIN_WALK_STEPS } } ?: false)
+            if (standingByCount) {
+                manualStandingHeld = true
+                manualStandingSteps = readingStepsTotal
+            } else if (manualStandingHeld && (readingWalkingConfirmed ||
+                    (readingStepsTotal?.let { s -> manualStandingSteps?.let { s > it } } ?: false))) {
+                manualStandingHeld = false
+            }
+            if (!moving || standingByCount || manualStandingHeld) {
                 manualReturnMoving = false
                 manualReturnStrongReadings = 0
                 // Preserve a FAR separation even if body orientation makes the signal rebound
@@ -560,6 +595,7 @@ internal class ProximityDecisionPolicy(
                     manualStillRssi = rssi
                 }
                 manualReturnMoving = true
+                manualReturnStepsAtMotionStart = readingStepsTotal
                 manualStillRssi = minOf(manualStillRssi, rssi)
             }
             // This route proves no real departure (a pause at <= the unlock level can be 10 m with
@@ -575,6 +611,7 @@ internal class ProximityDecisionPolicy(
             if (rssi >= unlockThreshold + margin) manualReturnStrongReadings++
             else manualReturnStrongReadings = 0
             if (nowMs - departureSameLinkFarQualifiedAtMs < SAME_LINK_RETURN_GUARD_MS ||
+                (provenFar && risingTooFast(nowMs, rssi, unlockThreshold)) ||
                 manualReturnStrongReadings < needed ||
                 rssi < manualStillRssi + MANUAL_RETURN_RISE_DB) return false
             // At that level the return itself is the approach proof (no extra hold: the field
@@ -665,6 +702,7 @@ internal class ProximityDecisionPolicy(
         if (rssi < walkBackFloorRssi) walkBackFloorRssi = rssi
         if (rssi <= walkBackFloorRssi + WALK_BACK_FLOOR_BAND_DB) stepsAtWalkBackFloor = readingSteps
         val deep = rssi <= unlockThreshold - MANUAL_DEEP_FAR_MARGIN_DB
+        if (deep) lastDeepFarAtMs = nowMs
         // The Lock fired around the lock threshold; noise at 8-10 m must not reopen at once
         // (review 0.1.63): a reading clearly outside the unlock band first, then the usual return.
         // That reading also counts inside the post-lock guard: simulator 03/10 (0.1.64), the Lock
@@ -675,6 +713,12 @@ internal class ProximityDecisionPolicy(
         if (manualDeepFarSeen) {
             // A proven departure is for the walk back, not for standing at the car minutes later.
             if (deep) manualDeepFarLastAtMs = nowMs
+            // 0.3.12: while a live step count shows the user standing (at a spot where the signal is
+            // strong, 25 m out), the far proof does not age - for at most [DEEP_FAR_STANDING_HOLD_MS]
+            // after the latest deep-far reading, then it lapses as usual (a phone lying still for long
+            // must not keep it); standing at the car is caught below.
+            else if (!readingWalkingConfirmed &&
+                (lastDeepFarAtMs == UNSET_MS || nowMs - lastDeepFarAtMs <= DEEP_FAR_STANDING_HOLD_MS)) manualDeepFarLastAtMs = nowMs
             else if (nowMs - manualDeepFarLastAtMs > MANUAL_DEEP_PROOF_TTL_MS) {
                 manualDeepFarSeen = false
                 manualDeepFarSinceMs = UNSET_MS
@@ -700,6 +744,16 @@ internal class ProximityDecisionPolicy(
             signalReturnRoute = "walk_back"
             return true
         }
+        // 0.3.12: the signal-only return is a walk. Simulator, strong spot at 25 m (front pocket -86.5):
+        // standing there reopened the car from more than 20 m. No return while a live step count shows
+        // the user standing, or while it has not advanced for [DEEP_RETURN_MAX_STALL_MS] (the stall
+        // gate's own threshold follows the hub's packet interval, 5-9 s; the user stood 1 s after the
+        // motion sensor's STILL). Without a step source neither blocks.
+        if (!readingWalkingConfirmed || readingStallAgeMs > DEEP_RETURN_MAX_STALL_MS) {
+            manualDeepReturnSinceMs = UNSET_MS
+            manualDeepReturnReadings = 0
+            return false
+        }
         val returnMargin = if (deepReturnNeedsRecession) AUTO_LOCK_NEAR_RETURN_MARGIN_DB else MANUAL_DEEP_RETURN_MARGIN_DB
         if (rssi < unlockThreshold + returnMargin) {
             manualDeepReturnSinceMs = UNSET_MS
@@ -711,9 +765,21 @@ internal class ProximityDecisionPolicy(
         // The 1 s linked-watch cadence runs 988-1018 ms apart (GATT read time): field 
         // (0.1.63) two readings of -81/-82 at ~6 m were 995 ms apart, were refused, and the car
         // opened only at the door. The span is "about a second", not "at least 1000 ms".
+        if (risingTooFast(nowMs, rssi, unlockThreshold)) return false
         return manualDeepReturnReadings >= MANUAL_DEEP_RETURN_MIN_READINGS &&
             nowMs - manualDeepReturnSinceMs >= MANUAL_DEEP_RETURN_CONFIRM_MS - SAMPLE_JITTER_MS
     }
+
+    /**
+     * 0.3.12: a real walk back rises for several seconds out of the deep-far level; a peak jumps there
+     * (simulator: +15 dB for 1.5 s at 33 m while walking away, 1.4 s after a -94 reading). Within
+     * [DEEP_RETURN_MIN_RISE_MS] of the latest deep-far reading no signal-only return counts - unless the
+     * reading is at the at-car level ([AT_CAR_JUMP_MARGIN_DB] above the unlock threshold): a back pocket
+     * stays deep behind the body all the way and jumps at the car itself.
+     */
+    private fun risingTooFast(nowMs: Long, rssi: Int, unlockThreshold: Int): Boolean =
+        lastDeepFarAtMs != UNSET_MS && nowMs - lastDeepFarAtMs < DEEP_RETURN_MIN_RISE_MS &&
+            rssi < unlockThreshold + AT_CAR_JUMP_MARGIN_DB
 
     /**
      * Walk-back return (0.3.2, simulation audit B): after a proven departure the walk back opens at
@@ -811,6 +877,10 @@ internal class ProximityDecisionPolicy(
         manualStillSinceMs = UNSET_MS
         manualStillReady = false
         manualReturnMoving = false
+        manualFloorRssi = Int.MAX_VALUE
+        manualStepsAtFloor = null
+        manualStandingHeld = false
+        manualStandingSteps = null
         manualReturnStrongReadings = 0
         manualLowestRssi = 0
         manualAtCarReadings = 0
@@ -1105,6 +1175,16 @@ internal class ProximityDecisionPolicy(
         /** Linked-watch samples every 1 s; a longer silence is a far-sleep gap. */
         const val MANUAL_DEEP_MAX_GAP_MS = 2_500L
         const val MANUAL_DEEP_PROOF_TTL_MS = 60_000L
+        /** 0.3.12: no signal-only return while a live step count has stalled this long. */
+        const val DEEP_RETURN_MAX_STALL_MS = 4_500L
+        /** 0.3.12: a signal-only return rises out of the deep-far level for at least this long. */
+        const val DEEP_RETURN_MIN_RISE_MS = 3_000L
+        /** 0.3.12: the at-car level above the unlock threshold (a back pocket at the door: -73..-77). */
+        const val AT_CAR_JUMP_MARGIN_DB = 9
+        /** 0.3.12: a manual return that counted this many steps since the turn and its motion start is a walk. */
+        const val MANUAL_RETURN_MIN_WALK_STEPS = 8L
+        /** 0.3.12: while standing the far proof is kept for at most this long after the latest deep-far reading. */
+        const val DEEP_FAR_STANDING_HOLD_MS = 120_000L
         const val DEEP_RETURN_UNLOCK_WINDOW_MS = 30_000L
         const val DEEP_RETURN_GUARD_MS = 3_000L
         const val STILL_APPROACH_MARGIN_DB = 4
