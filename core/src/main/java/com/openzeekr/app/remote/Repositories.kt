@@ -573,7 +573,8 @@ class NavRepository(private val store: ConfigStore, private val client: ApiClien
  *    the keep-charging `target` mode). command "start"=enabled, "stop"=disabled. NO serviceId.
  *    (The V2 "booking charge" plane 400s on this EU car, so V1 is what actually applies.)
  *  - DEPARTURE / "booking travel" — CRUD list of precondition-by-departure-time plans.
- *    serviceId "ZAO"; command "start"=create, "edit"=update, "stop"=delete (identify by btId).
+ *    serviceId "ZAO"; command "edit"=create (on a free slot, 0.3.11) and update, "stop"=delete
+ *    (identify by btId). "start" for a new plan was accepted by the cloud but never applied (field 16/10).
  *
  * Shapes reconstructed clean-room from the stock `VclEnergyApi` retrofit interface and the
  * `BookingTravelSetting`/`ChargingPlanRequestBean` beans (see SCHEDULE_TRACE_FINDINGS.md).
@@ -641,7 +642,7 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
         var sent = "error"; var session = "-"; var result = "failed"; var polls = 0; var readback = "none"
         try {
             runCatching { com.openzeekr.app.net.AccountLogin(store).heartbeat() }
-            val command = if (enabled) CMD_CREATE else CMD_DELETE   // "start" / "stop"
+            val command = if (enabled) CMD_START else CMD_DELETE   // "start" / "stop"
             val sched = scheduledTime.ifBlank { nextTriggerMs(startTime) }
             val resp = client.api.setChargingPlan(
                 com.openzeekr.app.net.model.ChargingPlanV1Request(
@@ -705,11 +706,14 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
             }
         }
 
-    /** Create a departure schedule (command "start") in a free slot. While the car has not shown it,
-     *  [writes] refuses another Create (a second press would queue a second plan). */
+    /** Create a departure schedule in a free slot. While the car has not shown it, [writes] refuses
+     *  another Create (a second press would queue a second plan). 0.3.11: written as a change ("edit")
+     *  of the free slot - the car always holds its 5 slots, empty ones included. Field 16/10: the cloud
+     *  accepted "start" for slot 2, but the car never showed it (not within a minute, not after ten),
+     *  while "edit" switches of slot 1 were on the car within two read-backs. */
     suspend fun createDeparture(setting: com.openzeekr.app.net.model.BookingTravelSetting): CallResult<CarWrite> =
         if (writes.stillAwaiting() != null) CallResult.Err(ScheduleWrites.CREATE_WAITS)
-        else sendTravel(ScheduleWrites.Kind.CREATE, CMD_CREATE, setting) { Departures.landed(it, setting) }
+        else sendTravel(ScheduleWrites.Kind.CREATE, CMD_UPDATE, setting) { Departures.landed(it, setting) }
 
     /** Update an existing departure schedule (command "edit"); [setting].btId picks the entry. The car
      *  gets the whole plan, so sending it again is harmless. */
@@ -794,7 +798,7 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
 
     private companion object {
         const val SERVICE_ID_TRAVEL = "ZAO"   // booking-travel (departure) service id
-        const val CMD_CREATE = "start"
+        const val CMD_START = "start"
         const val CMD_UPDATE = "edit"
         const val CMD_DELETE = "stop"
         // V1 charge-plan `target` = the "keep charging past end time until the limit is reached" mode.

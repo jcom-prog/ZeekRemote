@@ -190,6 +190,10 @@ internal object SimScenarios {
         Scenario("F42 drive in, car unlocks on parking, away", "phone in the car while driving; car unlocks itself; walk away", 2.0,
             listOf(Mark("-"), PhoneInCar(60_000), CarUnlocksItself, OpenDoor, Stand(5_000), Mark("expect-lock"),
                 Walk(30.0), Stand(150_000))),
+        // Field 16/10 (measurement walks 3-5): away to the front door at ~25 m (the car locks), one minute
+        // standing there, then straight back to the car (it opened only at the door).
+        Scenario("F43 1 min at the front door (25 m), then back", "away 25 m (lock), stand 1 min facing the car, walk back", 30.0,
+            approachAndOpen() + listOf(Mark("expect-lock"), Walk(25.0), Stand(60_000, Facing.TOWARD)) + approachAndOpen()),
     )
 
     /** Every field incident and the families that reproduce it (incident history, 14/10). */

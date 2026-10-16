@@ -61,8 +61,9 @@ internal data class SimResult(val suite: String, val scenario: Scenario, val car
 
 internal object SimRunner {
     val LEARN_VISITS = (System.getenv("SIM_LEARN_VISITS") ?: "0").toInt()
-    /** 0.3.9 (user decision 15/10): the uncertain phone behaviour as fixed worst cases, each on the calibrated world. */
-    val WORST_CASES = listOf("steps-silent", "steps-dead", "gps-poor", "ar-poor", "signal-flat")
+    /** 0.3.9 (user decision 15/10): the uncertain phone behaviour as fixed worst cases, each on the calibrated world.
+     *  0.3.11 (user decision 16/10): two more from the measurement walk of 16/10. */
+    val WORST_CASES = listOf("steps-silent", "steps-dead", "gps-poor", "ar-poor", "signal-flat", "steps-late", "strong-spot")
 
     /** The world of a run. A stress world depends on the seed only, so two app versions meet the same world. */
     fun physicsFor(suite: String, seed: Long): SimPhysics = when (suite) {
@@ -74,6 +75,11 @@ internal object SimRunner {
         "gps-poor" -> SimPhysics(name = suite, gnssAccMedianM = 12.0, gnssAccSpread = 0.35, gnssTtffMs = 15_000L)
         // The signal stays flat over the last metres to the door in most walks (field: phone in a pocket).
         "signal-flat" -> SimPhysics(name = suite, approachPlateauP = 0.6)
+        // Field 16/10 (S24+, front pocket): after standing, counter and detector delivered a walk's first steps
+        // 8-14 s late, all at once.
+        "steps-late" -> SimPhysics(name = suite, lateStepsMinMs = 8_000L, lateStepsMaxMs = 14_000L)
+        // Field 16/10: standing at the front door (~25 m) read -86/-87 in the front pocket - the unlock threshold.
+        "strong-spot" -> SimPhysics(name = suite, spotDb = 7.0)
         else -> SimPhysics.calibrated()
     }
 

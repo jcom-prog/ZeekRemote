@@ -144,14 +144,35 @@ internal data class SimPhysics(
     val hubFreezeMs: Long = env("SIM_HUB_FREEZE_MS", 0.0).toLong(),
     /** 0.3.9 worst case: the hub step counter never delivers a step. SIM_HUB_NONE=1. */
     val hubNone: Boolean = System.getenv("SIM_HUB_NONE") == "1",
+    /**
+     * 0.3.11 worst case (field 16/10, S24+ in the front pocket, screen off): after standing still for
+     * [LATE_STEPS_AFTER_STILL_MS] or more, the step counter AND the step detector deliver the first steps
+     * of a walk only this long after it started - all at once - and promptly after that (three walks:
+     * 8-14 s). 0 = off. SIM_LATE_STEPS=1.
+     */
+    val lateStepsMinMs: Long = if (System.getenv("SIM_LATE_STEPS") == "1") 8_000L else 0L,
+    val lateStepsMaxMs: Long = if (System.getenv("SIM_LATE_STEPS") == "1") 14_000L else 0L,
+    /**
+     * 0.3.11 worst case (field 16/10): a spot at [SPOT_FROM_M]..[SPOT_TO_M] where the signal is this much
+     * stronger while the user stands there (the front door at ~25 m read -86/-87 in the front pocket - the
+     * unlock threshold - where the path-loss fit gives ~-93.5). 0 = off. SIM_SPOT_DB.
+     */
+    val spotDb: Double = env("SIM_SPOT_DB", 0.0),
 ) {
     fun describe() = "%s phone%+.1fdB slope%.1f fade%.1f gnss%s ttff%.0fs hub%.0fs warm%.0f self%.0fs refuse%.2f cloud%.0fs/fail%.2f/lag%.0fs".format(
         name, phoneOffsetDb, pathSlope, fadeSigmaDb, gnssAccMedianM?.let { "%.1fm".format(it) } ?: "-", gnssTtffMs / 1000.0,
         hubLagMs / 1000.0, stepWarmup, selfLockMs / 1000.0, keyLockRefuseP, cloudLockDelayMs / 1000.0, cloudFailP, cloudStatusLagMs / 1000.0) +
-        (if (hubNone) " counter-none" else if (hubFreezeMs > 0) " counter-silent%.0fs".format(hubFreezeMs / 1000.0) else "")
+        (if (hubNone) " counter-none" else if (hubFreezeMs > 0) " counter-silent%.0fs".format(hubFreezeMs / 1000.0) else "") +
+        (if (lateStepsMaxMs > 0) " steps-late%.0f-%.0fs".format(lateStepsMinMs / 1000.0, lateStepsMaxMs / 1000.0) else "") +
+        (if (spotDb != 0.0) " spot%+.0fdB".format(spotDb) else "")
 
     companion object {
         private fun env(name: String, default: Double) = System.getenv(name)?.toDouble() ?: default
+        /** Standing still at least this long makes the next walk's first steps late ([lateStepsMinMs]). */
+        const val LATE_STEPS_AFTER_STILL_MS = 10_000L
+        /** Where the strong spot ([spotDb]) is: the front door at ~25 m, with some margin. */
+        const val SPOT_FROM_M = 18.0
+        const val SPOT_TO_M = 32.0
         fun calibrated() = SimPhysics()
         /** A plausible other world (sensitivity / stress). Ranges from the field logs. */
         fun random(r: SimRandom) = SimPhysics(
@@ -326,6 +347,8 @@ internal class SimWorld(
         // Fitted on the field pocket readings: ~-79 at 2.5 m, -83 at 5 m, -85 at 7 m (approach ARM),
         // -87 at 10 m, -88..-90 facing at 15 m, -92..-98 walking away at 15-20 m (field logs).
         trueRssi = -71.0 - physics.pathSlope * log10(d) + carryNow.db + facing.db + extraShadowDb + fade + physics.phoneOffsetDb
+        // 0.3.11 worst case: the strong spot (front door) while the user stands there.
+        if (physics.spotDb != 0.0 && !walking && distanceM in SimPhysics.SPOT_FROM_M..SimPhysics.SPOT_TO_M) trueRssi += physics.spotDb
         plateauCapDb?.let { cap -> if (distanceM in 1.0..plateauFromM) trueRssi = minOf(trueRssi, cap + fade) }
     }
     fun readRssi(): Int {
@@ -409,8 +432,17 @@ internal class SimWorld(
         private var stopStartMs = -1L; private var stopLagMs = 0L
         private var stillSinceMs = -1L; private var movingSinceMs = -1L
         private var lastStepMs = -1L; private var stepAccum = 0.0
+        /** 0.3.11 worst case: when the user last stopped walking, and until when this walk's steps are held. */
+        private var walkEndedMs = Long.MIN_VALUE; private var wasWalking = false
+        private var lateUntilMs = Long.MIN_VALUE; private var lateDetectorSteps = 0L
 
         fun tick(dtMs: Long, cpuAwake: Boolean) {
+            if (walking && !wasWalking && physics.lateStepsMaxMs > 0 &&
+                (walkEndedMs == Long.MIN_VALUE || now() - walkEndedMs >= SimPhysics.LATE_STEPS_AFTER_STILL_MS))
+                lateUntilMs = now() + rHub.uniform(physics.lateStepsMinMs.toDouble(), physics.lateStepsMaxMs.toDouble()).toLong()
+            if (!walking && wasWalking) walkEndedMs = now()
+            wasWalking = walking
+            val late = now() < lateUntilMs
             if (walking) {
                 hubBoutSteps += dtMs / 550.0
                 if (hubBoutSteps >= physics.stepWarmup) hubSteps += 0.9 * dtMs / 550.0
@@ -421,7 +453,9 @@ internal class SimWorld(
                 freezeUntilMs = freezeFromMs + rHub.uniform(physics.hubFreezeMs / 2.0, physics.hubFreezeMs.toDouble()).toLong()
             }
             val hubSilent = physics.hubNone || (now() >= freezeFromMs && now() < freezeUntilMs)
-            if (!hubSilent && now() - hubSnapMs >= physics.hubLagMs) { hubSnapMs = now(); hubSeen = hubSteps.toLong() }
+            if (!hubSilent && !late && now() - hubSnapMs >= physics.hubLagMs) { hubSnapMs = now(); hubSeen = hubSteps.toLong() }
+            // The held detector steps arrive at once when the late window ends (field: "+9 in 73,8 s").
+            if (!late && lateDetectorSteps > 0) { steps += lateDetectorSteps; lateDetectorSteps = 0L; lastStepMs = now(); setMoving() }
             if (walking) {
                 stopStartMs = -1L
                 if (boutStartMs < 0) {
@@ -431,7 +465,10 @@ internal class SimWorld(
                 if (!boutMissed && now() - boutStartMs >= boutLagMs) setMoving()
                 if (motionProfile.stepAssistWhileAwake && cpuAwake) {
                     stepAccum += dtMs / 550.0
-                    while (stepAccum >= 1.0) { stepAccum -= 1.0; steps++; lastStepMs = now(); setMoving() }
+                    while (stepAccum >= 1.0) {
+                        stepAccum -= 1.0
+                        if (late) lateDetectorSteps++ else { steps++; lastStepMs = now(); setMoving() }
+                    }
                 }
             } else {
                 boutStartMs = -1L
