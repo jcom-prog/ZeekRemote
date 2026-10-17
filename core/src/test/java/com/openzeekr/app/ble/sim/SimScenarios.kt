@@ -194,6 +194,13 @@ internal object SimScenarios {
         // standing there, then straight back to the car (it opened only at the door).
         Scenario("F43 1 min at the front door (25 m), then back", "away 25 m (lock), stand 1 min facing the car, walk back", 30.0,
             approachAndOpen() + listOf(Mark("expect-lock"), Walk(25.0), Stand(60_000, Facing.TOWARD)) + approachAndOpen()),
+        // Measurement walk C (0.3.12): the car locked itself on the walk out; the user stood a minute, walked to and fro
+        // for a minute at about that distance, stood briefly and walked back at an easy pace. Step odometry counts the
+        // to-and-fro as distance out: study E-B (not adopted) opened 2.6 s later on such a walk. (F44 was a study walk.)
+        Scenario("F45 lock, 1 min to and fro at 12-16 m, back", "away 15 m (lock), stand 1 min, to and fro 12-16 m 1 min, back", 30.0,
+            approachAndOpen() + listOf(Mark("expect-lock"), Walk(15.0, 1.0), Stand(60_000, Facing.AWAY)) +
+                List(7) { listOf(Walk(16.0, 1.0), Walk(12.0, 1.0)) }.flatten() +
+                listOf(Walk(15.0, 1.0), Stand(15_000, Facing.TOWARD)) + approachAndOpen(1.0)),
     )
 
     /** Every field incident and the families that reproduce it (incident history, 14/10). */

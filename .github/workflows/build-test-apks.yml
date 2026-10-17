@@ -65,6 +65,7 @@ on:
       - zeekremote-0.3.10-alarm-early-stop
       - zeekremote-0.3.11-departure-edit
       - zeekremote-0.3.12-far-return-guard
+      - zeekremote-0.3.13-walking-spot
 
 permissions:
   contents: read
@@ -128,7 +129,8 @@ jobs:
       # 14/10 18:31: the late unlock no simulation showed). 0.3.9: also the owner's fixed worst cases
       # (silent or dead step counter, poor GPS, poor Activity Recognition, flat signal at the door) and
       # the owner's targets in the table (about 14 min instead of 6; the job has 45 minutes). 0.3.12: three
-      # more worst cases (quick STILL, hand wobble, the field of 16/10), about 17 min.
+      # more worst cases (quick STILL, hand wobble, the field of 16/10), about 17 min. 0.3.13: the strong spot also
+      # while walking and F45 (to and fro after the Lock), about 19 min.
       - name: Simulation safety gate
         run: SIM_GATE=1 SIM_LEARN_VISITS=20 SIM_PLATEAU_P=0.15 ./gradlew :core:testDebugUnitTest --tests "com.openzeekr.app.ble.sim.SimGateTest" --stacktrace
 
@@ -289,8 +291,8 @@ jobs:
           grep -Fq 'the cloud state is unavailable -> alarm (lock not verifiable)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'private fun closeAlarmEpisode(reason: String, linkLostAgain: Boolean = false)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'val WORST_CASES = listOf("steps-silent", "steps-dead", "gps-poor", "ar-poor", "signal-flat", "steps-late", "strong-spot", "ar-quick-still",' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
-          grep -Fxq '        "hand-wobble", "field-like")' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
-          for s in steps-silent steps-dead gps-poor ar-poor signal-flat steps-late strong-spot ar-quick-still hand-wobble field-like; do grep -Fq "\"$s\": {" core/src/test/resources/sim-baseline.json; done
+          grep -Fxq '        "hand-wobble", "field-like", "strong-spot-walk")' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
+          for s in steps-silent steps-dead gps-poor ar-poor signal-flat steps-late strong-spot ar-quick-still hand-wobble field-like strong-spot-walk; do grep -Fq "\"$s\": {" core/src/test/resources/sim-baseline.json; done
           # 0.3.10: no alarm stops early while the car is open and the user away. A withheld Lock no longer
           # silences it, weak evidence of a return only when it looks like one, and the gate counts the gap.
           if awk '/fun resolvesAlarm\(/{f=1} f && /PROXIMITY_RECOVERED_BEFORE_LOCK/{print; exit} f && /^    }/{exit}' core/src/main/java/com/openzeekr/app/ble/LockAlertPolicy.kt | grep -q .; then echo 'a withheld Lock silences the alarm again'; exit 1; fi
@@ -322,6 +324,15 @@ jobs:
           grep -Fq 'val silence = returnPending && alarmOn && (walking || now - strongStreakStartMs >= RETURN_STRONG_SUSTAIN_MS)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq '"hand-wobble" -> SimPhysics(name = suite, handWobbleDb = 3.0)' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
           grep -Fq 'Target("hand: locks by itself at 10-25 m"' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
+          # 0.3.13: the strong spot also while walking is a fixed worst case, and F45 (to and fro after the Lock, then
+          # back) is in the matrix. App code as 0.3.12: the E-B return margin was not adopted (walk C).
+          grep -Fq '"strong-spot-walk" -> SimPhysics(name = suite, spotDb = 7.0, spotWhileWalking = true)' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
+          grep -Fq 'Scenario("F45 lock, 1 min to and fro at 12-16 m, back"' core/src/test/java/com/openzeekr/app/ble/sim/SimScenarios.kt
+          # The walk back of F43 and F45 is checked on its own, over all suites (opening distance, after the door).
+          grep -Fq 'val RETURN_FAMILIES = listOf("F43", "F45")' core/src/test/java/com/openzeekr/app/ble/sim/SimGateTest.kt
+          grep -Fq 'const val RETURN_SLACK_CM = 50' core/src/test/java/com/openzeekr/app/ble/sim/SimGateTest.kt
+          for r in return-f43 return-f45; do grep -Fq "\"$r\": {" core/src/test/resources/sim-baseline.json; done
+          grep -Fq 'if (physics.spotDb != 0.0 && (!walking || physics.spotWhileWalking) &&' core/src/test/java/com/openzeekr/app/ble/sim/SimWorld.kt
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -343,7 +354,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='136' versionName='0.3.12-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='137' versionName='0.3.13-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

@@ -166,13 +166,20 @@ internal data class SimPhysics(
      * the hand, full size facing away and half facing the car. 0 = off. SIM_HAND_WOBBLE_DB.
      */
     val handWobbleDb: Double = env("SIM_HAND_WOBBLE_DB", 0.0),
+    /**
+     * 0.3.13 worst case (field 16/10): the strong spot ([spotDb]) also while walking - walking from 30 to 25 m read
+     * -81..-87 in the front pocket, 9-10 dB above the path-loss fit. Here it holds at [SPOT_FROM_M]..[SPOT_TO_M] on every
+     * walk and every visit (a second visit read 7 dB weaker): an upper bound. Measurement walk C (0.3.12) found no strong
+     * spot there, standing or walking, and that place measured much closer to the car than estimated: a generous one.
+     */
+    val spotWhileWalking: Boolean = false,
 ) {
     fun describe() = "%s phone%+.1fdB slope%.1f fade%.1f gnss%s ttff%.0fs hub%.0fs warm%.0f self%.0fs refuse%.2f cloud%.0fs/fail%.2f/lag%.0fs".format(
         name, phoneOffsetDb, pathSlope, fadeSigmaDb, gnssAccMedianM?.let { "%.1fm".format(it) } ?: "-", gnssTtffMs / 1000.0,
         hubLagMs / 1000.0, stepWarmup, selfLockMs / 1000.0, keyLockRefuseP, cloudLockDelayMs / 1000.0, cloudFailP, cloudStatusLagMs / 1000.0) +
         (if (hubNone) " counter-none" else if (hubFreezeMs > 0) " counter-silent%.0fs".format(hubFreezeMs / 1000.0) else "") +
         (if (lateStepsMaxMs > 0) " steps-late%.0f-%.0fs".format(lateStepsMinMs / 1000.0, lateStepsMaxMs / 1000.0) else "") +
-        (if (spotDb != 0.0) " spot%+.0fdB".format(spotDb) else "") +
+        (if (spotDb != 0.0) " spot%+.0fdB".format(spotDb) + (if (spotWhileWalking) "-walking" else "") else "") +
         (if (handWobbleDb != 0.0) " hand-wobble%.1fdB".format(handWobbleDb) else "")
 
     companion object {
@@ -360,7 +367,8 @@ internal class SimWorld(
         // -87 at 10 m, -88..-90 facing at 15 m, -92..-98 walking away at 15-20 m (field logs).
         trueRssi = -71.0 - physics.pathSlope * log10(d) + carryNow.db + facing.db + extraShadowDb + fade + physics.phoneOffsetDb
         // 0.3.11 worst case: the strong spot (front door) while the user stands there.
-        if (physics.spotDb != 0.0 && !walking && distanceM in SimPhysics.SPOT_FROM_M..SimPhysics.SPOT_TO_M) trueRssi += physics.spotDb
+        if (physics.spotDb != 0.0 && (!walking || physics.spotWhileWalking) &&
+            distanceM in SimPhysics.SPOT_FROM_M..SimPhysics.SPOT_TO_M) trueRssi += physics.spotDb
         if (physics.handWobbleDb > 0.0) {
             if (walking && carryNow == Carry.HAND) {
                 val rho = exp(-walkSpeed * TICK_MS / 1000.0 / HAND_WOBBLE_CORR_M)

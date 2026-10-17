@@ -63,9 +63,10 @@ internal object SimRunner {
     val LEARN_VISITS = (System.getenv("SIM_LEARN_VISITS") ?: "0").toInt()
     /** 0.3.9 (user decision 15/10): the uncertain phone behaviour as fixed worst cases, each on the calibrated world.
      *  0.3.11 (user decision 16/10): two more from the measurement walk of 16/10.
-     *  0.3.12 (user decision 16/10): quick STILL, the hand wobble, and the field of 16/10 in one world. */
+     *  0.3.12 (user decision 16/10): quick STILL, the hand wobble, and the field of 16/10 in one world.
+     *  0.3.13 (user decision 17/10): the strong spot also while walking. */
     val WORST_CASES = listOf("steps-silent", "steps-dead", "gps-poor", "ar-poor", "signal-flat", "steps-late", "strong-spot", "ar-quick-still",
-        "hand-wobble", "field-like")
+        "hand-wobble", "field-like", "strong-spot-walk")
 
     /** The world of a run. A stress world depends on the seed only, so two app versions meet the same world. */
     fun physicsFor(suite: String, seed: Long): SimPhysics = when (suite) {
@@ -82,6 +83,8 @@ internal object SimRunner {
         "steps-late" -> SimPhysics(name = suite, lateStepsMinMs = 8_000L, lateStepsMaxMs = 14_000L)
         // Field 16/10: standing at the front door (~25 m) read -86/-87 in the front pocket - the unlock threshold.
         "strong-spot" -> SimPhysics(name = suite, spotDb = 7.0)
+        // Field 16/10: walking from 30 to 25 m read -81..-87 in the front pocket too (an upper bound: not every visit).
+        "strong-spot-walk" -> SimPhysics(name = suite, spotDb = 7.0, spotWhileWalking = true)
         // Field 16/10, phone in the hand: walking wobbles 1.9-2.4 dB at the 1 s scale (sim 3 dB -> 2.2).
         "hand-wobble" -> SimPhysics(name = suite, handWobbleDb = 3.0)
         // The field of 16/10 together: late steps after standing, quick STILL (profileFor), poor GPS as in
@@ -121,6 +124,28 @@ internal object SimRunner {
 
 internal object SimReport {
     private fun pct(l: List<Double>, p: Double) = if (l.isEmpty()) Double.NaN else l[((l.size - 1) * p).toInt()]
+
+    /**
+     * 0.3.13: the walk back of [family] (its last expected approach) in every run where the car was still locked when it
+     * began: the median and mean distance at which the car opened, in cm (a walk back that never opened counts as 0 m),
+     * and the runs that opened only after the door or not at all, over all suites in [results].
+     */
+    fun returnStats(results: List<SimResult>, family: String): ReturnStats {
+        val dists = mutableListOf<Double>(); var late = 0
+        results.filter { it.scenario.family.substringBefore(' ') == family }.forEach { r ->
+            val marks = r.world.events.filter { it.kind == "MARK" }
+            val from = marks.lastOrNull { it.detail == "expect-unlock" }?.atMs ?: return@forEach
+            val before = r.world.events.lastOrNull { (it.kind == "CAR_UNLOCKED" || it.kind == "CAR_LOCKED") && it.atMs < from }
+            if (before?.kind == "CAR_UNLOCKED") return@forEach
+            val end = marks.firstOrNull { it.atMs > from }?.atMs ?: Long.MAX_VALUE
+            dists += r.world.events.firstOrNull { it.kind == "CAR_UNLOCKED" && it.atMs in from until end }?.distanceM ?: 0.0
+            if (r.findings.any { it.atMs >= from && (it.code == "APPROACH_UNLOCK_AFTER_DOOR" || it.code == "APPROACH_NO_UNLOCK") }) late++
+        }
+        dists.sort()
+        return ReturnStats(dists.size, if (dists.isEmpty()) 0 else Math.round(dists[(dists.size - 1) / 2] * 100).toInt(),
+            if (dists.isEmpty()) 0 else Math.round(dists.average() * 100).toInt(), late)
+    }
+    data class ReturnStats(val runs: Int, val medianCm: Int, val meanCm: Int, val notBeforeDoor: Int)
 
     /** Per suite: runs affected per finding code (the gate compares these). */
     fun counts(results: List<SimResult>): Map<String, Map<String, Int>> = results.groupBy { it.suite }.mapValues { (_, rs) ->

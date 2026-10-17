@@ -18,6 +18,8 @@ import java.io.File
  *   step counter, poor GPS, poor Activity Recognition, a flat signal at the door), [WORST_SEEDS] seeds each.
  *   (CI and the baseline use SIM_LEARN_VISITS=20 SIM_PLATEAU_P=0.15: the self-calibration learns as
  * on the phone, and 15 % of the walks to the car end flat as in the field)
+ *   0.3.13 (user decision 17/10): the walk back of the owner's own field walks ([SimBaseline.RETURN_FAMILIES]) over
+ *   all suites together - a suite-wide allowance hid it (study E-B opened F45 later in 12 of 13 worlds and passed).
  */
 class SimGateTest {
     private val baselineFile = File("src/test/resources/sim-baseline.json")
@@ -48,6 +50,18 @@ class SimGateTest {
                 table.append("    %-4s %-48s %-22s goal %s\n".format(if (t.met) "ok" else "MISS", t.name, t.value, t.goal))
             }
         }
+        // 0.3.13: the walk back of the owner's own field walks. Its median and mean opening distance may drop at most
+        // [RETURN_SLACK_CM]; the walks back that open only after the door or not at all may rise at most 10 %.
+        table.append("  walks back after a Lock (all suites; opening distance median/mean, after the door or not at all):\n")
+        for (fam in SimBaseline.RETURN_FAMILIES) {
+            val key = "return-" + fam.lowercase(); val b = base[key].orEmpty(); val n = SimReport.returnStats(results, fam)
+            table.append("    %-4s runs %4d -> %4d  median %5.2f m -> %5.2f m  mean %5.2f m -> %5.2f m  late %4d -> %4d\n".format(fam,
+                b["runs"] ?: 0, n.runs, (b["medianCm"] ?: 0) / 100.0, n.medianCm / 100.0, (b["meanCm"] ?: 0) / 100.0, n.meanCm / 100.0,
+                b["notBeforeDoor"] ?: 0, n.notBeforeDoor))
+            b["medianCm"]?.let { if (n.medianCm < it - RETURN_SLACK_CM) regressions += "$key median opening distance: $it cm -> ${n.medianCm} cm" }
+            b["meanCm"]?.let { if (n.meanCm < it - RETURN_SLACK_CM) regressions += "$key mean opening distance: $it cm -> ${n.meanCm} cm" }
+            b["notBeforeDoor"]?.let { if (n.notBeforeDoor > it + maxOf(3, it / 10)) regressions += "$key after the door or not at all: $it -> ${n.notBeforeDoor}" }
+        }
         println(table)
         File(outDir, "gate.txt").writeText(table.toString())
         // The table above compares with the old baseline; a rewrite replaces it after an intended change.
@@ -65,6 +79,8 @@ class SimGateTest {
         val MAIN_SUITES = listOf("calibrated", "stress")
         /** The worst-case suites run fewer seeds, so the gate stays within a CI step. */
         const val WORST_SEEDS = 3
+        /** 0.3.13: how far the opening on a field walk back may move towards the door (study E-B: about 1 m). */
+        const val RETURN_SLACK_CM = 50
     }
 
     /** Small noise allowance: a changed decision shifts later random draws in the same run. */
@@ -81,20 +97,24 @@ internal object SimBaseline {
     fun read(f: File): Map<String, Map<String, Int>> {
         if (!f.exists()) return emptyMap()
         val text = f.readText()
-        return Regex("\"([a-z][a-z-]*)\"\\s*:\\s*\\{([^}]*)\\}").findAll(text).associate { m ->
+        return Regex("\"([a-z][a-z0-9-]*)\"\\s*:\\s*\\{([^}]*)\\}").findAll(text).associate { m ->
             m.groupValues[1] to Regex("\"([A-Z_a-z]+)\"\\s*:\\s*(\\d+)").findAll(m.groupValues[2])
                 .associate { it.groupValues[1] to it.groupValues[2].toInt() }
         }
     }
 
+    /** 0.3.13: the owner's own field walks whose walk back the gate checks on its own (see [SimReport.returnStats]). */
+    val RETURN_FAMILIES = listOf("F43", "F45")
+
     fun write(seeds: Int, results: List<SimResult>): String = buildString {
         append("{\n  \"seeds\": ").append(seeds).append(",\n")
-        val c = SimReport.counts(results)
-        c.entries.forEachIndexed { i, (suite, codes) ->
-            append("  \"").append(suite).append("\": {\"runs\": ").append(results.count { it.suite == suite })
-            codes.forEach { (k, v) -> append(", \"").append(k).append("\": ").append(v) }
-            append("}").append(if (i < c.size - 1) ",\n" else "\n")
+        val suites = SimReport.counts(results).map { (suite, codes) ->
+            "  \"$suite\": {\"runs\": ${results.count { it.suite == suite }}" + codes.entries.joinToString("") { (k, v) -> ", \"$k\": $v" } + "}"
         }
-        append("}\n")
+        val returns = RETURN_FAMILIES.map { fam -> val r = SimReport.returnStats(results, fam)
+            "  \"return-${fam.lowercase()}\": {\"runs\": ${r.runs}, \"medianCm\": ${r.medianCm}, \"meanCm\": ${r.meanCm}, " +
+                "\"notBeforeDoor\": ${r.notBeforeDoor}}"
+        }
+        append((suites + returns).joinToString(",\n")).append("\n}\n")
     }
 }
