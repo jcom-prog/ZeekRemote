@@ -66,6 +66,7 @@ on:
       - zeekremote-0.3.11-departure-edit
       - zeekremote-0.3.12-far-return-guard
       - zeekremote-0.3.13-walking-spot
+      - zeekremote-0.3.14-departure-from-slot
 
 permissions:
   contents: read
@@ -333,6 +334,13 @@ jobs:
           grep -Fq 'const val RETURN_SLACK_CM = 50' core/src/test/java/com/openzeekr/app/ble/sim/SimGateTest.kt
           for r in return-f43 return-f45; do grep -Fq "\"$r\": {" core/src/test/resources/sim-baseline.json; done
           grep -Fq 'if (physics.spotDb != 0.0 && (!walking || physics.spotWhileWalking) &&' core/src/test/java/com/openzeekr/app/ble/sim/SimWorld.kt
+          # 0.3.14: a new departure is written over the free slot as the car reported it (field 16/10 and 18/10: a plan
+          # built from scratch never reached the car), and a privacy-safe shape line (flags and counts only) per load and write.
+          grep -Fq 'fun fromSlot(slot: BookingTravelSetting, d: DepartureDraft, t: Template = Template()): BookingTravelSetting {' core/src/main/java/com/openzeekr/app/remote/Departures.kt
+          grep -Fq 'fragSetting = (base.fragSetting ?: t.fragrance).copy(sts = 0),' core/src/main/java/com/openzeekr/app/remote/Departures.kt
+          grep -Fq '?.let { Departures.fromSlot(it, draft, template) } ?: Departures.newPlan(draft, slot, template)' app/src/main/java/com/openzeekr/app/ui/ScheduleScreen.kt
+          grep -Fq '"SCHEDULE_SHAPE ' core/src/main/java/com/openzeekr/app/util/ProximityDiagnosticJournal.kt
+          grep -Fq 'ScheduleDiagnostics.shapeLine(kind.name.lowercase(), setting, last)' core/src/main/java/com/openzeekr/app/remote/Repositories.kt
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -354,7 +362,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='137' versionName='0.3.13-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='138' versionName='0.3.14-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

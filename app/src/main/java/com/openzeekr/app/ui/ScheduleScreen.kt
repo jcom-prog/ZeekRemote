@@ -291,7 +291,10 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
                         slot == null -> snackbar("No free place on the car: delete a departure first.")
                         !writes.canCreate() -> snackbar(ScheduleWrites.CREATE_WAITS)
                         else -> {
-                            val plan = Departures.newPlan(draft, slot, template)
+                            // 0.3.14: written over the free slot as the car reported it (see Departures.fromSlot);
+                            // built from scratch only when the car reported no slots at all.
+                            val plan = departures.firstOrNull { it.btId == slot && Departures.isEmptySlot(it) }
+                                ?.let { Departures.fromSlot(it, draft, template) } ?: Departures.newPlan(draft, slot, template)
                             write(done = "Departure stored on the car ✓", notConfirmed = NOT_CONFIRMED_CREATE, failed = "Create failed") {
                                 deps.schedule.createDeparture(plan)
                             }

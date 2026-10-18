@@ -36,6 +36,23 @@ class ScheduleDiagnosticsTest {
         assertNull("another area", ProximityDiagnosticJournal.event("http", base))
     }
 
+    @Test fun theShapeLineShowsFlagsAndCountsOnly() {
+        // 0.3.14: how a plan the car accepted is built next to the one we send - never a value.
+        val own = used.copy(csSetting = com.openzeekr.app.net.model.TravelClimateSetting(15, 1, "22.0"),
+            fragSetting = com.openzeekr.app.net.model.TravelFragranceSetting(1, 15, 1, 0))
+        val sent = Departures.fromSlot(empty, DepartureDraft("Test", "04:00:00", setOf(7), tempC = 21.0))
+        val line = ScheduleDiagnostics.shapeLine("create", sent, listOf(own, empty))
+        assertEquals("schedule shape at=create sent=2:s1.d1.b1.p0.tp.c7.a1.nu.cs+.v2+.h4+.w+.f+ " +
+            "slots=1:s1.d1.b1.p0.tp.c7.a2.nu.cs+.v0.h0.w-.f+,2:s0.d0.b1.p0.tp.c0.a0.ne.cs-.v0.h0.w-.f-", line)
+        for (privateValue in listOf("Plan A", "Test", "06:40", "04:00", "22.0", "21.0", Departures.PLACEHOLDER_TIME))
+            assertFalse(privateValue, line.contains(privateValue))
+        assertEquals("SCHEDULE_SHAPE " + line.removePrefix("schedule shape "), ProximityDiagnosticJournal.event("sched", line))
+        val load = ScheduleDiagnostics.shapeLine("load", null, emptyList())
+        assertEquals("SCHEDULE_SHAPE at=load sent=- slots=none", ProximityDiagnosticJournal.event("sched", load))
+        assertNull("a name", ProximityDiagnosticJournal.event("sched", line.replace(".nu.", ".nTest.")))
+        assertNull("trailing data", ProximityDiagnosticJournal.event("sched", "$line 04:00"))
+    }
+
     @Test fun refusalCodesAndChargeReadBackStayCategorical() {
         assertEquals("refused code=A1001", ScheduleDiagnostics.refused("A1001"))
         assertEquals("refused code=carasleep", ScheduleDiagnostics.refused("car asleep!"))

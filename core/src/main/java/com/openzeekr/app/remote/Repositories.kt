@@ -702,9 +702,15 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
             guarded {
                 requireVin()
                 runCatching { com.openzeekr.app.net.AccountLogin(store).heartbeat() }
-                client.api.getTravelPlans().data ?: emptyList()
+                (client.api.getTravelPlans().data ?: emptyList()).also { plans ->
+                    // 0.3.14: how the car stores its plans (flags and counts only), once per change.
+                    val line = ScheduleDiagnostics.shapeLine("load", null, plans)
+                    if (line != lastLoadShape) { lastLoadShape = line; com.openzeekr.app.util.Logx.d("sched", line) }
+                }
             }
         }
+
+    @Volatile private var lastLoadShape: String? = null
 
     /** Create a departure schedule in a free slot. While the car has not shown it, [writes] refuses
      *  another Create (a second press would queue a second plan). 0.3.11: written as a change ("edit")
@@ -774,6 +780,8 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
                     } finally {
                         com.openzeekr.app.util.Logx.d("sched", ScheduleDiagnostics.line(kind, setting.btId, sent, session,
                             result, polls, ScheduleDiagnostics.slots(last), ScheduleDiagnostics.found(last, setting)))
+                        // 0.3.14: the plan sent and the car's last read-back, as flags and counts only.
+                        com.openzeekr.app.util.Logx.d("sched", ScheduleDiagnostics.shapeLine(kind.name.lowercase(), setting, last))
                     }
                 } ?: error(ScheduleWrites.BUSY)
             }

@@ -3,6 +3,7 @@ package com.openzeekr.app.remote
 import com.openzeekr.app.net.model.BookingTravelSetting
 import com.openzeekr.app.net.model.CycleTime
 import com.openzeekr.app.net.model.TravelClimateSetting
+import com.openzeekr.app.net.model.TravelFragranceSetting
 import com.openzeekr.app.net.model.TravelSeatSetting
 import com.openzeekr.app.net.model.TravelWheelSetting
 import java.util.Locale
@@ -48,6 +49,8 @@ object Departures {
         val seatLevel: Int = 3,
         val wheelMinutes: Int = 15,
         val wheelLevel: Int = 3,
+        /** 0.3.14: the fragrance block the official app stores (switched off) with every plan. */
+        val fragrance: TravelFragranceSetting = TravelFragranceSetting(channel = 1, duration = 15, level = 1, sts = 0),
     )
 
     fun isEmptySlot(p: BookingTravelSetting): Boolean =
@@ -73,6 +76,7 @@ object Departures {
             seatLevel = seat?.level?.takeIf { it in 1..3 } ?: d.seatLevel,
             wheelMinutes = src.whlSetting?.duration?.takeIf { it > 0 } ?: d.wheelMinutes,
             wheelLevel = src.whlSetting?.level?.takeIf { it in 1..3 } ?: d.wheelLevel,
+            fragrance = src.fragSetting?.copy(sts = 0) ?: d.fragrance,
         )
     }
 
@@ -104,6 +108,41 @@ object Departures {
         },
         whlSetting = TravelWheelSetting(duration = t.wheelMinutes, level = t.wheelLevel, sts = if (d.wheelHeat) 1 else 0),
     )
+
+    /**
+     * 0.3.14: a new plan written over the free [slot] as the car reported it. Field 16/10 and 18/10: a plan
+     * built from scratch (no fragrance block) never reached the car, as "start" nor as "edit", while an edit
+     * that sent a plan back as the car had reported it was applied within seconds. So every block the car
+     * sent for the slot is kept; a missing block, or one with a zero duration or level, gets the official
+     * app's defaults; the plan is switched on, shown and recurring, with the editor's name, days, time and
+     * settings. Ventilation, the rear seats and fragrance stay off (the editor does not show them).
+     */
+    fun fromSlot(slot: BookingTravelSetting, d: DepartureDraft, t: Template = Template()): BookingTravelSetting {
+        val base = sanitizedForWrite(slot, t)
+        val cs = base.csSetting!!
+        val whl = base.whlSetting!!
+        return base.copy(
+            name = d.name.trim().ifBlank { "Departure" },
+            sts = 1,
+            displaySts = 1,
+            bookingType = 1,  // recurring: the days in cycleTimes
+            temporaryTime = PLACEHOLDER_TIME,
+            cycleTimes = week(d),
+            preHeatSts = if (d.batteryMaintenance) 1 else 0,
+            csSetting = cs.copy(duration = cs.duration.takeIf { it > 0 } ?: t.climateMinutes,
+                sts = if (d.climate) 1 else 0, temp = temp(d.tempC)),
+            ventiSettings = base.ventiSettings.map {
+                it.copy(duration = it.duration.takeIf { m -> m > 0 } ?: t.seatMinutes, level = it.level.takeIf { l -> l in 1..3 } ?: 1, sts = 0)
+            },
+            heatSettings = base.heatSettings.map {
+                it.copy(duration = it.duration.takeIf { m -> m > 0 } ?: t.seatMinutes, level = it.level.takeIf { l -> l in 1..3 } ?: t.seatLevel,
+                    sts = if (d.seatHeat && it.location in FRONT_SEATS) 1 else 0)
+            },
+            whlSetting = whl.copy(duration = whl.duration.takeIf { it > 0 } ?: t.wheelMinutes,
+                level = whl.level?.takeIf { it in 1..3 } ?: t.wheelLevel, sts = if (d.wheelHeat) 1 else 0),
+            fragSetting = (base.fragSetting ?: t.fragrance).copy(sts = 0),
+        )
+    }
 
     /** [p] changed as the editor says. What the editor does not show (fragrance, ventilation, rear seats,
      *  levels, durations, the slot) is kept exactly as the car reported it. */

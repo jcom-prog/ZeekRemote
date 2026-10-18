@@ -56,6 +56,11 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
             "result=(?:confirmed|pending|failed) polls=[0-9]{1,3} " +
             "readback=(?:none|(?:start|stop|other)/(?:app|other)|$SCHEDULE_SLOT(?:,$SCHEDULE_SLOT){0,9}) " +
             "found=(?:-|none|slot[0-9]{1,2} name=same days=(?:same|other) time=(?:same|other) on=(?:same|other)))")
+        // How the plans are built (0.3.14): flags and counts per slot only - no name, time, day or temperature fits.
+        private const val SCHEDULE_SHAPE = "[0-9]{1,2}:s[0-9]\\.d[0-9]\\.b[0-9]\\.p[0-9]\\.t[0px]\\.c[0-9]\\.a[0-7]\\.n[eu]" +
+            "\\.cs[-+0]\\.v[0-9][+0]?\\.h[0-9][+0]?\\.w[-+0]\\.f[-+0]"
+        private val scheduleShape = Regex("schedule shape (at=(?:load|create|edit|switch|delete) sent=(?:-|$SCHEDULE_SHAPE) " +
+            "slots=(?:none|$SCHEDULE_SHAPE(?:,$SCHEDULE_SHAPE){0,9}))")
         private val outcomes = setOf("fine_permission_missing", "provider_cancelled", "provider_failure",
             "provider_no_fix", "accuracy_missing", "mock_rejected", "fix_received", "security_exception",
             "request_timeout", "session_disabled", "window_expired_before_request",
@@ -174,6 +179,7 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                 else -> null
             }
             if (area == "sched") return scheduleWrite.matchEntire(message)?.let { "SCHEDULE_WRITE ${it.groupValues[1]}" }
+                ?: scheduleShape.matchEntire(message)?.let { "SCHEDULE_SHAPE ${it.groupValues[1]}" }
             if (area == "ctl") return Regex("(LOCK|UNLOCK): cloud request failed \\(key link ([A-Z_]{1,20})\\)")
                 .matchEntire(message)?.let { "CLOUD_${it.groupValues[1]}_FAILED ${it.groupValues[2]}" }
             if (area == "svc") return when (message) {

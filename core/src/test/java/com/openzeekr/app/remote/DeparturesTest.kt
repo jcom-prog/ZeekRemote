@@ -61,6 +61,35 @@ class DeparturesTest {
         assertEquals(d, Departures.draftOf(p))
     }
 
+    @Test fun aNewPlanIsWrittenOverTheFreeSlotAsTheCarReportedIt() {
+        // 0.3.14: field 16/10 and 18/10 - a plan built from scratch never reached the car; the slot's own
+        // record keeps every block the car sent, a missing one gets the official app's defaults.
+        val t = Departures.template(listOf(ownPlan(), emptySlot(2)))
+        val d = DepartureDraft("Test", "04:00:00", setOf(7), climate = true, tempC = 21.0)
+        val p = Departures.fromSlot(emptySlot(2), d, t)
+        assertEquals(2, p.btId)
+        assertEquals(Triple(1, 1, 1), Triple(p.sts, p.displaySts, p.bookingType))
+        assertEquals(Departures.PLACEHOLDER_TIME, p.temporaryTime)
+        assertEquals(listOf(7), p.cycleTimes.filter { it.sts == 1 }.map { it.day })
+        assertEquals(TravelClimateSetting(15, 1, "21.0"), p.csSetting)
+        assertEquals("the official app's fragrance block, switched off", TravelFragranceSetting(1, 15, 1, 0), p.fragSetting)
+        assertEquals(listOf(1, 2), p.ventiSettings.map { it.location })
+        assertTrue(p.ventiSettings.all { it.sts == 0 && it.duration > 0 })
+        assertEquals(mapOf(1 to 0, 2 to 0, 3 to 0, 5 to 0), p.heatSettings.associate { it.location to it.sts })
+        assertEquals(TravelWheelSetting(15, 2, 0), p.whlSetting)
+        assertEquals(d, Departures.draftOf(p))
+        // A slot that reports its own blocks keeps them; zero durations and levels get the defaults.
+        val reported = emptySlot(3).copy(
+            csSetting = TravelClimateSetting(0, 0, "22.0"),
+            heatSettings = listOf(TravelSeatSetting(0, 0, 1, 0), TravelSeatSetting(0, 0, 2, 0)),
+            fragSetting = TravelFragranceSetting(channel = 2, duration = 10, level = 2, sts = 1),
+        )
+        val q = Departures.fromSlot(reported, d.copy(seatHeat = true), t)
+        assertEquals(TravelClimateSetting(15, 1, "21.0"), q.csSetting)
+        assertEquals(listOf(TravelSeatSetting(15, 2, 1, 1), TravelSeatSetting(15, 2, 2, 1)), q.heatSettings)
+        assertEquals("the car's own fragrance block, switched off", TravelFragranceSetting(2, 10, 2, 0), q.fragSetting)
+    }
+
     @Test fun theTemperatureAlwaysUsesAPointWhateverThePhoneLanguage() {
         val before = Locale.getDefault()
         try {

@@ -49,6 +49,30 @@ internal object ScheduleDiagnostics {
         return "slot${p.btId.coerceIn(0, 99)} name=same days=${same(days)} time=${same(time)} on=${same(p.sts == want.sts)}"
     }
 
+    /**
+     * 0.3.14: how a plan is built, as flags and counts only (never a name, time, day, temperature or id):
+     * state, shown, type, battery, the placeholder time, the number of day entries and active days,
+     * whether the name is the car's empty-slot name, and per block present / missing / zero duration,
+     * e.g. "s1.d1.b1.p0.tp.c7.a2.nu.cs+.v2+.h4+.w+.f+". Compares a plan the car accepted with one we send.
+     */
+    fun shape(p: BookingTravelSetting): String {
+        fun flag(v: Int) = v.coerceIn(0, 9).toString()
+        fun block(duration: Int?) = when { duration == null -> "-"; duration > 0 -> "+"; else -> "0" }
+        fun seats(l: List<com.openzeekr.app.net.model.TravelSeatSetting>) =
+            l.size.coerceIn(0, 9).toString() + if (l.isEmpty()) "" else if (l.all { it.duration > 0 }) "+" else "0"
+        val time = when { p.temporaryTime.isBlank() -> "0"; p.temporaryTime == Departures.PLACEHOLDER_TIME -> "p"; else -> "x" }
+        val name = if (p.name.isBlank() || p.name.equals(Departures.EMPTY_SLOT_NAME, ignoreCase = true)) "e" else "u"
+        return "s${flag(p.sts)}.d${flag(p.displaySts)}.b${flag(p.bookingType)}.p${flag(p.preHeatSts)}.t$time" +
+            ".c${p.cycleTimes.size.coerceIn(0, 9)}.a${p.cycleTimes.count { it.sts == 1 }.coerceIn(0, 7)}.n$name" +
+            ".cs${block(p.csSetting?.duration)}.v${seats(p.ventiSettings)}.h${seats(p.heatSettings)}" +
+            ".w${block(p.whlSetting?.duration)}.f${block(p.fragSetting?.duration)}"
+    }
+
+    /** The shape line: [at] is "load" or the write's kind; [sent] the plan written (null on a load). */
+    fun shapeLine(at: String, sent: BookingTravelSetting?, plans: List<BookingTravelSetting>?): String =
+        "schedule shape at=$at sent=${sent?.let { "${it.btId.coerceIn(0, 99)}:${shape(it)}" } ?: "-"} slots=" +
+            (if (plans.isNullOrEmpty()) "none" else plans.take(10).joinToString(",") { "${it.btId.coerceIn(0, 99)}:${shape(it)}" })
+
     /** The charging plan's read-back: its command and who wrote it last, as categories. */
     fun charge(command: String?, dataSource: String?): String =
         "${when (command) { "start" -> "start"; "stop" -> "stop"; else -> "other" }}/" +
