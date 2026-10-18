@@ -33,14 +33,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.openzeekr.app.Deps
 import com.openzeekr.app.net.model.BookingTravelSetting
 import com.openzeekr.app.remote.CallResult
@@ -63,12 +67,15 @@ import kotlinx.coroutines.launch
  *    what the official app offers: climate with a target temperature, steering wheel heating, seat
  *    heating per seat (off or I-III) and battery temperature maintenance. Tap a plan to edit it. The
  *    car's unused plan slots are hidden, and a new plan only goes into a free slot (see [Departures]).
+ *    The list is what the car holds: read when the tab is shown ([active]), when the app comes back to the front,
+ *    every REFRESH_MS while it stays in view and on Refresh (0.3.18).
  *
  * Self-contained: expose [ScheduleScreen] and wire a nav entry in AppRoot (owned by the parent).
  */
 @Composable
-fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = Modifier) {
+fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = Modifier, active: Boolean = true) {
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     // ---- charging schedule state (V1: a single daily window per timerId) ----
     var chargeEnabled by remember { mutableStateOf(false) }
@@ -83,6 +90,10 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
 
     // ---- departure schedule state ----
     val departures = remember { mutableStateListOf<BookingTravelSetting>() }
+    // 0.3.18: slots of plans ZeekRemote could only read in part (see TravelPlanList): shown, never written.
+    var readOnly by remember { mutableStateOf(emptySet<Int>()) }
+    // What a new plan may go into: a free slot ZeekRemote can read.
+    fun writable() = departures.filter { it.btId !in readOnly }
     var depLoading by remember { mutableStateOf(true) }
     // The departure editor: creating a new plan, or editing [editing].
     var creating by remember { mutableStateOf(false) }
@@ -117,15 +128,31 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
         if (!quiet) depLoading = true
         when (val r = deps.schedule.departures()) {
             is CallResult.Ok -> {
-                departures.clear(); departures.addAll(r.value)
-                if (writes.readBack(r.value)) snackbar("Departure stored on the car ✓")
+                departures.clear(); departures.addAll(r.value.plans)
+                readOnly = r.value.readOnly
+                if (writes.readBack(r.value.plans)) snackbar("Departure stored on the car ✓")
             }
             is CallResult.Err -> if (!quiet) snackbar("Couldn't load departures: ${r.message}")
         }
         depLoading = false
     }
 
-    LaunchedEffect(Unit) { reloadCharge(); reloadDepartures() }
+    // 0.3.18 (field 18/10): the lists were read only when the tab was first built and after our own writes, so a plan
+    // made in the official app did not show up here - not after switching tabs either. Now they are read whenever this
+    // tab is shown and the app is in front (also on coming back to it), and the departures every REFRESH_MS while the
+    // tab stays in view, so a change made elsewhere shows up as soon as the car holds it.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(active, lifecycleOwner) {
+        if (!active) return@LaunchedEffect
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            reloadCharge()
+            reloadDepartures(quiet = departures.isNotEmpty())
+            while (true) {
+                delay(REFRESH_MS)
+                if (writes.busy.value == null) reloadDepartures(quiet = true)
+            }
+        }
+    }
     // After a write ends (also one started before this tab opened), show what the car holds now.
     var sawBusy by remember { mutableStateOf(false) }
     LaunchedEffect(busy) {
@@ -213,7 +240,7 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
                 color = Brand.muted, fontSize = 12.sp,
             )
             val shown = Departures.visible(departures)
-            val freeSlots = departures.count(Departures::isEmptySlot)
+            val freeSlots = writable().count(Departures::isEmptySlot)
             if (depLoading) {
                 LoadingRow()
             } else if (shown.isEmpty()) {
@@ -223,7 +250,8 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
                     DepartureRow(
                         setting = d,
                         enabled = busy == null,
-                        onEdit = { editing = d },
+                        readOnly = d.btId in readOnly,
+                        onEdit = { if (d.btId in readOnly) snackbar(READ_ONLY_TEXT) else editing = d },
                         onToggle = { on ->
                             // The whole plan with the new state: sending it twice is harmless. The list shows
                             // the car's read-back after the write, so an unconfirmed switch shows as it was.
@@ -238,7 +266,7 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
                             // confirmed once the slot reads back empty.
                             val target = Departures.sanitizedForWrite(d, template)
                             write(done = "Departure deleted ✓", notConfirmed = NOT_CONFIRMED_DELETE, failed = "Delete failed") {
-                                deps.schedule.deleteDeparture(target)
+                                deps.schedule.deleteDeparture(target, template)
                             }
                         },
                     )
@@ -258,17 +286,23 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
             PrimaryButton("Add departure", Modifier.fillMaxWidth(), enabled = busy == null && awaiting == null) {
                 when {
                     !writes.canCreate() -> snackbar(ScheduleWrites.CREATE_WAITS)
-                    Departures.freeSlotId(departures) == null -> snackbar("No free place on the car: delete a departure first.")
+                    Departures.freeSlotId(writable()) == null -> snackbar("No free place on the car: delete a departure first.")
                     else -> creating = true
                 }
             }
             if (awaiting != null) Text(ScheduleWrites.CREATE_WAITS, color = Brand.faint, fontSize = 11.5.sp)
+            // 0.3.18: read the car's list now (it is also read on its own while this tab is in view).
+            GhostButton("Refresh list", Modifier.fillMaxWidth(), enabled = !depLoading && busy == null) {
+                scope.launch { reloadDepartures() }
+            }
         }
 
         Text(
             "Schedules are stored on the car (via ms-charge-manage), and the car must be awake to take a change. " +
                 "A change only counts once the car shows it. If it does not within a minute, the app says so: the " +
-                "change may still arrive when the car wakes, or the cloud may drop it, so check the list later.",
+                "change may still arrive when the car wakes, or the cloud may drop it, so check the list later. " +
+                "This list is what the car holds. The official app also shows its own changes the car has not taken " +
+                "(yet): a plan made there appears here once the car has it.",
             color = Brand.faint, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
         )
         Spacer(Modifier.size(8.dp))
@@ -280,8 +314,8 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
             ctx = ctx,
             initial = original?.let(Departures::draftOf) ?: DepartureDraft(),
             // The seats the plan (or the free slot a new one goes into) lists; nothing is added to it.
-            seats = Departures.seatsOf(original ?: Departures.freeSlotId(departures)?.let { slot ->
-                departures.firstOrNull { it.btId == slot && Departures.isEmptySlot(it) } }),
+            seats = Departures.seatsOf(original ?: Departures.freeSlotId(writable())?.let { slot ->
+                writable().firstOrNull { it.btId == slot && Departures.isEmptySlot(it) } }),
             minutesBefore = template.climateMinutes,
             isNew = original == null,
             onDismiss = { creating = false; editing = null },
@@ -290,14 +324,14 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
                 if (original == null) {
                     // A new plan only ever goes into a free slot, never onto a plan in use, and not while an
                     // earlier new plan still waits for the car (a second one would be queued too).
-                    val slot = Departures.freeSlotId(departures)
+                    val slot = Departures.freeSlotId(writable())
                     when {
                         slot == null -> snackbar("No free place on the car: delete a departure first.")
                         !writes.canCreate() -> snackbar(ScheduleWrites.CREATE_WAITS)
                         else -> {
                             // 0.3.14: written over the free slot as the car reported it (see Departures.fromSlot);
                             // built from scratch only when the car reported no slots at all.
-                            val plan = departures.firstOrNull { it.btId == slot && Departures.isEmptySlot(it) }
+                            val plan = writable().firstOrNull { it.btId == slot && Departures.isEmptySlot(it) }
                                 ?.let { Departures.fromSlot(it, draft, template) } ?: Departures.newPlan(draft, slot, template)
                             write(done = "Departure stored on the car ✓", notConfirmed = NOT_CONFIRMED_CREATE, failed = "Create failed") {
                                 deps.schedule.createDeparture(plan)
@@ -321,6 +355,8 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
 private fun DepartureRow(
     setting: BookingTravelSetting,
     enabled: Boolean,
+    /** 0.3.18: a plan ZeekRemote could only read in part: no switch and no delete, change it in the official app. */
+    readOnly: Boolean = false,
     onEdit: () -> Unit,
     onToggle: (Boolean) -> Unit,
     onDelete: () -> Unit,
@@ -352,12 +388,15 @@ private fun DepartureRow(
                 color = Brand.muted, fontSize = 11.5.sp,
             )
             if (extras.isNotEmpty()) Text(extras.joinToString(" · "), color = Brand.faint, fontSize = 11.sp)
+            if (readOnly) Text("Not fully readable here: change it in the official app.", color = Brand.faint, fontSize = 11.sp)
         }
-        Switch(checked = setting.sts == 1, onCheckedChange = onToggle, enabled = enabled, colors = brandSwitchColors(Brand.good))
-        Icon(
-            Icons.Filled.Delete, "Delete", tint = Brand.faint,
-            modifier = Modifier.size(30.dp).clip(CircleShape).clickable(enabled = enabled, onClick = onDelete).padding(6.dp),
-        )
+        if (!readOnly) {
+            Switch(checked = setting.sts == 1, onCheckedChange = onToggle, enabled = enabled, colors = brandSwitchColors(Brand.good))
+            Icon(
+                Icons.Filled.Delete, "Delete", tint = Brand.faint,
+                modifier = Modifier.size(30.dp).clip(CircleShape).clickable(enabled = enabled, onClick = onDelete).padding(6.dp),
+            )
+        }
     }
 }
 
@@ -553,7 +592,10 @@ private fun EmptyRow(text: String) =
 
 /** How often the list is looked at again while a new departure waits for the car. */
 private const val RECHECK_MS = 30_000L
+/** 0.3.18: how often the departures are read again while the Schedule tab is in view. */
+private const val REFRESH_MS = 30_000L
 
+private const val READ_ONLY_TEXT = "ZeekRemote cannot read this departure in full: change it in the official app."
 private const val WAITING_TEXT = "Waiting for the car to confirm… This can take up to a minute."
 private const val AWAITING_TEXT =
     "Sent, not confirmed: the car has not shown it. It may still arrive when the car wakes, or the cloud may drop it."

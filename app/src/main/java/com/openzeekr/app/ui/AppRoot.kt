@@ -237,7 +237,7 @@ fun AppRoot(deps: Deps) {
                 Tab.VEHICLE -> VehicleScreen(deps, snackbar, m)
                 Tab.PARKING -> ParkingScreen(deps, m)
                 Tab.SECURITY -> SecurityScreen(deps, snackbar, m)
-                Tab.SCHEDULE -> ScheduleScreen(deps, snackbar, m)
+                Tab.SCHEDULE -> ScheduleScreen(deps, snackbar, m, active = pager.currentPage == page)
                 Tab.KEY -> androidx.compose.foundation.layout.Box(m) {
                     SetupScreen(
                         provisioning = deps.provisioning,

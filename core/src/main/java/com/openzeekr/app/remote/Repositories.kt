@@ -696,13 +696,19 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
 
     // ---- departure / booking-travel schedules ----
 
-    /** List the current departure schedules (may be empty). */
-    suspend fun departures(): CallResult<List<com.openzeekr.app.net.model.BookingTravelSetting>> =
+    /** List the current departure schedules (may be empty). 0.3.18: read plan by plan ([TravelPlanList]); every
+     *  read leaves a list line, also one that failed (field 18/10: a failed read left no trace). */
+    suspend fun departures(): CallResult<TravelPlanList.Read> =
         withContext(Dispatchers.IO) {
             guarded {
                 requireVin()
                 runCatching { com.openzeekr.app.net.AccountLogin(store).heartbeat() }
-                (client.api.getTravelPlans().data ?: emptyList()).also { plans ->
+                val read = try { readPlans() } catch (e: Exception) {
+                    com.openzeekr.app.util.Logx.d("sched", ScheduleDiagnostics.listLine(null, e))
+                    throw e
+                }
+                com.openzeekr.app.util.Logx.d("sched", ScheduleDiagnostics.listLine(read, null))
+                read.also { val plans = it.plans
                     // 0.3.14: how the car stores its plans (flags and counts only). 0.3.16: on every read, so a
                     // diagnosis shows the list was read again (field 18/10: a plan deleted in the official app,
                     // which no longer showed it, still showed here, and nothing told whether the list was re-read).
@@ -712,6 +718,13 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
                 }
             }
         }
+
+    /** The car's departure list, plan by plan; a refused read (no data) is an error, not an empty list. */
+    private suspend fun readPlans(): TravelPlanList.Read {
+        val resp = client.api.getTravelPlans()
+        if (!resp.success && resp.data == null) error(resp.message ?: "departure list refused (code=${resp.code})")
+        return TravelPlanList.read(resp.data)
+    }
 
     /** Create a departure schedule in a free slot. While the car has not shown it, [writes] refuses
      *  another Create (a second press would queue a second plan). 0.3.11: written as a change ("edit")
@@ -735,14 +748,18 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
      * free slots ([Departures.emptied]); confirmed once the slot reads back empty (0.3.8). 0.3.16, field 18/10: the
      * car ignored "stop" for a plan in use (twice, a minute each) while an edit of the next slot landed within
      * seconds - as "start" never created a plan. First with the free slots' type; when the car has not shown it
-     * within [DELETE_FIRST_TRY_POLLS] read-backs, once more with the type an edit is known to land with.
+     * within [DELETE_FIRST_TRY_POLLS] read-backs, once more with the type an edit is known to land with. 0.3.18: [t]
+     * carries how the car stores a seat that is off ([Departures.seatOffLevel]).
      */
-    suspend fun deleteDeparture(setting: com.openzeekr.app.net.model.BookingTravelSetting): CallResult<CarWrite> {
-        val first = sendTravel(ScheduleWrites.Kind.DELETE, CMD_UPDATE, Departures.emptied(setting), DELETE_FIRST_TRY_POLLS) {
+    suspend fun deleteDeparture(
+        setting: com.openzeekr.app.net.model.BookingTravelSetting,
+        t: Departures.Template = Departures.Template(),
+    ): CallResult<CarWrite> {
+        val first = sendTravel(ScheduleWrites.Kind.DELETE, CMD_UPDATE, Departures.emptied(setting, t = t), DELETE_FIRST_TRY_POLLS) {
             Departures.gone(it, setting.btId)
         }
         if (first !is CallResult.Ok || first.value != CarWrite.PENDING) return first
-        return sendTravel(ScheduleWrites.Kind.DELETE, CMD_UPDATE, Departures.emptied(setting, Departures.BOOKING_RECURRING)) {
+        return sendTravel(ScheduleWrites.Kind.DELETE, CMD_UPDATE, Departures.emptied(setting, Departures.BOOKING_RECURRING, t)) {
             Departures.gone(it, setting.btId)
         }
     }
@@ -786,7 +803,7 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
                         // plan with only the same name, e.g. an older one, does not count).
                         val applied = pollUntil(attempts = polls) {
                             readBacks++
-                            val plans = client.api.getTravelPlans().data ?: emptyList()
+                            val plans = readPlans().plans
                             last = plans
                             stored(plans).also { if (it) writes.readBack(plans) }
                         }

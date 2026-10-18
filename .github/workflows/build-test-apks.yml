@@ -70,6 +70,7 @@ on:
       - zeekremote-0.3.15-departure-type
       - zeekremote-0.3.16-departure-delete
       - zeekremote-0.3.17-seat-heat
+      - zeekremote-0.3.18-schedule-sync
 
 permissions:
   contents: read
@@ -268,7 +269,7 @@ jobs:
           if grep -q 'Smart calibration' app/src/main/java/com/openzeekr/app/ui/ParkingScreen.kt; then echo 'calibration test is back'; exit 1; fi
           if grep -q 'NotificationsNone' app/src/main/java/com/openzeekr/app/ui/AppRoot.kt; then echo 'messages bell is back'; exit 1; fi
           grep -Fq 'fun freeSlotId(' core/src/main/java/com/openzeekr/app/remote/Departures.kt
-          grep -Fq 'Departures.freeSlotId(departures)' app/src/main/java/com/openzeekr/app/ui/ScheduleScreen.kt
+          grep -Fq 'Departures.freeSlotId(writable())' app/src/main/java/com/openzeekr/app/ui/ScheduleScreen.kt
           # 0.3.8: schedule writes wait up to a minute for the car, never promise a late arrival, refuse a second
           # Create while one waits, and leave a privacy-safe journal line (categories and slot numbers only).
           grep -Fq 'class ScheduleWrites(' core/src/main/java/com/openzeekr/app/remote/ScheduleWrites.kt
@@ -354,8 +355,8 @@ jobs:
           # type), and the shape line is written on every read of the list.
           grep -Fq 'const val EMPTY_SLOT_TYPE = 1' core/src/main/java/com/openzeekr/app/remote/Departures.kt
           grep -Fq 'fun emptied(p: BookingTravelSetting, bookingType: Int = EMPTY_SLOT_TYPE, t: Template = Template()): BookingTravelSetting {' core/src/main/java/com/openzeekr/app/remote/Departures.kt
-          grep -Fq 'sendTravel(ScheduleWrites.Kind.DELETE, CMD_UPDATE, Departures.emptied(setting), DELETE_FIRST_TRY_POLLS)' core/src/main/java/com/openzeekr/app/remote/Repositories.kt
-          grep -Fq 'sendTravel(ScheduleWrites.Kind.DELETE, CMD_UPDATE, Departures.emptied(setting, Departures.BOOKING_RECURRING))' core/src/main/java/com/openzeekr/app/remote/Repositories.kt
+          grep -Fq 'sendTravel(ScheduleWrites.Kind.DELETE, CMD_UPDATE, Departures.emptied(setting, t = t), DELETE_FIRST_TRY_POLLS)' core/src/main/java/com/openzeekr/app/remote/Repositories.kt
+          grep -Fq 'sendTravel(ScheduleWrites.Kind.DELETE, CMD_UPDATE, Departures.emptied(setting, Departures.BOOKING_RECURRING, t))' core/src/main/java/com/openzeekr/app/remote/Repositories.kt
           if grep -q 'Kind.DELETE, CMD_DELETE' core/src/main/java/com/openzeekr/app/remote/Repositories.kt; then echo 'delete by stop is back'; exit 1; fi
           grep -Fq 'com.openzeekr.app.util.Logx.d("sched", ScheduleDiagnostics.shapeLine("load", null, plans))' core/src/main/java/com/openzeekr/app/remote/Repositories.kt
           grep -Fq 'val fragrance: TravelFragranceSetting? = null,' core/src/main/java/com/openzeekr/app/remote/Departures.kt
@@ -364,12 +365,26 @@ jobs:
           # and seats (same/other) and a seats line shows seat codes and levels only.
           grep -Fq 'val HEAT_LOCATIONS = listOf(SEAT_DRIVER, SEAT_PASSENGER, SEAT_REAR_LEFT, SEAT_REAR_RIGHT)' core/src/main/java/com/openzeekr/app/remote/Departures.kt
           grep -Fq 'val seats: Map<Int, Int> = emptyMap(),' core/src/main/java/com/openzeekr/app/remote/Departures.kt
-          grep -Fq 'it.location !in HEAT_LOCATIONS || level == before.seatLevel(it.location) -> it' core/src/main/java/com/openzeekr/app/remote/Departures.kt
+          grep -Fq 'level == before.seatLevel(it.location) -> it' core/src/main/java/com/openzeekr/app/remote/Departures.kt
           grep -Fq 'SeatLevelRow(SEAT_LABELS[seat] ?: "Seat $seat", seatLevels[seat] ?: 0)' app/src/main/java/com/openzeekr/app/ui/ScheduleScreen.kt
           grep -Fq '"temp=${same(temp)} seats=${same(seats)}"' core/src/main/java/com/openzeekr/app/remote/ScheduleDiagnostics.kt
           grep -Fq '"SCHEDULE_SEATS ' core/src/main/java/com/openzeekr/app/util/ProximityDiagnosticJournal.kt
           grep -Fq 'ScheduleDiagnostics.seatsLine(kind.name.lowercase(), setting, last)' core/src/main/java/com/openzeekr/app/remote/Repositories.kt
           if grep -q 'Seat heating (front seats)' app/src/main/java/com/openzeekr/app/ui/ScheduleScreen.kt; then echo 'front-pair switch is back'; exit 1; fi
+          # 0.3.18 (field 18/10): a seat that is off is stored the way the car stores it (a level outside I-III, which the
+          # official app shows as off); the list is read plan by plan (one unreadable plan no longer loses the list), every
+          # read leaves a journal line, and the Schedule tab reads the list when shown, on coming back, every 30 s and on Refresh.
+          grep -Fq 'fun seatOffLevel(plans: List<BookingTravelSetting>): Int? =' core/src/main/java/com/openzeekr/app/remote/Departures.kt
+          grep -Fq 'level == 0 -> it.copy(sts = 0, level = offLevel(it, t))' core/src/main/java/com/openzeekr/app/remote/Departures.kt
+          grep -Fq 'heatSettings = base.heatSettings.map { it.copy(sts = 0, level = offLevel(it, t)) },' core/src/main/java/com/openzeekr/app/remote/Departures.kt
+          grep -Fq 'return TravelPlanList.read(resp.data)' core/src/main/java/com/openzeekr/app/remote/Repositories.kt
+          grep -Fq 'suspend fun getTravelPlans(): BaseResponse<kotlinx.serialization.json.JsonArray>' core/src/main/java/com/openzeekr/app/net/TspApi.kt
+          grep -Fq '"SCHEDULE_LIST ' core/src/main/java/com/openzeekr/app/util/ProximityDiagnosticJournal.kt
+          grep -Fq 'lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {' app/src/main/java/com/openzeekr/app/ui/ScheduleScreen.kt
+          grep -Fq 'Tab.SCHEDULE -> ScheduleScreen(deps, snackbar, m, active = pager.currentPage == page)' app/src/main/java/com/openzeekr/app/ui/AppRoot.kt
+          grep -Fq 'GhostButton("Refresh list"' app/src/main/java/com/openzeekr/app/ui/ScheduleScreen.kt
+          test -f core/src/test/java/com/openzeekr/app/remote/ScheduleSimTest.kt
+          test -f core/src/test/java/com/openzeekr/app/remote/TravelPlanListTest.kt
           # Quick walk 18/10 (rain): steps up to 18 s late, already after 5 s of standing, and F46 (quickly to the car,
           # a short stop, quickly back and inside, no GNSS) in the gate.
           grep -Fq 'const val LATE_STEPS_AFTER_STILL_MS = 5_000L' core/src/test/java/com/openzeekr/app/ble/sim/SimWorld.kt
@@ -395,7 +410,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='141' versionName='0.3.17-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='142' versionName='0.3.18-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

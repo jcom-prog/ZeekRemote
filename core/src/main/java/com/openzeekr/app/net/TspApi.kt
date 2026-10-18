@@ -74,8 +74,10 @@ interface TspApi {
 
     // List the current departure schedules. Stock issues this as a POST with an EMPTY body
     // (no @Body / no params). (stock VclEnergyApi.getTravelPlanV2 → List<BookingTravelSetting>.)
+    // 0.3.18: the list as raw JSON, read plan by plan (see remote.TravelPlanList), so one plan that does not
+    // read cannot lose the whole list.
     @POST("/ms-charge-manage/api/v2.0/charge/getTravelPlan")
-    suspend fun getTravelPlans(): BaseResponse<List<com.openzeekr.app.net.model.BookingTravelSetting>>
+    suspend fun getTravelPlans(): BaseResponse<kotlinx.serialization.json.JsonArray>
 
     // ---- vehicle status (VIN via X-VIN header) ----
     // Stock always sends latest=false & target=new; the gateway may 4xx without them.

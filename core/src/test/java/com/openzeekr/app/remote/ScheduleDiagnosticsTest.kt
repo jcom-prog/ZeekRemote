@@ -65,6 +65,16 @@ class ScheduleDiagnosticsTest {
         assertNull("trailing data", ProximityDiagnosticJournal.event("sched", "$line 04:00"))
     }
 
+    @Test fun theSeatsLineShowsTheLevelAsTheCarStoresIt() {
+        // 0.3.18: an off seat is stored with a level outside I-III; the line shows it as stored (up to 999).
+        val slot = empty.copy(heatSettings = listOf(com.openzeekr.app.net.model.TravelSeatSetting(15, 255, 1, 0),
+            com.openzeekr.app.net.model.TravelSeatSetting(15, 3, 2, 1)))
+        val line = ScheduleDiagnostics.seatsLine("load", null, listOf(slot))
+        assertEquals("schedule seats at=load sent=- slots=2:1=255-/2=3+", line)
+        assertEquals("SCHEDULE_SEATS " + line.removePrefix("schedule seats "), ProximityDiagnosticJournal.event("sched", line))
+        assertNull("four digits", ProximityDiagnosticJournal.event("sched", line.replace("255", "2550")))
+    }
+
     @Test fun theShapeLineShowsFlagsAndCountsOnly() {
         // 0.3.14: how a plan the car accepted is built next to the one we send - never a value.
         val own = used.copy(csSetting = com.openzeekr.app.net.model.TravelClimateSetting(15, 1, "22.0"),

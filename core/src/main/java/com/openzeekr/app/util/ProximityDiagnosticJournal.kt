@@ -63,9 +63,13 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
         private val scheduleShape = Regex("schedule shape (at=(?:load|create|edit|switch|delete) sent=(?:-|$SCHEDULE_SHAPE) " +
             "slots=(?:none|$SCHEDULE_SHAPE(?:,$SCHEDULE_SHAPE){0,9}))")
         // The seat heating per plan (0.3.17): seat codes, levels and on/off only.
-        private const val SCHEDULE_SEATS = "[0-9]{1,2}:(?:none|[0-9]{1,2}=[0-9][+-](?:/[0-9]{1,2}=[0-9][+-]){0,8})"
+        // 0.3.18: the level as the car stores it, up to three digits (an off seat is stored outside I-III).
+        private const val SCHEDULE_SEATS = "[0-9]{1,2}:(?:none|[0-9]{1,2}=[0-9]{1,3}[+-](?:/[0-9]{1,2}=[0-9]{1,3}[+-]){0,8})"
         private val scheduleSeats = Regex("schedule seats (at=(?:load|create|edit|switch|delete) sent=(?:-|$SCHEDULE_SEATS) " +
             "slots=(?:none|$SCHEDULE_SEATS(?:,$SCHEDULE_SEATS){0,9}))")
+        // One read of the departure list (0.3.18): counts or a failure category only.
+        private val scheduleList = Regex("schedule list (read=(?:ok plans=[0-9]{1,2} filled=[0-9]{1,2} unreadable=[0-9]{1,2}|" +
+            "failed reason=(?:http|network|parse|refused|other)))")
         private val outcomes = setOf("fine_permission_missing", "provider_cancelled", "provider_failure",
             "provider_no_fix", "accuracy_missing", "mock_rejected", "fix_received", "security_exception",
             "request_timeout", "session_disabled", "window_expired_before_request",
@@ -186,6 +190,7 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
             if (area == "sched") return scheduleWrite.matchEntire(message)?.let { "SCHEDULE_WRITE ${it.groupValues[1]}" }
                 ?: scheduleShape.matchEntire(message)?.let { "SCHEDULE_SHAPE ${it.groupValues[1]}" }
                 ?: scheduleSeats.matchEntire(message)?.let { "SCHEDULE_SEATS ${it.groupValues[1]}" }
+                ?: scheduleList.matchEntire(message)?.let { "SCHEDULE_LIST ${it.groupValues[1]}" }
             if (area == "ctl") return Regex("(LOCK|UNLOCK): cloud request failed \\(key link ([A-Z_]{1,20})\\)")
                 .matchEntire(message)?.let { "CLOUD_${it.groupValues[1]}_FAILED ${it.groupValues[2]}" }
             if (area == "svc") return when (message) {

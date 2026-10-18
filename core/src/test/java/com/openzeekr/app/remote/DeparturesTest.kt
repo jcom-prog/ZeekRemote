@@ -146,6 +146,28 @@ class DeparturesTest {
         assertEquals(p.heatSettings.filter { it.location !in Departures.HEAT_LOCATIONS }, e.heatSettings.filter { it.location !in Departures.HEAT_LOCATIONS })
     }
 
+    @Test fun offSeatsKeepTheCarsOwnForm() {
+        // 0.3.18 (field 18/10): the car stores an off seat with a level outside I-III, and the official app shows a seat
+        // by its level alone - an off seat that kept I-III showed there as on.
+        val carFree = emptySlot(3).copy(heatSettings = (1..8).map { TravelSeatSetting(15, 255, it, 0) },
+            ventiSettings = (1..8).map { TravelSeatSetting(15, 255, it, 0) }, whlSetting = TravelWheelSetting(15, 255, 0))
+        assertEquals(255, Departures.seatOffLevel(listOf(ownPlan(), carFree)))
+        assertNull("none shown by the car", Departures.seatOffLevel(listOf(ownPlan())))
+        val t = Departures.template(listOf(ownPlan(), carFree))
+        val p = Departures.fromSlot(carFree, DepartureDraft("Test", "04:00:00", setOf(7), seats = mapOf(1 to 2)), t)
+        assertEquals(mapOf(1 to 2, 2 to 255, 3 to 255, 4 to 255, 5 to 255, 6 to 255, 7 to 255, 8 to 255),
+            p.heatSettings.associate { it.location to it.level })
+        assertTrue("ventilation and wheel keep the car's own level", p.ventiSettings.all { it.level == 255 } && p.whlSetting!!.level == 255)
+        assertEquals("the wheel switched on gets a level I-III", t.wheelLevel,
+            Departures.applied(p, Departures.draftOf(p).copy(wheelHeat = true), t).whlSetting!!.level)
+        // A plan written before 0.3.18 (off with I-III) is stored the car's way once saved; what is on stays as it was.
+        val old = ownPlan()
+        val e = Departures.applied(old, Departures.draftOf(old), t)
+        assertEquals(mapOf(1 to 255, 2 to 255, 3 to 2, 5 to 255), e.heatSettings.associate { it.location to it.level })
+        assertEquals(old.heatSettings.map { it.sts }, e.heatSettings.map { it.sts })
+        assertTrue("a delete too", Departures.emptied(old, t = t).heatSettings.all { it.level == 255 && it.sts == 0 })
+    }
+
     @Test fun theEditorOffersTheSeatsTheCarLists() {
         assertEquals(Departures.HEAT_LOCATIONS, Departures.seatsOf(null))
         assertEquals("no seat entries yet: all four, written when the plan is", Departures.HEAT_LOCATIONS, Departures.seatsOf(emptySlot(2)))

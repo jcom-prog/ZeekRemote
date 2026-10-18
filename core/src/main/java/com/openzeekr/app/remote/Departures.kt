@@ -73,7 +73,24 @@ object Departures {
         val wheelLevel: Int = 3,
         /** The fragrance block of a plan the car holds, switched off; none when its plans have none (field 18/10). */
         val fragrance: TravelFragranceSetting? = null,
+        /** 0.3.18: the level the car stores with a seat that is off ([seatOffLevel]); null when the car shows none. */
+        val seatOffLevel: Int? = null,
     )
+
+    /**
+     * 0.3.18: how the car itself stores a seat that is off. Field 18/10: in its free slots and in the official app's
+     * plans an off seat has a level outside I-III, and the official app shows a seat by its level alone - a seat
+     * ZeekRemote had switched off but that kept I-III showed there as on. The most common level of the off entries
+     * the car lists, or null when it lists none.
+     */
+    fun seatOffLevel(plans: List<BookingTravelSetting>): Int? =
+        plans.flatMap { it.heatSettings }.filter { it.sts != 1 && it.level !in 1..3 }
+            .groupingBy { it.level }.eachCount().maxByOrNull { it.value }?.key
+
+    /** The level for [e] switched off: its own when the car already stores it off its way, else the car's off level,
+     *  else (the car shows none) as before 0.3.18. */
+    private fun offLevel(e: TravelSeatSetting, t: Template): Int =
+        e.level.takeIf { it > 0 && it !in 1..3 } ?: t.seatOffLevel ?: e.level.takeIf { it in 1..3 } ?: t.seatLevel
 
     fun isEmptySlot(p: BookingTravelSetting): Boolean =
         p.sts == 0 && p.cycleTimes.none { it.sts == 1 } &&
@@ -89,7 +106,8 @@ object Departures {
         if (plans.isEmpty()) 1 else plans.firstOrNull(::isEmptySlot)?.btId?.coerceAtLeast(1)
 
     fun template(plans: List<BookingTravelSetting>): Template {
-        val src = visible(plans).firstOrNull { it.csSetting != null } ?: return Template()
+        val off = seatOffLevel(plans)
+        val src = visible(plans).firstOrNull { it.csSetting != null } ?: return Template(seatOffLevel = off)
         val seat = src.heatSettings.firstOrNull { it.location in FRONT_SEATS }
         val d = Template()
         return Template(
@@ -99,6 +117,7 @@ object Departures {
             wheelMinutes = src.whlSetting?.duration?.takeIf { it > 0 } ?: d.wheelMinutes,
             wheelLevel = src.whlSetting?.level?.takeIf { it in 1..3 } ?: d.wheelLevel,
             fragrance = src.fragSetting?.copy(sts = 0),
+            seatOffLevel = off,
         )
     }
 
@@ -143,7 +162,8 @@ object Departures {
         ventiSettings = VENTI_LOCATIONS.map { TravelSeatSetting(duration = t.seatMinutes, level = 1, location = it, sts = 0) },
         heatSettings = HEAT_LOCATIONS.map {
             val level = d.seatLevel(it)
-            TravelSeatSetting(duration = t.seatMinutes, level = if (level > 0) level else t.seatLevel, location = it, sts = if (level > 0) 1 else 0)
+            TravelSeatSetting(duration = t.seatMinutes, level = if (level > 0) level else t.seatOffLevel ?: t.seatLevel,
+                location = it, sts = if (level > 0) 1 else 0)
         },
         whlSetting = TravelWheelSetting(duration = t.wheelMinutes, level = t.wheelLevel, sts = if (d.wheelHeat) 1 else 0),
         fragSetting = t.fragrance,
@@ -157,7 +177,8 @@ object Departures {
      * switched on, shown and recurring, with the editor's name, days, time and settings. Ventilation and fragrance
      * stay off (the editor does not show them). 0.3.15 (field 18/10, 0.3.14): recurring is [BOOKING_RECURRING] as in
      * the official app's plan, and a fragrance block only when the car has one. 0.3.17: each seat of
-     * [HEAT_LOCATIONS] as the editor set it; any other seat entry the slot lists stays off.
+     * [HEAT_LOCATIONS] as the editor set it; any other seat entry the slot lists stays off. 0.3.18: what stays off keeps
+     * the level the car stores it with (see [seatOffLevel]); only a zero level gets a default.
      */
     fun fromSlot(slot: BookingTravelSetting, d: DepartureDraft, t: Template = Template()): BookingTravelSetting {
         val base = sanitizedForWrite(slot, t)
@@ -174,21 +195,23 @@ object Departures {
             csSetting = cs.copy(duration = cs.duration.takeIf { it > 0 } ?: t.climateMinutes,
                 sts = if (d.climate) 1 else 0, temp = temp(d.tempC)),
             ventiSettings = base.ventiSettings.map {
-                it.copy(duration = it.duration.takeIf { m -> m > 0 } ?: t.seatMinutes, level = it.level.takeIf { l -> l in 1..3 } ?: 1, sts = 0)
+                it.copy(duration = it.duration.takeIf { m -> m > 0 } ?: t.seatMinutes, level = it.level.takeIf { l -> l > 0 } ?: 1, sts = 0)
             },
             heatSettings = base.heatSettings.map {
                 val level = if (it.location in HEAT_LOCATIONS) d.seatLevel(it.location) else 0
                 it.copy(duration = it.duration.takeIf { m -> m > 0 } ?: t.seatMinutes,
-                    level = if (level > 0) level else it.level.takeIf { l -> l in 1..3 } ?: t.seatLevel, sts = if (level > 0) 1 else 0)
+                    level = if (level > 0) level else offLevel(it, t), sts = if (level > 0) 1 else 0)
             },
             whlSetting = whl.copy(duration = whl.duration.takeIf { it > 0 } ?: t.wheelMinutes,
-                level = whl.level?.takeIf { it in 1..3 } ?: t.wheelLevel, sts = if (d.wheelHeat) 1 else 0),
+                level = if (d.wheelHeat) whl.level?.takeIf { it in 1..3 } ?: t.wheelLevel else whl.level?.takeIf { it > 0 } ?: t.wheelLevel,
+                sts = if (d.wheelHeat) 1 else 0),
             fragSetting = (base.fragSetting ?: t.fragrance)?.copy(sts = 0),
         )
     }
 
     /** [p] changed as the editor says. What the editor does not show (fragrance, ventilation, durations, the slot)
-     *  and every seat the editor left as it was are kept exactly as the car reported them. */
+     *  and every seat the editor left on as it was are kept exactly as the car reported them. 0.3.18: a seat that is
+     *  off is written as the car stores it (see [seatOffLevel]), also one that was already off but kept I-III. */
     fun applied(p: BookingTravelSetting, d: DepartureDraft, t: Template = Template()): BookingTravelSetting {
         val base = sanitizedForWrite(p, t)
         val before = draftOf(p)
@@ -200,12 +223,15 @@ object Departures {
             heatSettings = base.heatSettings.map {
                 val level = d.seatLevel(it.location)
                 when {
-                    it.location !in HEAT_LOCATIONS || level == before.seatLevel(it.location) -> it
-                    level == 0 -> it.copy(sts = 0)
+                    it.location !in HEAT_LOCATIONS -> it
+                    level == 0 -> it.copy(sts = 0, level = offLevel(it, t))
+                    level == before.seatLevel(it.location) -> it
                     else -> it.copy(sts = 1, level = level)
                 }
             },
-            whlSetting = base.whlSetting!!.copy(sts = if (d.wheelHeat) 1 else 0),
+            whlSetting = base.whlSetting!!.let { w ->
+                w.copy(sts = if (d.wheelHeat) 1 else 0, level = if (d.wheelHeat) w.level?.takeIf { it in 1..3 } ?: t.wheelLevel else w.level)
+            },
         )
     }
 
@@ -216,7 +242,7 @@ object Departures {
         temporaryTime = p.temporaryTime.ifBlank { PLACEHOLDER_TIME },
         csSetting = p.csSetting ?: TravelClimateSetting(duration = t.climateMinutes, sts = 0, temp = temp(22.0)),
         ventiSettings = p.ventiSettings.ifEmpty { VENTI_LOCATIONS.map { TravelSeatSetting(t.seatMinutes, 1, it, 0) } },
-        heatSettings = p.heatSettings.ifEmpty { HEAT_LOCATIONS.map { TravelSeatSetting(t.seatMinutes, t.seatLevel, it, 0) } },
+        heatSettings = p.heatSettings.ifEmpty { HEAT_LOCATIONS.map { TravelSeatSetting(t.seatMinutes, t.seatOffLevel ?: t.seatLevel, it, 0) } },
         whlSetting = p.whlSetting ?: TravelWheelSetting(duration = t.wheelMinutes, level = t.wheelLevel, sts = 0),
     )
 
@@ -224,7 +250,8 @@ object Departures {
      * 0.3.16: the plan in [p]'s slot written back as an unused slot, the way the car reports its free slots (field
      * 18/10): off, hidden, the empty-slot name, no active day, the placeholder time and every item switched off; the
      * blocks stay as reported. [bookingType] is the free slots' type, or [BOOKING_RECURRING] for the second try (an
-     * edit with that type is known to land, see Repositories.deleteDeparture).
+     * edit with that type is known to land, see Repositories.deleteDeparture). 0.3.18: the seats as the car stores
+     * them off (see [seatOffLevel]).
      */
     fun emptied(p: BookingTravelSetting, bookingType: Int = EMPTY_SLOT_TYPE, t: Template = Template()): BookingTravelSetting {
         val base = sanitizedForWrite(p, t)
@@ -238,7 +265,7 @@ object Departures {
             preHeatSts = 0,
             csSetting = base.csSetting!!.copy(sts = 0),
             ventiSettings = base.ventiSettings.map { it.copy(sts = 0) },
-            heatSettings = base.heatSettings.map { it.copy(sts = 0) },
+            heatSettings = base.heatSettings.map { it.copy(sts = 0, level = offLevel(it, t)) },
             whlSetting = base.whlSetting!!.copy(sts = 0),
             fragSetting = base.fragSetting?.copy(sts = 0),
         )

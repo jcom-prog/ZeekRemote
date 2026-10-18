@@ -84,11 +84,27 @@ internal object ScheduleDiagnostics {
 
     /**
      * 0.3.17: a plan's seat heating, entry by entry as seat code, level and on (+) / off (-), e.g. "1=3+/2=3+/3=2-/5=2-".
-     * Seat codes and levels only. Shows which code the car uses for which seat (field test 0.3.17).
+     * Seat codes and levels only. Shows which code the car uses for which seat (field test 0.3.17). 0.3.18: the level as
+     * the car stores it, up to 999 (field 18/10: an off seat is stored with a level outside I-III).
      */
     fun seats(p: BookingTravelSetting): String =
-        p.heatSettings.take(9).joinToString("/") { "${it.location.coerceIn(0, 99)}=${it.level.coerceIn(0, 9)}${if (it.sts == 1) "+" else "-"}" }
+        p.heatSettings.take(9).joinToString("/") { "${it.location.coerceIn(0, 99)}=${it.level.coerceIn(0, 999)}${if (it.sts == 1) "+" else "-"}" }
             .ifEmpty { "none" }
+
+    /**
+     * 0.3.18: one read of the departure list - how many plans, how many needed empty fields ("filled") and how many
+     * could not be read at all - or why it failed, as a category. Field 18/10: a read that failed left no trace.
+     */
+    fun listLine(read: TravelPlanList.Read?, failure: Throwable?): String =
+        if (read != null) "schedule list read=ok plans=${read.plans.size.coerceIn(0, 99)} filled=${read.filled.coerceIn(0, 99)} " +
+            "unreadable=${read.unreadable.coerceIn(0, 99)}"
+        else "schedule list read=failed reason=" + when (failure) {
+            is retrofit2.HttpException -> "http"
+            is java.io.IOException -> "network"
+            is kotlinx.serialization.SerializationException -> "parse"
+            is IllegalStateException -> "refused"
+            else -> "other"
+        }
 
     /** The seats line, next to the shape line: [at] is "load" or the write's kind; [sent] the plan written. */
     fun seatsLine(at: String, sent: BookingTravelSetting?, plans: List<BookingTravelSetting>?): String =
