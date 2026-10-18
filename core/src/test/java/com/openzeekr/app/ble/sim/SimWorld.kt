@@ -716,8 +716,12 @@ internal class SimWorld(
 
         private fun arm(lowLatency: Boolean, approach: Boolean): Boolean {
             if (!btOn) return false
+            val mode = if (lowLatency) 2 else if (approach) 1 else 0
+            // As DkBleManager.armPresenceScan: a scan already running in this mode keeps running. Study C (18/10):
+            // restarting its latency on every keep-alive re-arm (8 s) let a low-power scan find the car only at the door.
+            if (presenceArmed && presenceMode == mode) return true
             presenceArmed = true; presenceSeenSinceMs = -1L
-            presenceMode = if (lowLatency) 2 else if (approach) 1 else 0
+            presenceMode = mode
             return true
         }
         private fun disarm() { presenceArmed = false; presenceSeenSinceMs = -1L }

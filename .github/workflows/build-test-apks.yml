@@ -389,6 +389,8 @@ jobs:
           # a short stop, quickly back and inside, no GNSS) in the gate.
           grep -Fq 'const val LATE_STEPS_AFTER_STILL_MS = 5_000L' core/src/test/java/com/openzeekr/app/ble/sim/SimWorld.kt
           grep -Fq 'Scenario("F46 rain: quick to the car and back inside"' core/src/test/java/com/openzeekr/app/ble/sim/SimScenarios.kt
+          # Study C (18/10): the simulated presence scan keeps running when re-armed in the same mode, as the app's scan does.
+          grep -Fq 'if (presenceArmed && presenceMode == mode) return true' core/src/test/java/com/openzeekr/app/ble/sim/SimWorld.kt
 
       - name: Verify read-only diagnostic entry point
         run: |
