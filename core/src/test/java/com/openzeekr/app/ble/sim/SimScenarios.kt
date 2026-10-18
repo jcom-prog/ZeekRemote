@@ -201,6 +201,14 @@ internal object SimScenarios {
             approachAndOpen() + listOf(Mark("expect-lock"), Walk(15.0, 1.0), Stand(60_000, Facing.AWAY)) +
                 List(7) { listOf(Walk(16.0, 1.0), Walk(12.0, 1.0)) }.flatten() +
                 listOf(Walk(15.0, 1.0), Stand(15_000, Facing.TOWARD)) + approachAndOpen(1.0)),
+        // Quick walk 18/10 (rain): up from inside the house, a few seconds indoors to the door (walls ~10 dB), quickly
+        // to the car, a short stop with the door opened, quickly back and on inside; no usable GNSS at the house. In
+        // the field the car opened before the user reached it and locked 15-20 s after the user left, already inside.
+        Scenario("F46 rain: quick to the car and back inside", "inside 1 min, 8 s to the door, 2.0 m/s to the car, ~6 s there, 2.0 m/s back 16 m, inside", 18.0,
+            listOf(Stand(60_000, Facing.AWAY, -10.0, indoor = true), Mark("expect-unlock"), Fidget(8_000, -10.0),
+                Walk(1.0, 2.0), Stand(2_000),
+                OpenDoor, Stand(4_000, shadowDb = -6.0), Mark("expect-lock"), Walk(16.0, 2.0), Fidget(8_000, -10.0),
+                Stand(150_000, Facing.AWAY, -10.0, indoor = true)), gnssAccuracyM = null),
     )
 
     /** Every field incident and the families that reproduce it (incident history, 14/10). */
@@ -235,6 +243,7 @@ internal object SimScenarios {
         FieldCase("#28 13/10 0.2.13", "no unlock on return (latch)", listOf("F28", "F32", "F30")),
         FieldCase("#29 13/10 0.2.15", "status-133 storms at the edge of range", listOf("F07", "F17"), "stress: SIM_PRESENCE_EDGE=1"),
         FieldCase("#30 14/10 0.2.16", "no auto-Lock (step detector silent)", listOf("F29", "F22", "F04")),
+        FieldCase("#31 18/10 0.3.13", "quick walk (rain): steps late after a short stop at the car; open just in time", listOf("F46", "F15", "F16")),
     )
 
     /**

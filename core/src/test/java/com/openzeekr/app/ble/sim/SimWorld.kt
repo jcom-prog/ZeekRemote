@@ -149,10 +149,11 @@ internal data class SimPhysics(
      * 0.3.11 worst case (field 16/10, S24+ in the front pocket, screen off): after standing still for
      * [LATE_STEPS_AFTER_STILL_MS] or more, the step counter AND the step detector deliver the first steps
      * of a walk only this long after it started - all at once - and promptly after that (three walks:
-     * 8-14 s). 0 = off. SIM_LATE_STEPS=1.
+     * 8-14 s; quick walk 18/10: later still, after only a short stop at the car, so 8-18 s from 5 s of standing). 0 = off.
+     * SIM_LATE_STEPS=1.
      */
     val lateStepsMinMs: Long = if (System.getenv("SIM_LATE_STEPS") == "1") 8_000L else 0L,
-    val lateStepsMaxMs: Long = if (System.getenv("SIM_LATE_STEPS") == "1") 14_000L else 0L,
+    val lateStepsMaxMs: Long = if (System.getenv("SIM_LATE_STEPS") == "1") 18_000L else 0L,
     /**
      * 0.3.11 worst case (field 16/10): a spot at [SPOT_FROM_M]..[SPOT_TO_M] where the signal is this much
      * stronger while the user stands there (the front door at ~25 m read -86/-87 in the front pocket - the
@@ -184,8 +185,9 @@ internal data class SimPhysics(
 
     companion object {
         private fun env(name: String, default: Double) = System.getenv(name)?.toDouble() ?: default
-        /** Standing still at least this long makes the next walk's first steps late ([lateStepsMinMs]). */
-        const val LATE_STEPS_AFTER_STILL_MS = 10_000L
+        /** Standing still at least this long makes the next walk's first steps late ([lateStepsMinMs]);
+         *  field 18/10: a short stop at the car was enough. */
+        const val LATE_STEPS_AFTER_STILL_MS = 5_000L
         /** Where the strong spot ([spotDb]) is: the front door at ~25 m, with some margin. */
         const val SPOT_FROM_M = 18.0
         const val SPOT_TO_M = 32.0

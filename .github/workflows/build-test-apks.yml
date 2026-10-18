@@ -67,6 +67,7 @@ on:
       - zeekremote-0.3.12-far-return-guard
       - zeekremote-0.3.13-walking-spot
       - zeekremote-0.3.14-departure-from-slot
+      - zeekremote-0.3.15-departure-type
 
 permissions:
   contents: read
@@ -304,7 +305,7 @@ jobs:
           grep -Fq '"GONE_BUT_UNLOCKED", "ALARM_SILENCED_AWAY") }' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
           # 0.3.11: the measurement walk of 16/10 in the gate - steps that come 8-14 s late after standing, the
           # strong spot at the front door, and one minute standing there before walking back.
-          grep -Fq '"steps-late" -> SimPhysics(name = suite, lateStepsMinMs = 8_000L, lateStepsMaxMs = 14_000L)' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
+          grep -Fq '"steps-late" -> SimPhysics(name = suite, lateStepsMinMs = 8_000L, lateStepsMaxMs = 18_000L)' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
           grep -Fq '"strong-spot" -> SimPhysics(name = suite, spotDb = 7.0)' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
           grep -Fq 'Scenario("F43 1 min at the front door (25 m), then back"' core/src/test/java/com/openzeekr/app/ble/sim/SimScenarios.kt
           # 0.3.12: a return after a Lock that opens from the signal needs a walk back (simulator strong spot: the car
@@ -337,10 +338,20 @@ jobs:
           # 0.3.14: a new departure is written over the free slot as the car reported it (field 16/10 and 18/10: a plan
           # built from scratch never reached the car), and a privacy-safe shape line (flags and counts only) per load and write.
           grep -Fq 'fun fromSlot(slot: BookingTravelSetting, d: DepartureDraft, t: Template = Template()): BookingTravelSetting {' core/src/main/java/com/openzeekr/app/remote/Departures.kt
-          grep -Fq 'fragSetting = (base.fragSetting ?: t.fragrance).copy(sts = 0),' core/src/main/java/com/openzeekr/app/remote/Departures.kt
+          grep -Fq 'fragSetting = (base.fragSetting ?: t.fragrance)?.copy(sts = 0),' core/src/main/java/com/openzeekr/app/remote/Departures.kt
           grep -Fq '?.let { Departures.fromSlot(it, draft, template) } ?: Departures.newPlan(draft, slot, template)' app/src/main/java/com/openzeekr/app/ui/ScheduleScreen.kt
           grep -Fq '"SCHEDULE_SHAPE ' core/src/main/java/com/openzeekr/app/util/ProximityDiagnosticJournal.kt
           grep -Fq 'ScheduleDiagnostics.shapeLine(kind.name.lowercase(), setting, last)' core/src/main/java/com/openzeekr/app/remote/Repositories.kt
+          # 0.3.15 (field 18/10, 0.3.14): a new departure is recurring as the official app's plan (type 0; an unused slot
+          # reads 1) and carries a fragrance block only when the car's own plans have one.
+          grep -Fq 'const val BOOKING_RECURRING = 0' core/src/main/java/com/openzeekr/app/remote/Departures.kt
+          test "$(grep -c 'bookingType = BOOKING_RECURRING,' core/src/main/java/com/openzeekr/app/remote/Departures.kt)" = 2
+          if grep -q 'bookingType = 1' core/src/main/java/com/openzeekr/app/remote/Departures.kt; then echo 'type 1 is back'; exit 1; fi
+          grep -Fq 'val fragrance: TravelFragranceSetting? = null,' core/src/main/java/com/openzeekr/app/remote/Departures.kt
+          # Quick walk 18/10 (rain): steps up to 18 s late, already after 5 s of standing, and F46 (quickly to the car,
+          # a short stop, quickly back and inside, no GNSS) in the gate.
+          grep -Fq 'const val LATE_STEPS_AFTER_STILL_MS = 5_000L' core/src/test/java/com/openzeekr/app/ble/sim/SimWorld.kt
+          grep -Fq 'Scenario("F46 rain: quick to the car and back inside"' core/src/test/java/com/openzeekr/app/ble/sim/SimScenarios.kt
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -362,7 +373,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='138' versionName='0.3.14-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='139' versionName='0.3.15-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

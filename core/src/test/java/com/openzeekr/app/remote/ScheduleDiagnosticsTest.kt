@@ -42,7 +42,7 @@ class ScheduleDiagnosticsTest {
             fragSetting = com.openzeekr.app.net.model.TravelFragranceSetting(1, 15, 1, 0))
         val sent = Departures.fromSlot(empty, DepartureDraft("Test", "04:00:00", setOf(7), tempC = 21.0))
         val line = ScheduleDiagnostics.shapeLine("create", sent, listOf(own, empty))
-        assertEquals("schedule shape at=create sent=2:s1.d1.b1.p0.tp.c7.a1.nu.cs+.v2+.h4+.w+.f+ " +
+        assertEquals("schedule shape at=create sent=2:s1.d1.b0.p0.tp.c7.a1.nu.cs+.v2+.h4+.w+.f- " +
             "slots=1:s1.d1.b1.p0.tp.c7.a2.nu.cs+.v0.h0.w-.f+,2:s0.d0.b1.p0.tp.c0.a0.ne.cs-.v0.h0.w-.f-", line)
         for (privateValue in listOf("Plan A", "Test", "06:40", "04:00", "22.0", "21.0", Departures.PLACEHOLDER_TIME))
             assertFalse(privateValue, line.contains(privateValue))

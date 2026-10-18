@@ -64,7 +64,8 @@ internal object SimRunner {
     /** 0.3.9 (user decision 15/10): the uncertain phone behaviour as fixed worst cases, each on the calibrated world.
      *  0.3.11 (user decision 16/10): two more from the measurement walk of 16/10.
      *  0.3.12 (user decision 16/10): quick STILL, the hand wobble, and the field of 16/10 in one world.
-     *  0.3.13 (user decision 17/10): the strong spot also while walking. */
+     *  0.3.13 (user decision 17/10): the strong spot also while walking.
+     *  Quick walk 18/10 (user decision): late steps up to 18 s, already after 5 s of standing (steps-late). */
     val WORST_CASES = listOf("steps-silent", "steps-dead", "gps-poor", "ar-poor", "signal-flat", "steps-late", "strong-spot", "ar-quick-still",
         "hand-wobble", "field-like", "strong-spot-walk")
 
@@ -79,8 +80,8 @@ internal object SimRunner {
         // The signal stays flat over the last metres to the door in most walks (field: phone in a pocket).
         "signal-flat" -> SimPhysics(name = suite, approachPlateauP = 0.6)
         // Field 16/10 (S24+, front pocket): after standing, counter and detector delivered a walk's first steps
-        // 8-14 s late, all at once.
-        "steps-late" -> SimPhysics(name = suite, lateStepsMinMs = 8_000L, lateStepsMaxMs = 14_000L)
+        // 8-14 s late, all at once; quick walk 18/10: later still, after a short stop at the car.
+        "steps-late" -> SimPhysics(name = suite, lateStepsMinMs = 8_000L, lateStepsMaxMs = 18_000L)
         // Field 16/10: standing at the front door (~25 m) read -86/-87 in the front pocket - the unlock threshold.
         "strong-spot" -> SimPhysics(name = suite, spotDb = 7.0)
         // Field 16/10: walking from 30 to 25 m read -81..-87 in the front pocket too (an upper bound: not every visit).

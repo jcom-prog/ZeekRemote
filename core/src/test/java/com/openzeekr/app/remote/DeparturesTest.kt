@@ -20,9 +20,10 @@ class DeparturesTest {
         temporaryTime = Departures.PLACEHOLDER_TIME, cycleTimes = emptyList(), preHeatSts = 0,
     )
 
-    /** A plan as the official app makes it: its defaults stored even for switched-off items. */
+    /** A plan as the official app makes it: its defaults stored even for switched-off items; recurring is type 0
+     *  and there is no fragrance block (field 18/10). */
     private fun ownPlan(id: Int = 1, name: String = "Plan A", sts: Int = 1) = BookingTravelSetting(
-        btId = id, name = name, sts = sts, displaySts = 1, bookingType = 1,
+        btId = id, name = name, sts = sts, displaySts = 1, bookingType = Departures.BOOKING_RECURRING,
         temporaryTime = Departures.PLACEHOLDER_TIME,
         cycleTimes = (1..7).map { CycleTime(it, if (it == 2 || it == 5) 1 else 0, "06:40:00") },
         preHeatSts = 0,
@@ -30,7 +31,6 @@ class DeparturesTest {
         ventiSettings = listOf(TravelSeatSetting(15, 2, 1, 0), TravelSeatSetting(15, 2, 2, 0)),
         heatSettings = listOf(TravelSeatSetting(15, 2, 1, 0), TravelSeatSetting(15, 2, 2, 0), TravelSeatSetting(15, 2, 3, 1), TravelSeatSetting(15, 2, 5, 0)),
         whlSetting = TravelWheelSetting(duration = 15, level = 2, sts = 0),
-        fragSetting = TravelFragranceSetting(channel = 1, duration = 15, level = 1, sts = 0),
     )
 
     @Test fun theCarsUnusedSlotsAreHiddenAndNeverOverwritten() {
@@ -58,6 +58,8 @@ class DeparturesTest {
         assertEquals(1, p.preHeatSts)
         assertEquals(mapOf(1 to 1, 2 to 1, 3 to 0, 5 to 0), p.heatSettings.associate { it.location to it.sts })
         assertEquals(Departures.PLACEHOLDER_TIME, p.temporaryTime)
+        assertEquals(Departures.BOOKING_RECURRING, p.bookingType)
+        assertNull("no fragrance block: none of the car's plans has one", p.fragSetting)
         assertEquals(d, Departures.draftOf(p))
     }
 
@@ -68,11 +70,13 @@ class DeparturesTest {
         val d = DepartureDraft("Test", "04:00:00", setOf(7), climate = true, tempC = 21.0)
         val p = Departures.fromSlot(emptySlot(2), d, t)
         assertEquals(2, p.btId)
-        assertEquals(Triple(1, 1, 1), Triple(p.sts, p.displaySts, p.bookingType))
+        // 0.3.15 (field 18/10): recurring as the official app's plan (the unused slot reads type 1), and no
+        // fragrance block, as none of the car's plans has one.
+        assertEquals(Triple(1, 1, Departures.BOOKING_RECURRING), Triple(p.sts, p.displaySts, p.bookingType))
         assertEquals(Departures.PLACEHOLDER_TIME, p.temporaryTime)
         assertEquals(listOf(7), p.cycleTimes.filter { it.sts == 1 }.map { it.day })
         assertEquals(TravelClimateSetting(15, 1, "21.0"), p.csSetting)
-        assertEquals("the official app's fragrance block, switched off", TravelFragranceSetting(1, 15, 1, 0), p.fragSetting)
+        assertNull("no fragrance block", p.fragSetting)
         assertEquals(listOf(1, 2), p.ventiSettings.map { it.location })
         assertTrue(p.ventiSettings.all { it.sts == 0 && it.duration > 0 })
         assertEquals(mapOf(1 to 0, 2 to 0, 3 to 0, 5 to 0), p.heatSettings.associate { it.location to it.sts })
@@ -88,6 +92,9 @@ class DeparturesTest {
         assertEquals(TravelClimateSetting(15, 1, "21.0"), q.csSetting)
         assertEquals(listOf(TravelSeatSetting(15, 2, 1, 1), TravelSeatSetting(15, 2, 2, 1)), q.heatSettings)
         assertEquals("the car's own fragrance block, switched off", TravelFragranceSetting(2, 10, 2, 0), q.fragSetting)
+        // A car whose plans do carry a fragrance block: a new plan gets it too, switched off.
+        val withScent = Departures.template(listOf(ownPlan().copy(fragSetting = TravelFragranceSetting(1, 15, 1, 1)), emptySlot(2)))
+        assertEquals(TravelFragranceSetting(1, 15, 1, 0), Departures.fromSlot(emptySlot(2), d, withScent).fragSetting)
     }
 
     @Test fun theTemperatureAlwaysUsesAPointWhateverThePhoneLanguage() {
