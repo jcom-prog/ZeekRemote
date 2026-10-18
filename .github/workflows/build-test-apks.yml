@@ -68,6 +68,7 @@ on:
       - zeekremote-0.3.13-walking-spot
       - zeekremote-0.3.14-departure-from-slot
       - zeekremote-0.3.15-departure-type
+      - zeekremote-0.3.16-departure-delete
 
 permissions:
   contents: read
@@ -347,6 +348,15 @@ jobs:
           grep -Fq 'const val BOOKING_RECURRING = 0' core/src/main/java/com/openzeekr/app/remote/Departures.kt
           test "$(grep -c 'bookingType = BOOKING_RECURRING,' core/src/main/java/com/openzeekr/app/remote/Departures.kt)" = 2
           if grep -q 'bookingType = 1' core/src/main/java/com/openzeekr/app/remote/Departures.kt; then echo 'type 1 is back'; exit 1; fi
+          # 0.3.16 (field 18/10, 0.3.15): the car ignored "stop" for a plan in use while edits landed within seconds. A
+          # delete writes the slot back as an unused slot with an edit (the free slots' type, then once the recurring
+          # type), and the shape line is written on every read of the list.
+          grep -Fq 'const val EMPTY_SLOT_TYPE = 1' core/src/main/java/com/openzeekr/app/remote/Departures.kt
+          grep -Fq 'fun emptied(p: BookingTravelSetting, bookingType: Int = EMPTY_SLOT_TYPE, t: Template = Template()): BookingTravelSetting {' core/src/main/java/com/openzeekr/app/remote/Departures.kt
+          grep -Fq 'sendTravel(ScheduleWrites.Kind.DELETE, CMD_UPDATE, Departures.emptied(setting), DELETE_FIRST_TRY_POLLS)' core/src/main/java/com/openzeekr/app/remote/Repositories.kt
+          grep -Fq 'sendTravel(ScheduleWrites.Kind.DELETE, CMD_UPDATE, Departures.emptied(setting, Departures.BOOKING_RECURRING))' core/src/main/java/com/openzeekr/app/remote/Repositories.kt
+          if grep -q 'Kind.DELETE, CMD_DELETE' core/src/main/java/com/openzeekr/app/remote/Repositories.kt; then echo 'delete by stop is back'; exit 1; fi
+          grep -Fq 'com.openzeekr.app.util.Logx.d("sched", ScheduleDiagnostics.shapeLine("load", null, plans))' core/src/main/java/com/openzeekr/app/remote/Repositories.kt
           grep -Fq 'val fragrance: TravelFragranceSetting? = null,' core/src/main/java/com/openzeekr/app/remote/Departures.kt
           # Quick walk 18/10 (rain): steps up to 18 s late, already after 5 s of standing, and F46 (quickly to the car,
           # a short stop, quickly back and inside, no GNSS) in the gate.
@@ -373,7 +383,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='139' versionName='0.3.15-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='140' versionName='0.3.16-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

@@ -33,6 +33,8 @@ object Departures {
     /** The car's type of a plan that repeats on the days in cycleTimes. Field 18/10: the official app's plan reads
      *  back 0 and an unused slot 1; every Create that sent 1 (0.3.10-0.3.14) never reached the car. */
     const val BOOKING_RECURRING = 0
+    /** The type an unused slot reads back with (field 18/10: every free slot). */
+    const val EMPTY_SLOT_TYPE = 1
     const val MIN_TEMP = 16.0
     const val MAX_TEMP = 28.0
 
@@ -175,6 +177,30 @@ object Departures {
         heatSettings = p.heatSettings.ifEmpty { HEAT_LOCATIONS.map { TravelSeatSetting(t.seatMinutes, t.seatLevel, it, 0) } },
         whlSetting = p.whlSetting ?: TravelWheelSetting(duration = t.wheelMinutes, level = t.wheelLevel, sts = 0),
     )
+
+    /**
+     * 0.3.16: the plan in [p]'s slot written back as an unused slot, the way the car reports its free slots (field
+     * 18/10): off, hidden, the empty-slot name, no active day, the placeholder time and every item switched off; the
+     * blocks stay as reported. [bookingType] is the free slots' type, or [BOOKING_RECURRING] for the second try (an
+     * edit with that type is known to land, see Repositories.deleteDeparture).
+     */
+    fun emptied(p: BookingTravelSetting, bookingType: Int = EMPTY_SLOT_TYPE, t: Template = Template()): BookingTravelSetting {
+        val base = sanitizedForWrite(p, t)
+        return base.copy(
+            name = EMPTY_SLOT_NAME,
+            sts = 0,
+            displaySts = 0,
+            bookingType = bookingType,
+            temporaryTime = PLACEHOLDER_TIME,
+            cycleTimes = base.cycleTimes.map { it.copy(sts = 0) },
+            preHeatSts = 0,
+            csSetting = base.csSetting!!.copy(sts = 0),
+            ventiSettings = base.ventiSettings.map { it.copy(sts = 0) },
+            heatSettings = base.heatSettings.map { it.copy(sts = 0) },
+            whlSetting = base.whlSetting!!.copy(sts = 0),
+            fragSetting = base.fragSetting?.copy(sts = 0),
+        )
+    }
 
     /** True when the read-back no longer holds a plan in slot [btId] (the slot reads back empty or is
      *  missing): the delete landed. */

@@ -53,6 +53,15 @@ class ScheduleDiagnosticsTest {
         assertNull("trailing data", ProximityDiagnosticJournal.event("sched", "$line 04:00"))
     }
 
+    @Test fun aDeleteSendsTheShapeOfTheCarsFreeSlots() {
+        // 0.3.16: the slot written back reads like the car's own free slots (field 18/10: s0.d0.b1 and the empty name).
+        val sent = Departures.emptied(Departures.fromSlot(empty, DepartureDraft("Test", "04:00:00", setOf(7), tempC = 21.0)))
+        val line = ScheduleDiagnostics.shapeLine("delete", sent, listOf(used, empty))
+        assertEquals("schedule shape at=delete sent=2:s0.d0.b1.p0.tp.c7.a0.ne.cs+.v2+.h4+.w+.f- " +
+            "slots=1:s1.d1.b1.p0.tp.c7.a2.nu.cs-.v0.h0.w-.f-,2:s0.d0.b1.p0.tp.c0.a0.ne.cs-.v0.h0.w-.f-", line)
+        assertEquals("SCHEDULE_SHAPE " + line.removePrefix("schedule shape "), ProximityDiagnosticJournal.event("sched", line))
+    }
+
     @Test fun refusalCodesAndChargeReadBackStayCategorical() {
         assertEquals("refused code=A1001", ScheduleDiagnostics.refused("A1001"))
         assertEquals("refused code=carasleep", ScheduleDiagnostics.refused("car asleep!"))

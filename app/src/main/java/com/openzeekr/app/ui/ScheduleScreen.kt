@@ -234,7 +234,8 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
                             ) { deps.schedule.updateDeparture(updated, ScheduleWrites.Kind.SWITCH) }
                         },
                         onDelete = {
-                            // "Delete" frees the car-side slot (command stop); confirmed once the slot reads back empty.
+                            // "Delete" frees the car-side slot (0.3.16: written back as an unused slot with an edit);
+                            // confirmed once the slot reads back empty.
                             val target = Departures.sanitizedForWrite(d, template)
                             write(done = "Departure deleted ✓", notConfirmed = NOT_CONFIRMED_DELETE, failed = "Delete failed") {
                                 deps.schedule.deleteDeparture(target)

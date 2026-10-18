@@ -703,14 +703,13 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
                 requireVin()
                 runCatching { com.openzeekr.app.net.AccountLogin(store).heartbeat() }
                 (client.api.getTravelPlans().data ?: emptyList()).also { plans ->
-                    // 0.3.14: how the car stores its plans (flags and counts only), once per change.
-                    val line = ScheduleDiagnostics.shapeLine("load", null, plans)
-                    if (line != lastLoadShape) { lastLoadShape = line; com.openzeekr.app.util.Logx.d("sched", line) }
+                    // 0.3.14: how the car stores its plans (flags and counts only). 0.3.16: on every read, so a
+                    // diagnosis shows the list was read again (field 18/10: a plan deleted in the official app,
+                    // which no longer showed it, still showed here, and nothing told whether the list was re-read).
+                    com.openzeekr.app.util.Logx.d("sched", ScheduleDiagnostics.shapeLine("load", null, plans))
                 }
             }
         }
-
-    @Volatile private var lastLoadShape: String? = null
 
     /** Create a departure schedule in a free slot. While the car has not shown it, [writes] refuses
      *  another Create (a second press would queue a second plan). 0.3.11: written as a change ("edit")
@@ -729,10 +728,22 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
     ): CallResult<CarWrite> =
         sendTravel(kind, CMD_UPDATE, setting) { Departures.landed(it, setting) }
 
-    /** Delete a departure schedule (command "stop"); [setting].btId picks the entry. Confirmed once the
-     *  slot reads back empty (0.3.8; up to 0.3.7 a delete was never checked). */
-    suspend fun deleteDeparture(setting: com.openzeekr.app.net.model.BookingTravelSetting): CallResult<CarWrite> =
-        sendTravel(ScheduleWrites.Kind.DELETE, CMD_DELETE, setting) { Departures.gone(it, setting.btId) }
+    /**
+     * Delete a departure schedule: its slot is written back ("edit") as an unused slot, the way the car reports its
+     * free slots ([Departures.emptied]); confirmed once the slot reads back empty (0.3.8). 0.3.16, field 18/10: the
+     * car ignored "stop" for a plan in use (twice, a minute each) while an edit of the next slot landed within
+     * seconds - as "start" never created a plan. First with the free slots' type; when the car has not shown it
+     * within [DELETE_FIRST_TRY_POLLS] read-backs, once more with the type an edit is known to land with.
+     */
+    suspend fun deleteDeparture(setting: com.openzeekr.app.net.model.BookingTravelSetting): CallResult<CarWrite> {
+        val first = sendTravel(ScheduleWrites.Kind.DELETE, CMD_UPDATE, Departures.emptied(setting), DELETE_FIRST_TRY_POLLS) {
+            Departures.gone(it, setting.btId)
+        }
+        if (first !is CallResult.Ok || first.value != CarWrite.PENDING) return first
+        return sendTravel(ScheduleWrites.Kind.DELETE, CMD_UPDATE, Departures.emptied(setting, Departures.BOOKING_RECURRING)) {
+            Departures.gone(it, setting.btId)
+        }
+    }
 
     /**
      * Same async, vehicle-relayed model as [setChargePlan]: the POST only QUEUES the op
@@ -744,6 +755,8 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
         kind: ScheduleWrites.Kind,
         command: String,
         setting: com.openzeekr.app.net.model.BookingTravelSetting,
+        /** Read-backs before the write counts as pending (default about a minute). */
+        polls: Int = (ScheduleWrites.CONFIRM_WAIT_MS / ScheduleWrites.CONFIRM_POLL_MS).toInt(),
         stored: (List<com.openzeekr.app.net.model.BookingTravelSetting>) -> Boolean,
     ): CallResult<CarWrite> =
         withContext(Dispatchers.IO) {
@@ -751,7 +764,7 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
                 requireVin()
                 writes.exclusive(kind) {
                     // For the diagnostic line (categories only, see ScheduleDiagnostics).
-                    var sent = "error"; var session = "-"; var result = "failed"; var polls = 0
+                    var sent = "error"; var session = "-"; var result = "failed"; var readBacks = 0
                     var last: List<com.openzeekr.app.net.model.BookingTravelSetting>? = null
                     try {
                         runCatching { com.openzeekr.app.net.AccountLogin(store).heartbeat() }
@@ -769,8 +782,8 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
                         if (kind == ScheduleWrites.Kind.CREATE) writes.createSent(setting)
                         // Confirm the car actually applied it (for an edit: same name, state, days and time; a
                         // plan with only the same name, e.g. an older one, does not count).
-                        val applied = pollUntil {
-                            polls++
+                        val applied = pollUntil(attempts = polls) {
+                            readBacks++
                             val plans = client.api.getTravelPlans().data ?: emptyList()
                             last = plans
                             stored(plans).also { if (it) writes.readBack(plans) }
@@ -779,7 +792,7 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
                         if (applied) CarWrite.CONFIRMED else CarWrite.PENDING
                     } finally {
                         com.openzeekr.app.util.Logx.d("sched", ScheduleDiagnostics.line(kind, setting.btId, sent, session,
-                            result, polls, ScheduleDiagnostics.slots(last), ScheduleDiagnostics.found(last, setting)))
+                            result, readBacks, ScheduleDiagnostics.slots(last), ScheduleDiagnostics.found(last, setting)))
                         // 0.3.14: the plan sent and the car's last read-back, as flags and counts only.
                         com.openzeekr.app.util.Logx.d("sched", ScheduleDiagnostics.shapeLine(kind.name.lowercase(), setting, last))
                     }
@@ -808,7 +821,10 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
         const val SERVICE_ID_TRAVEL = "ZAO"   // booking-travel (departure) service id
         const val CMD_START = "start"
         const val CMD_UPDATE = "edit"
+        /** The charging plan's "off". A departure plan is deleted with an edit (0.3.16, see [deleteDeparture]). */
         const val CMD_DELETE = "stop"
+        /** Read-backs (3 s apart) before the first try of a delete is followed by the second (0.3.16). */
+        const val DELETE_FIRST_TRY_POLLS = 5
         // V1 charge-plan `target` = the "keep charging past end time until the limit is reached" mode.
         const val TARGET_KEEP_ON = "1"
         const val TARGET_KEEP_OFF = "2"

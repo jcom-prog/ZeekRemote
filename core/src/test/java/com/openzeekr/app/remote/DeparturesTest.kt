@@ -132,6 +132,32 @@ class DeparturesTest {
         assertFalse("switched off is not deleted", Departures.gone(listOf(ownPlan(2, "B", sts = 0)), 2))
     }
 
+    @Test fun aDeleteWritesThePlanBackAsAnUnusedSlot() {
+        // 0.3.16 (field 18/10): "stop" never reached the car while an edit of the next slot landed within seconds; the
+        // slot is written back the way the car reports its free slots, its blocks kept as reported, everything off.
+        val p = ownPlan(2, "Plan B").copy(preHeatSts = 1, whlSetting = TravelWheelSetting(15, 2, 1),
+            fragSetting = TravelFragranceSetting(1, 15, 1, 1))
+        val e = Departures.emptied(p)
+        assertEquals(2, e.btId)
+        assertEquals(Triple(0, 0, Departures.EMPTY_SLOT_TYPE), Triple(e.sts, e.displaySts, e.bookingType))
+        assertEquals(Departures.EMPTY_SLOT_NAME, e.name)
+        assertEquals(Departures.PLACEHOLDER_TIME, e.temporaryTime)
+        assertEquals(7, e.cycleTimes.size)
+        assertTrue("no active day", e.cycleTimes.none { it.sts == 1 })
+        assertEquals(0, e.preHeatSts)
+        assertEquals(TravelClimateSetting(15, 0, "23.0"), e.csSetting)
+        assertTrue(e.heatSettings.all { it.sts == 0 } && e.ventiSettings.all { it.sts == 0 })
+        assertEquals(p.heatSettings.map { it.location to it.duration }, e.heatSettings.map { it.location to it.duration })
+        assertEquals(TravelWheelSetting(15, 2, 0), e.whlSetting)
+        assertEquals(TravelFragranceSetting(1, 15, 1, 0), e.fragSetting)
+        assertTrue("hidden like the car's own free slots", Departures.isEmptySlot(e))
+        assertTrue("read back like this, the delete has landed", Departures.gone(listOf(ownPlan(1), e), 2))
+        // The second try: the type an edit is known to land with; still a free slot to the app.
+        val f = Departures.emptied(p, Departures.BOOKING_RECURRING)
+        assertEquals(e.copy(bookingType = Departures.BOOKING_RECURRING), f)
+        assertTrue(Departures.isEmptySlot(f))
+    }
+
     @Test fun aWriteOnlyCountsWhenNameStateDaysAndTimeAllMatch() {
         val want = Departures.newPlan(DepartureDraft("Plan A", "06:40:00", setOf(2, 5)), 2)
         assertTrue(Departures.landed(listOf(ownPlan(1, "Plan A")), want))
