@@ -60,9 +60,9 @@ import kotlinx.coroutines.launch
  *    setting (priority-to-SOC + a list of start/end windows) you edit and save.
  *  - Departure schedule: precondition-by-departure-time plans (serviceId "ZAO", CRUD via
  *    start/edit/stop). Each has a name, a departure time and recurring weekdays (Mon..Sun), plus
- *    what the official app offers: climate with a target temperature, steering wheel heating, front
- *    seat heating and battery temperature maintenance. Tap a plan to edit it. The car's unused plan
- *    slots are hidden, and a new plan only goes into a free slot (see [Departures]).
+ *    what the official app offers: climate with a target temperature, steering wheel heating, seat
+ *    heating per seat (off or I-III) and battery temperature maintenance. Tap a plan to edit it. The
+ *    car's unused plan slots are hidden, and a new plan only goes into a free slot (see [Departures]).
  *
  * Self-contained: expose [ScheduleScreen] and wire a nav entry in AppRoot (owned by the parent).
  */
@@ -279,6 +279,9 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
         DepartureEditor(
             ctx = ctx,
             initial = original?.let(Departures::draftOf) ?: DepartureDraft(),
+            // The seats the plan (or the free slot a new one goes into) lists; nothing is added to it.
+            seats = Departures.seatsOf(original ?: Departures.freeSlotId(departures)?.let { slot ->
+                departures.firstOrNull { it.btId == slot && Departures.isEmptySlot(it) } }),
             minutesBefore = template.climateMinutes,
             isNew = original == null,
             onDismiss = { creating = false; editing = null },
@@ -360,13 +363,14 @@ private fun DepartureRow(
 
 /**
  * New or edited departure, with what the official app offers: days Monday to Sunday, the departure
- * time, climate with a target temperature, steering wheel and front seat heating, and battery
- * temperature maintenance. Saving needs a name and at least one day.
+ * time, climate with a target temperature, steering wheel heating, seat heating per seat in [seats]
+ * (off or I-III) and battery temperature maintenance. Saving needs a name and at least one day.
  */
 @Composable
 private fun DepartureEditor(
     ctx: Context,
     initial: DepartureDraft,
+    seats: List<Int>,
     minutesBefore: Int,
     isNew: Boolean,
     onDismiss: () -> Unit,
@@ -378,7 +382,7 @@ private fun DepartureEditor(
     var climate by remember { mutableStateOf(initial.climate) }
     var temp by remember { mutableStateOf(initial.tempC) }
     var wheel by remember { mutableStateOf(initial.wheelHeat) }
-    var seats by remember { mutableStateOf(initial.seatHeat) }
+    var seatLevels by remember { mutableStateOf(initial.seats) }
     var battery by remember { mutableStateOf(initial.batteryMaintenance) }
     val canSave = days.isNotEmpty() && name.isNotBlank()
 
@@ -416,7 +420,18 @@ private fun DepartureEditor(
                     }
                 }
                 EditorSwitch("Steering wheel heating", wheel) { wheel = it }
-                EditorSwitch("Seat heating (front seats)", seats) { seats = it }
+                if (seats.isNotEmpty()) {
+                    val seatHeat = seatLevels.values.any { it > 0 }
+                    EditorSwitch("Seat heating", seatHeat) { on -> seatLevels = if (on) Departures.seatsOn(seats) else emptyMap() }
+                    // 0.3.17: each seat off or I-III, as in the official app; every seat off switches seat heating off.
+                    if (seatHeat) {
+                        for (seat in seats) {
+                            SeatLevelRow(SEAT_LABELS[seat] ?: "Seat $seat", seatLevels[seat] ?: 0) { level ->
+                                seatLevels = Departures.withSeat(seatLevels, seat, level)
+                            }
+                        }
+                    }
+                }
 
                 Text("Other", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, modifier = Modifier.padding(top = 4.dp))
                 EditorSwitch("Battery temperature maintenance", battery) { battery = it }
@@ -429,7 +444,8 @@ private fun DepartureEditor(
         },
         confirmButton = {
             androidx.compose.material3.TextButton(enabled = canSave, onClick = {
-                onSave(DepartureDraft(name.trim(), time, days.toSet(), climate, temp, wheel, seats, battery))
+                onSave(DepartureDraft(name = name.trim(), time = time, days = days.toSet(), climate = climate, tempC = temp,
+                    wheelHeat = wheel, seats = seatLevels, batteryMaintenance = battery))
             }) { Text(if (isNew) "Create" else "Save") }
         },
         dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") } },
@@ -447,6 +463,17 @@ private fun DayChip(label: String, selected: Boolean, modifier: Modifier, onClic
     ) {
         Text(label, color = if (selected) Brand.accent else Brand.muted, fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
+    }
+}
+
+/** One seat's heating in the departure editor: off or level I-III, as the official app shows it (0.3.17). */
+@Composable
+private fun SeatLevelRow(label: String, level: Int, onChange: (Int) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(label, color = Brand.muted, fontSize = 12.sp)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            SEAT_LEVEL_LABELS.forEachIndexed { i, text -> DayChip(text, level == i, Modifier.weight(1f)) { onChange(i) } }
+        }
     }
 }
 
@@ -546,6 +573,12 @@ private const val NOT_CONFIRMED_CHARGE =
 /** Day labels indexed by (stock `CycleTime.day` − 1). `day` is 1-based on the wire (1..7),
  *  day 1 = Monday … day 7 = Sunday, so DAY_LABELS[day-1] is the label. */
 private val DAY_LABELS = arrayOf("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")
+// Seat heating in a departure (0.3.17): the seats as the official app names them, and level 0 (off) to 3.
+private val SEAT_LABELS = mapOf(
+    Departures.SEAT_DRIVER to "Driver seat", Departures.SEAT_PASSENGER to "Passenger seat",
+    Departures.SEAT_REAR_LEFT to "Rear seat left", Departures.SEAT_REAR_RIGHT to "Rear seat right",
+)
+private val SEAT_LEVEL_LABELS = listOf("Off", "I", "II", "III")
 
 /** Extract "HH:mm" from either a CycleTime "HH:mm:ss" or a temporaryTime "yyyy:MM:dd:HH:mm:ss". */
 private fun hhmm(raw: String): String {

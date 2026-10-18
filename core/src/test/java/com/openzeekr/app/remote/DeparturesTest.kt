@@ -47,7 +47,7 @@ class DeparturesTest {
         val t = Departures.template(listOf(emptySlot(2), ownPlan()))
         assertEquals(Departures.Template(15, 15, 2, 15, 2), t)
         val d = DepartureDraft("Sunday trip", "09:30:00", setOf(6, 7), climate = true, tempC = 21.5,
-            wheelHeat = true, seatHeat = true, batteryMaintenance = true)
+            wheelHeat = true, seats = mapOf(1 to 3, 2 to 3), batteryMaintenance = true)
         val p = Departures.newPlan(d, btId = 2, t = t)
         assertEquals(2, p.btId)
         assertEquals(listOf(6, 7), p.cycleTimes.filter { it.sts == 1 }.map { it.day })
@@ -57,6 +57,8 @@ class DeparturesTest {
         assertEquals(TravelWheelSetting(15, 2, 1), p.whlSetting)
         assertEquals(1, p.preHeatSts)
         assertEquals(mapOf(1 to 1, 2 to 1, 3 to 0, 5 to 0), p.heatSettings.associate { it.location to it.sts })
+        assertEquals("on at the chosen level, off at the official app's", mapOf(1 to 3, 2 to 3, 3 to 2, 5 to 2),
+            p.heatSettings.associate { it.location to it.level })
         assertEquals(Departures.PLACEHOLDER_TIME, p.temporaryTime)
         assertEquals(Departures.BOOKING_RECURRING, p.bookingType)
         assertNull("no fragrance block: none of the car's plans has one", p.fragSetting)
@@ -88,7 +90,7 @@ class DeparturesTest {
             heatSettings = listOf(TravelSeatSetting(0, 0, 1, 0), TravelSeatSetting(0, 0, 2, 0)),
             fragSetting = TravelFragranceSetting(channel = 2, duration = 10, level = 2, sts = 1),
         )
-        val q = Departures.fromSlot(reported, d.copy(seatHeat = true), t)
+        val q = Departures.fromSlot(reported, d.copy(seats = mapOf(1 to 2, 2 to 2)), t)
         assertEquals(TravelClimateSetting(15, 1, "21.0"), q.csSetting)
         assertEquals(listOf(TravelSeatSetting(15, 2, 1, 1), TravelSeatSetting(15, 2, 2, 1)), q.heatSettings)
         assertEquals("the car's own fragrance block, switched off", TravelFragranceSetting(2, 10, 2, 0), q.fragSetting)
@@ -115,14 +117,46 @@ class DeparturesTest {
         assertEquals(p.btId, e.btId)
         assertEquals(p.fragSetting, e.fragSetting)
         assertEquals(p.ventiSettings, e.ventiSettings)
-        assertEquals("seat switch untouched: every seat entry kept as reported", p.heatSettings, e.heatSettings)
+        assertEquals("seats untouched: every seat entry kept as reported", p.heatSettings, e.heatSettings)
         assertEquals("26.0", e.csSetting!!.temp)
         assertEquals(15, e.csSetting!!.duration)
         assertEquals(TravelWheelSetting(15, 2, 1), e.whlSetting)
         assertEquals(setOf(1, 2, 3, 4, 5), e.cycleTimes.filter { it.sts == 1 }.map { it.day }.toSet())
-        // Switching seat heating on changes only the front seats; the rear seat keeps its own state.
-        val s = Departures.applied(p, d.copy(seatHeat = true))
+        // Switching the front seats on changes only those; the rear seat keeps its own state and level.
+        val s = Departures.applied(p, d.copy(seats = d.seats + mapOf(1 to 3, 2 to 3)))
         assertEquals(mapOf(1 to 1, 2 to 1, 3 to 1, 5 to 0), s.heatSettings.associate { it.location to it.sts })
+        assertEquals(mapOf(1 to 3, 2 to 3, 3 to 2, 5 to 2), s.heatSettings.associate { it.location to it.level })
+    }
+
+    @Test fun eachSeatIsSetOnItsOwnAsTheOfficialAppDoes() {
+        // 0.3.17 (user 18/10): driver, passenger and both rear seats each off or I-III. A free slot lists eight seat
+        // entries (field 18/10, "h8"): the editor's four are set, the others stay off, and nothing is added.
+        val slot = emptySlot(3).copy(heatSettings = (1..8).map { TravelSeatSetting(15, 1, it, 0) })
+        val d = DepartureDraft("Test", "04:00:00", setOf(7), tempC = 21.0, seats = mapOf(1 to 1, 2 to 2, 3 to 3))
+        val p = Departures.fromSlot(slot, d)
+        assertEquals((1..8).toList(), p.heatSettings.map { it.location })
+        assertEquals(mapOf(1 to 1, 2 to 1, 3 to 1, 4 to 0, 5 to 0, 6 to 0, 7 to 0, 8 to 0), p.heatSettings.associate { it.location to it.sts })
+        assertEquals(listOf(1, 2, 3), p.heatSettings.filter { it.sts == 1 }.map { it.level })
+        assertEquals(d, Departures.draftOf(p))
+        // An edit changes only the seats the editor changed: driver off, rear right on at II.
+        val e = Departures.applied(p, d.copy(seats = mapOf(2 to 2, 3 to 3, 5 to 2)))
+        assertEquals(mapOf(1 to 0, 2 to 1, 3 to 1, 4 to 0, 5 to 1, 6 to 0, 7 to 0, 8 to 0), e.heatSettings.associate { it.location to it.sts })
+        assertEquals("the driver's level stays as it was, switched off", 1, e.heatSettings.first { it.location == 1 }.level)
+        assertEquals(2, e.heatSettings.first { it.location == 5 }.level)
+        assertEquals(p.heatSettings.filter { it.location !in Departures.HEAT_LOCATIONS }, e.heatSettings.filter { it.location !in Departures.HEAT_LOCATIONS })
+    }
+
+    @Test fun theEditorOffersTheSeatsTheCarLists() {
+        assertEquals(Departures.HEAT_LOCATIONS, Departures.seatsOf(null))
+        assertEquals("no seat entries yet: all four, written when the plan is", Departures.HEAT_LOCATIONS, Departures.seatsOf(emptySlot(2)))
+        assertEquals(listOf(1, 2), Departures.seatsOf(emptySlot(2).copy(heatSettings = listOf(TravelSeatSetting(15, 1, 1, 0), TravelSeatSetting(15, 1, 2, 0)))))
+        assertEquals("switching on: driver and passenger at III", mapOf(1 to 3, 2 to 3), Departures.seatsOn(Departures.HEAT_LOCATIONS))
+        assertEquals(mapOf(3 to 3), Departures.seatsOn(listOf(3, 5)))
+        assertEquals(mapOf(2 to 3), Departures.withSeat(mapOf(1 to 3, 2 to 3), 1, 0))
+        assertEquals(mapOf(1 to 1, 5 to 3), Departures.withSeat(mapOf(1 to 1), 5, 7))
+        assertTrue(Departures.withSeat(mapOf(1 to 3), 1, 0).isEmpty())
+        assertEquals(0, DepartureDraft(seats = mapOf(1 to 2)).seatLevel(5))
+        assertFalse(DepartureDraft().seatHeat)
     }
 
     @Test fun aDeleteLandsOnceTheSlotReadsBackEmptyOrIsGone() {

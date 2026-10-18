@@ -38,7 +38,8 @@ internal object ScheduleDiagnostics {
 
     /**
      * Where the plan that was sent ([want]) shows up in the read-back: the slot holding the same name,
-     * with whether its days, time and on/off state match. Only "same"/"other", never the values.
+     * with whether its days, time, on/off state and (0.3.17) climate temperature and seat heating match.
+     * Only "same"/"other", never the values.
      */
     fun found(plans: List<BookingTravelSetting>?, want: BookingTravelSetting?): String {
         if (plans == null || want == null) return "-"
@@ -46,7 +47,15 @@ internal object ScheduleDiagnostics {
         fun same(b: Boolean) = if (b) "same" else "other"
         val days = p.cycleTimes.filter { it.sts == 1 }.map { it.day }.toSet() == want.cycleTimes.filter { it.sts == 1 }.map { it.day }.toSet()
         val time = p.cycleTimes.firstOrNull { it.sts == 1 }?.time == want.cycleTimes.firstOrNull { it.sts == 1 }?.time
-        return "slot${p.btId.coerceIn(0, 99)} name=same days=${same(days)} time=${same(time)} on=${same(p.sts == want.sts)}"
+        // Field 18/10: the plan's temperature read back as sent while the car set another one when it ran;
+        // compared as numbers ("28" and "28.0" are the same).
+        val temp = p.csSetting?.temp?.toDoubleOrNull() == want.csSetting?.temp?.toDoubleOrNull()
+        // Each seat sent reads back in the same state, and at the same level when on.
+        val seats = want.heatSettings.filter { it.location in Departures.HEAT_LOCATIONS }.all { w ->
+            p.heatSettings.firstOrNull { it.location == w.location }?.let { it.sts == w.sts && (w.sts != 1 || it.level == w.level) } == true
+        }
+        return "slot${p.btId.coerceIn(0, 99)} name=same days=${same(days)} time=${same(time)} on=${same(p.sts == want.sts)} " +
+            "temp=${same(temp)} seats=${same(seats)}"
     }
 
     /**
@@ -72,6 +81,19 @@ internal object ScheduleDiagnostics {
     fun shapeLine(at: String, sent: BookingTravelSetting?, plans: List<BookingTravelSetting>?): String =
         "schedule shape at=$at sent=${sent?.let { "${it.btId.coerceIn(0, 99)}:${shape(it)}" } ?: "-"} slots=" +
             (if (plans.isNullOrEmpty()) "none" else plans.take(10).joinToString(",") { "${it.btId.coerceIn(0, 99)}:${shape(it)}" })
+
+    /**
+     * 0.3.17: a plan's seat heating, entry by entry as seat code, level and on (+) / off (-), e.g. "1=3+/2=3+/3=2-/5=2-".
+     * Seat codes and levels only. Shows which code the car uses for which seat (field test 0.3.17).
+     */
+    fun seats(p: BookingTravelSetting): String =
+        p.heatSettings.take(9).joinToString("/") { "${it.location.coerceIn(0, 99)}=${it.level.coerceIn(0, 9)}${if (it.sts == 1) "+" else "-"}" }
+            .ifEmpty { "none" }
+
+    /** The seats line, next to the shape line: [at] is "load" or the write's kind; [sent] the plan written. */
+    fun seatsLine(at: String, sent: BookingTravelSetting?, plans: List<BookingTravelSetting>?): String =
+        "schedule seats at=$at sent=${sent?.let { "${it.btId.coerceIn(0, 99)}:${seats(it)}" } ?: "-"} slots=" +
+            (if (plans.isNullOrEmpty()) "none" else plans.take(10).joinToString(",") { "${it.btId.coerceIn(0, 99)}:${seats(it)}" })
 
     /** The charging plan's read-back: its command and who wrote it last, as categories. */
     fun charge(command: String?, dataSource: String?): String =

@@ -707,6 +707,8 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
                     // diagnosis shows the list was read again (field 18/10: a plan deleted in the official app,
                     // which no longer showed it, still showed here, and nothing told whether the list was re-read).
                     com.openzeekr.app.util.Logx.d("sched", ScheduleDiagnostics.shapeLine("load", null, plans))
+                    // 0.3.17: the seat heating per plan (seat codes and levels only).
+                    com.openzeekr.app.util.Logx.d("sched", ScheduleDiagnostics.seatsLine("load", null, plans))
                 }
             }
         }
@@ -795,6 +797,7 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
                             result, readBacks, ScheduleDiagnostics.slots(last), ScheduleDiagnostics.found(last, setting)))
                         // 0.3.14: the plan sent and the car's last read-back, as flags and counts only.
                         com.openzeekr.app.util.Logx.d("sched", ScheduleDiagnostics.shapeLine(kind.name.lowercase(), setting, last))
+                        com.openzeekr.app.util.Logx.d("sched", ScheduleDiagnostics.seatsLine(kind.name.lowercase(), setting, last))
                     }
                 } ?: error(ScheduleWrites.BUSY)
             }

@@ -20,7 +20,7 @@ class ScheduleDiagnosticsTest {
         val line = ScheduleDiagnostics.line(ScheduleWrites.Kind.EDIT, 1, "accepted", "yes", "pending", 20,
             ScheduleDiagnostics.slots(listOf(used, empty)), ScheduleDiagnostics.found(listOf(used, empty), want))
         assertEquals("schedule write kind=edit slot=1 sent=accepted session=yes result=pending polls=20 " +
-            "readback=1:on/used/2,2:off/empty/0 found=slot1 name=same days=same time=other on=same", line)
+            "readback=1:on/used/2,2:off/empty/0 found=slot1 name=same days=same time=other on=same temp=other seats=other", line)
         for (privateValue in listOf("Plan A", "06:40", "07:00", Departures.PLACEHOLDER_TIME)) assertFalse(privateValue, line.contains(privateValue))
         assertEquals("SCHEDULE_WRITE " + line.removePrefix("schedule write "), ProximityDiagnosticJournal.event("sched", line))
     }
@@ -34,6 +34,35 @@ class ScheduleDiagnosticsTest {
         assertNull("a free-text refusal", ProximityDiagnosticJournal.event("sched", base.replace("sent=accepted", "sent=refused code=car offline")))
         assertNull("trailing data", ProximityDiagnosticJournal.event("sched", "$base VIN=private"))
         assertNull("another area", ProximityDiagnosticJournal.event("http", base))
+        val found = base.replace("found=none", "found=slot2 name=same days=same time=same on=same temp=same seats=other")
+        assertEquals("SCHEDULE_WRITE " + found.removePrefix("schedule write "), ProximityDiagnosticJournal.event("sched", found))
+        assertNull("a temperature value", ProximityDiagnosticJournal.event("sched", found.replace("temp=same", "temp=21.0")))
+    }
+
+    @Test fun theTemperatureAndTheSeatsAreComparedNotShown() {
+        // 0.3.17 (field 18/10): the plan's temperature read back as sent, and each seat with its level.
+        val sent = Departures.fromSlot(empty, DepartureDraft("Test", "04:00:00", setOf(7), tempC = 21.0, seats = mapOf(1 to 2)))
+        val asSent = sent.copy(btId = 2, csSetting = sent.csSetting!!.copy(temp = "21"))
+        assertEquals("slot2 name=same days=same time=same on=same temp=same seats=same", ScheduleDiagnostics.found(listOf(used, asSent), sent))
+        val other = asSent.copy(csSetting = sent.csSetting!!.copy(temp = "16.0"),
+            heatSettings = sent.heatSettings.map { if (it.location == 1) it.copy(level = 3) else it })
+        assertEquals("slot2 name=same days=same time=same on=same temp=other seats=other", ScheduleDiagnostics.found(listOf(used, other), sent))
+    }
+
+    @Test fun theSeatsLineShowsSeatCodesAndLevelsOnly() {
+        // 0.3.17: which code the car uses for which seat, entry by entry - never a name, time, day or temperature.
+        val slot = empty.copy(heatSettings = (1..8).map { com.openzeekr.app.net.model.TravelSeatSetting(15, 1, it, 0) })
+        val sent = Departures.fromSlot(slot, DepartureDraft("Test", "04:00:00", setOf(7), tempC = 21.0, seats = mapOf(1 to 1, 2 to 2, 3 to 3)))
+        val line = ScheduleDiagnostics.seatsLine("create", sent, listOf(used, slot))
+        assertEquals("schedule seats at=create sent=2:1=1+/2=2+/3=3+/4=1-/5=1-/6=1-/7=1-/8=1- " +
+            "slots=1:none,2:1=1-/2=1-/3=1-/4=1-/5=1-/6=1-/7=1-/8=1-", line)
+        for (privateValue in listOf("Plan A", "Test", "06:40", "04:00", "21.0", Departures.PLACEHOLDER_TIME))
+            assertFalse(privateValue, line.contains(privateValue))
+        assertEquals("SCHEDULE_SEATS " + line.removePrefix("schedule seats "), ProximityDiagnosticJournal.event("sched", line))
+        assertEquals("SCHEDULE_SEATS at=load sent=- slots=none",
+            ProximityDiagnosticJournal.event("sched", ScheduleDiagnostics.seatsLine("load", null, emptyList())))
+        assertNull("a name", ProximityDiagnosticJournal.event("sched", line.replace("2:1=1+", "2:Test=1+")))
+        assertNull("trailing data", ProximityDiagnosticJournal.event("sched", "$line 04:00"))
     }
 
     @Test fun theShapeLineShowsFlagsAndCountsOnly() {

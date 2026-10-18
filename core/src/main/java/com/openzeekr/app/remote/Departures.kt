@@ -8,7 +8,11 @@ import com.openzeekr.app.net.model.TravelSeatSetting
 import com.openzeekr.app.net.model.TravelWheelSetting
 import java.util.Locale
 
-/** What the departure editor shows and changes (Schedule tab). Days: 1 = Monday .. 7 = Sunday. */
+/**
+ * What the departure editor shows and changes (Schedule tab). Days: 1 = Monday .. 7 = Sunday. [seats]: the seat
+ * heating per seat location ([Departures.HEAT_LOCATIONS]) that is on, with its level 1-3 (I-III); a seat that is
+ * not listed is off.
+ */
 data class DepartureDraft(
     val name: String = "Departure",
     val time: String = "08:00:00",
@@ -16,9 +20,14 @@ data class DepartureDraft(
     val climate: Boolean = true,
     val tempC: Double = 22.0,
     val wheelHeat: Boolean = false,
-    val seatHeat: Boolean = false,
+    val seats: Map<Int, Int> = emptyMap(),
     val batteryMaintenance: Boolean = false,
-)
+) {
+    /** The level of the seat at [location]: 0 = off, 1-3 = I-III. */
+    fun seatLevel(location: Int): Int = seats[location]?.coerceIn(0, 3) ?: 0
+
+    val seatHeat: Boolean get() = seats.values.any { it > 0 }
+}
 
 /**
  * Departure ("booking travel") plans: the rules for showing them and for turning an edit back into a
@@ -38,9 +47,17 @@ object Departures {
     const val MIN_TEMP = 16.0
     const val MAX_TEMP = 28.0
 
-    /** Seat-heat locations front left/right, rear left/right; the editor's switch drives the front pair. */
-    val HEAT_LOCATIONS = listOf(1, 2, 3, 5)
-    val FRONT_SEATS = setOf(1, 2)
+    /** Seat-heat locations in a plan as the official app writes them (upstream notes from its code; the field test of
+     *  0.3.17 checks them): driver (front left), passenger (front right), rear left, rear right. The editor sets each
+     *  one off or to level I-III, as the official app does; other entries the car lists stay off. */
+    const val SEAT_DRIVER = 1
+    const val SEAT_PASSENGER = 2
+    const val SEAT_REAR_LEFT = 3
+    const val SEAT_REAR_RIGHT = 5
+    val HEAT_LOCATIONS = listOf(SEAT_DRIVER, SEAT_PASSENGER, SEAT_REAR_LEFT, SEAT_REAR_RIGHT)
+    val FRONT_SEATS = setOf(SEAT_DRIVER, SEAT_PASSENGER)
+    /** Switching seat heating on in the editor: driver and passenger at III, the rear seats off. */
+    val SEATS_ON = mapOf(SEAT_DRIVER to 3, SEAT_PASSENGER to 3)
     val VENTI_LOCATIONS = listOf(1, 2)
 
     /**
@@ -92,9 +109,25 @@ object Departures {
         climate = p.csSetting?.sts == 1,
         tempC = p.csSetting?.temp?.toDoubleOrNull()?.coerceIn(MIN_TEMP, MAX_TEMP) ?: 22.0,
         wheelHeat = p.whlSetting?.sts == 1,
-        seatHeat = p.heatSettings.any { it.location in FRONT_SEATS && it.sts == 1 },
+        seats = HEAT_LOCATIONS.mapNotNull { loc ->
+            p.heatSettings.firstOrNull { it.location == loc && it.sts == 1 }?.let { loc to it.level.coerceIn(1, 3) }
+        }.toMap(),
         batteryMaintenance = p.preHeatSts == 1,
     )
+
+    /** The seats the editor can set for [p]: those of [HEAT_LOCATIONS] the car lists in it (all of them for a plan
+     *  without seat entries, which gets them when written). An entry is never added to what the car reported. */
+    fun seatsOf(p: BookingTravelSetting?): List<Int> =
+        if (p == null || p.heatSettings.isEmpty()) HEAT_LOCATIONS
+        else HEAT_LOCATIONS.filter { loc -> p.heatSettings.any { it.location == loc } }
+
+    /** [seats] with the seat at [location] set to [level] (0 = off); only the seats that are on stay listed. */
+    fun withSeat(seats: Map<Int, Int>, location: Int, level: Int): Map<Int, Int> =
+        (seats + (location to level.coerceIn(0, 3))).filterValues { it > 0 }
+
+    /** Seat heating switched on in the editor for the [available] seats: [SEATS_ON], else the first seat at III. */
+    fun seatsOn(available: List<Int>): Map<Int, Int> =
+        SEATS_ON.filterKeys { it in available }.ifEmpty { available.take(1).associateWith { 3 } }
 
     /** A new recurring plan for slot [btId]. Every block the car validates is present (disabled where off). */
     fun newPlan(d: DepartureDraft, btId: Int, t: Template = Template()): BookingTravelSetting = BookingTravelSetting(
@@ -109,7 +142,8 @@ object Departures {
         csSetting = TravelClimateSetting(duration = t.climateMinutes, sts = if (d.climate) 1 else 0, temp = temp(d.tempC)),
         ventiSettings = VENTI_LOCATIONS.map { TravelSeatSetting(duration = t.seatMinutes, level = 1, location = it, sts = 0) },
         heatSettings = HEAT_LOCATIONS.map {
-            TravelSeatSetting(duration = t.seatMinutes, level = t.seatLevel, location = it, sts = if (d.seatHeat && it in FRONT_SEATS) 1 else 0)
+            val level = d.seatLevel(it)
+            TravelSeatSetting(duration = t.seatMinutes, level = if (level > 0) level else t.seatLevel, location = it, sts = if (level > 0) 1 else 0)
         },
         whlSetting = TravelWheelSetting(duration = t.wheelMinutes, level = t.wheelLevel, sts = if (d.wheelHeat) 1 else 0),
         fragSetting = t.fragrance,
@@ -120,9 +154,10 @@ object Departures {
      * built from scratch never reached the car, as "start" nor as "edit", while an edit that sent a plan back
      * as the car had reported it was applied within seconds. So every block the car sent for the slot is kept;
      * a missing block, or one with a zero duration or level, gets the official app's defaults; the plan is
-     * switched on, shown and recurring, with the editor's name, days, time and settings. Ventilation, the rear
-     * seats and fragrance stay off (the editor does not show them). 0.3.15 (field 18/10, 0.3.14): recurring is
-     * [BOOKING_RECURRING] as in the official app's plan, and a fragrance block only when the car has one.
+     * switched on, shown and recurring, with the editor's name, days, time and settings. Ventilation and fragrance
+     * stay off (the editor does not show them). 0.3.15 (field 18/10, 0.3.14): recurring is [BOOKING_RECURRING] as in
+     * the official app's plan, and a fragrance block only when the car has one. 0.3.17: each seat of
+     * [HEAT_LOCATIONS] as the editor set it; any other seat entry the slot lists stays off.
      */
     fun fromSlot(slot: BookingTravelSetting, d: DepartureDraft, t: Template = Template()): BookingTravelSetting {
         val base = sanitizedForWrite(slot, t)
@@ -142,8 +177,9 @@ object Departures {
                 it.copy(duration = it.duration.takeIf { m -> m > 0 } ?: t.seatMinutes, level = it.level.takeIf { l -> l in 1..3 } ?: 1, sts = 0)
             },
             heatSettings = base.heatSettings.map {
-                it.copy(duration = it.duration.takeIf { m -> m > 0 } ?: t.seatMinutes, level = it.level.takeIf { l -> l in 1..3 } ?: t.seatLevel,
-                    sts = if (d.seatHeat && it.location in FRONT_SEATS) 1 else 0)
+                val level = if (it.location in HEAT_LOCATIONS) d.seatLevel(it.location) else 0
+                it.copy(duration = it.duration.takeIf { m -> m > 0 } ?: t.seatMinutes,
+                    level = if (level > 0) level else it.level.takeIf { l -> l in 1..3 } ?: t.seatLevel, sts = if (level > 0) 1 else 0)
             },
             whlSetting = whl.copy(duration = whl.duration.takeIf { it > 0 } ?: t.wheelMinutes,
                 level = whl.level?.takeIf { it in 1..3 } ?: t.wheelLevel, sts = if (d.wheelHeat) 1 else 0),
@@ -151,18 +187,24 @@ object Departures {
         )
     }
 
-    /** [p] changed as the editor says. What the editor does not show (fragrance, ventilation, rear seats,
-     *  levels, durations, the slot) is kept exactly as the car reported it. */
+    /** [p] changed as the editor says. What the editor does not show (fragrance, ventilation, durations, the slot)
+     *  and every seat the editor left as it was are kept exactly as the car reported them. */
     fun applied(p: BookingTravelSetting, d: DepartureDraft, t: Template = Template()): BookingTravelSetting {
         val base = sanitizedForWrite(p, t)
-        val seatChanged = d.seatHeat != draftOf(p).seatHeat
+        val before = draftOf(p)
         return base.copy(
             name = d.name.trim().ifBlank { p.name.ifBlank { "Departure" } },
             cycleTimes = week(d),
             preHeatSts = if (d.batteryMaintenance) 1 else 0,
             csSetting = base.csSetting!!.copy(sts = if (d.climate) 1 else 0, temp = temp(d.tempC)),
-            heatSettings = if (!seatChanged) base.heatSettings
-            else base.heatSettings.map { if (it.location in FRONT_SEATS) it.copy(sts = if (d.seatHeat) 1 else 0) else it },
+            heatSettings = base.heatSettings.map {
+                val level = d.seatLevel(it.location)
+                when {
+                    it.location !in HEAT_LOCATIONS || level == before.seatLevel(it.location) -> it
+                    level == 0 -> it.copy(sts = 0)
+                    else -> it.copy(sts = 1, level = level)
+                }
+            },
             whlSetting = base.whlSetting!!.copy(sts = if (d.wheelHeat) 1 else 0),
         )
     }

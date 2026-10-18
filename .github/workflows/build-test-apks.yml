@@ -69,6 +69,7 @@ on:
       - zeekremote-0.3.14-departure-from-slot
       - zeekremote-0.3.15-departure-type
       - zeekremote-0.3.16-departure-delete
+      - zeekremote-0.3.17-seat-heat
 
 permissions:
   contents: read
@@ -358,6 +359,17 @@ jobs:
           if grep -q 'Kind.DELETE, CMD_DELETE' core/src/main/java/com/openzeekr/app/remote/Repositories.kt; then echo 'delete by stop is back'; exit 1; fi
           grep -Fq 'com.openzeekr.app.util.Logx.d("sched", ScheduleDiagnostics.shapeLine("load", null, plans))' core/src/main/java/com/openzeekr/app/remote/Repositories.kt
           grep -Fq 'val fragrance: TravelFragranceSetting? = null,' core/src/main/java/com/openzeekr/app/remote/Departures.kt
+          # 0.3.17 (user 18/10): seat heating per seat (driver, passenger, rear left and right), each off or I-III as in the
+          # official app; only the seats the car lists are set, nothing is added; the write line compares temperature
+          # and seats (same/other) and a seats line shows seat codes and levels only.
+          grep -Fq 'val HEAT_LOCATIONS = listOf(SEAT_DRIVER, SEAT_PASSENGER, SEAT_REAR_LEFT, SEAT_REAR_RIGHT)' core/src/main/java/com/openzeekr/app/remote/Departures.kt
+          grep -Fq 'val seats: Map<Int, Int> = emptyMap(),' core/src/main/java/com/openzeekr/app/remote/Departures.kt
+          grep -Fq 'it.location !in HEAT_LOCATIONS || level == before.seatLevel(it.location) -> it' core/src/main/java/com/openzeekr/app/remote/Departures.kt
+          grep -Fq 'SeatLevelRow(SEAT_LABELS[seat] ?: "Seat $seat", seatLevels[seat] ?: 0)' app/src/main/java/com/openzeekr/app/ui/ScheduleScreen.kt
+          grep -Fq '"temp=${same(temp)} seats=${same(seats)}"' core/src/main/java/com/openzeekr/app/remote/ScheduleDiagnostics.kt
+          grep -Fq '"SCHEDULE_SEATS ' core/src/main/java/com/openzeekr/app/util/ProximityDiagnosticJournal.kt
+          grep -Fq 'ScheduleDiagnostics.seatsLine(kind.name.lowercase(), setting, last)' core/src/main/java/com/openzeekr/app/remote/Repositories.kt
+          if grep -q 'Seat heating (front seats)' app/src/main/java/com/openzeekr/app/ui/ScheduleScreen.kt; then echo 'front-pair switch is back'; exit 1; fi
           # Quick walk 18/10 (rain): steps up to 18 s late, already after 5 s of standing, and F46 (quickly to the car,
           # a short stop, quickly back and inside, no GNSS) in the gate.
           grep -Fq 'const val LATE_STEPS_AFTER_STILL_MS = 5_000L' core/src/test/java/com/openzeekr/app/ble/sim/SimWorld.kt
@@ -383,7 +395,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='140' versionName='0.3.16-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='141' versionName='0.3.17-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
