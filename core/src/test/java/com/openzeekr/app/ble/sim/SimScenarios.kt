@@ -209,6 +209,21 @@ internal object SimScenarios {
                 Walk(1.0, 2.0), Stand(2_000),
                 OpenDoor, Stand(4_000, shadowDb = -6.0), Mark("expect-lock"), Walk(16.0, 2.0), Fidget(8_000, -10.0),
                 Stand(150_000, Facing.AWAY, -10.0, indoor = true)), gnssAccuracyM = null),
+        // 0.3.19 (field 18/10): open, a while busy at the car, then a short walk straight into a house; the wall takes
+        // about 10 dB within seconds and the link may hold for minutes inside. The car must lock by itself.
+        Scenario("F47 short walk into the house", "open, 30 s busy at the car, 15 m at 1.4 m/s into the house, stand inside", 30.0,
+            approachAndOpen() + listOf(Shuffle(30_000), Mark("expect-lock"), Walk(15.0, 1.4),
+                Stand(150_000, Facing.AWAY, -8.0, indoor = true))),
+        // 0.3.19 (stress at the car): F36 and F06 with 30 s stands, the body between phone and car.
+        Scenario("F48 loading the boot 3x, long stands", "open, three trips of 3 m, 30 s each with the body between phone and car", 30.0,
+            approachAndOpen() + listOf(Mark("expect-stay-unlocked"),
+                Walk(3.0, 0.8), Stand(30_000, Facing.AWAY, -12.0), Walk(1.0, 0.8), Stand(5_000),
+                Walk(3.0, 0.8), Stand(30_000, Facing.AWAY, -12.0), Walk(1.0, 0.8), Stand(5_000),
+                Walk(3.0, 0.8), Stand(30_000, Facing.AWAY, -12.0), Walk(1.0, 0.8), Stand(10_000))),
+        // 0.3.19 (study I): back to the car between two long stands, without a strong reading on the way back.
+        Scenario("F49 around the car, long stands", "walk around the car within 4 m, 30 s stands", 30.0,
+            approachAndOpen() + listOf(Mark("expect-stay-unlocked"), Walk(3.5, 0.8), Stand(30_000, Facing.AWAY, -6.0),
+                Walk(1.0, 0.8), Walk(4.0, 0.8), Stand(30_000, Facing.SIDE, -10.0), Walk(1.5, 0.8), Stand(10_000))),
     )
 
     /** Every field incident and the families that reproduce it (incident history, 14/10). */

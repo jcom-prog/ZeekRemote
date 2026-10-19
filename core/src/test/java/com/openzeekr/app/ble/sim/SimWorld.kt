@@ -174,6 +174,13 @@ internal data class SimPhysics(
      * spot there, standing or walking, and that place measured much closer to the car than estimated: a generous one.
      */
     val spotWhileWalking: Boolean = false,
+    /** 0.3.19 worst case (field 18/10): a few seconds into half the walks the detector and the counter stall this long,
+     *  then hand over the held steps at once. 0 = off. */
+    val midStallMinMs: Long = 0L,
+    val midStallMaxMs: Long = 0L,
+    /** 0.3.19 (field 18/10): the true RSSI below which the link drops after [SimWorld.SUPERVISION_MS]. The link dropped
+     *  after a sustained -103..-106 and held for minutes at -100..-103. SIM_DROP_RSSI. */
+    val dropRssi: Double = env("SIM_DROP_RSSI", -104.0),
 ) {
     fun describe() = "%s phone%+.1fdB slope%.1f fade%.1f gnss%s ttff%.0fs hub%.0fs warm%.0f self%.0fs refuse%.2f cloud%.0fs/fail%.2f/lag%.0fs".format(
         name, phoneOffsetDb, pathSlope, fadeSigmaDb, gnssAccMedianM?.let { "%.1fm".format(it) } ?: "-", gnssTtffMs / 1000.0,
@@ -181,7 +188,8 @@ internal data class SimPhysics(
         (if (hubNone) " counter-none" else if (hubFreezeMs > 0) " counter-silent%.0fs".format(hubFreezeMs / 1000.0) else "") +
         (if (lateStepsMaxMs > 0) " steps-late%.0f-%.0fs".format(lateStepsMinMs / 1000.0, lateStepsMaxMs / 1000.0) else "") +
         (if (spotDb != 0.0) " spot%+.0fdB".format(spotDb) + (if (spotWhileWalking) "-walking" else "") else "") +
-        (if (handWobbleDb != 0.0) " hand-wobble%.1fdB".format(handWobbleDb) else "")
+        (if (handWobbleDb != 0.0) " hand-wobble%.1fdB".format(handWobbleDb) else "") +
+        (if (midStallMaxMs > 0) " steps-stall%.0f-%.0fs".format(midStallMinMs / 1000.0, midStallMaxMs / 1000.0) else "")
 
     companion object {
         private fun env(name: String, default: Double) = System.getenv(name)?.toDouble() ?: default
@@ -465,12 +473,24 @@ internal class SimWorld(
         /** 0.3.11 worst case: when the user last stopped walking, and until when this walk's steps are held. */
         private var walkEndedMs = Long.MIN_VALUE; private var wasWalking = false
         private var lateUntilMs = Long.MIN_VALUE; private var lateDetectorSteps = 0L
+        /** 0.3.19 worst case: when this walk may stall ([SimPhysics.midStallMaxMs]). */
+        private var stallCheckAtMs = Long.MIN_VALUE
 
         fun tick(dtMs: Long, cpuAwake: Boolean) {
             if (walking && !wasWalking && physics.lateStepsMaxMs > 0 &&
                 (walkEndedMs == Long.MIN_VALUE || now() - walkEndedMs >= SimPhysics.LATE_STEPS_AFTER_STILL_MS))
                 lateUntilMs = now() + rHub.uniform(physics.lateStepsMinMs.toDouble(), physics.lateStepsMaxMs.toDouble()).toLong()
             if (!walking && wasWalking) walkEndedMs = now()
+            // 0.3.19 worst case (field 18/10): the step stream stalled for seconds in the middle of a short walk.
+            if (physics.midStallMaxMs > 0) {
+                if (walking && !wasWalking) stallCheckAtMs = now() + rHub.uniform(3_000.0, 8_000.0).toLong()
+                if (!walking) stallCheckAtMs = Long.MIN_VALUE
+                if (walking && stallCheckAtMs != Long.MIN_VALUE && now() >= stallCheckAtMs) {
+                    stallCheckAtMs = Long.MIN_VALUE
+                    if (rHub.chance(0.5)) lateUntilMs = maxOf(lateUntilMs,
+                        now() + rHub.uniform(physics.midStallMinMs.toDouble(), physics.midStallMaxMs.toDouble()).toLong())
+                }
+            }
             wasWalking = walking
             val late = now() < lateUntilMs
             if (walking) {
@@ -647,7 +667,7 @@ internal class SimWorld(
                 _state.value = DkBleManager.State.CONNECTED
                 lastNonIdleMs = now()
                 delay(rc.uniform(2_600.0, 3_600.0).toLong())   // GATT + DK handshake (field ~3.4 s)
-                if (trueRssi < DROP_RSSI) { _state.value = DkBleManager.State.IDLE; return@launch }
+                if (trueRssi < physics.dropRssi) { _state.value = DkBleManager.State.IDLE; return@launch }
                 generation++
                 _state.value = DkBleManager.State.SESSION_READY
                 record("LINK_READY")
@@ -667,7 +687,7 @@ internal class SimWorld(
             val st = _state.value
             if (st == DkBleManager.State.SESSION_READY || st == DkBleManager.State.CONNECTED) {
                 lastNonIdleMs = now()
-                if (trueRssi < DROP_RSSI) {
+                if (trueRssi < physics.dropRssi) {
                     if (weakSinceMs < 0) weakSinceMs = now()
                     if (now() - weakSinceMs >= SUPERVISION_MS) {
                         weakSinceMs = -1L; connectJob?.cancel(); connectJob = null
@@ -1198,7 +1218,6 @@ internal class SimWorld(
         val PRESENCE_EDGE = System.getenv("SIM_PRESENCE_EDGE") == "1"
         val WEAK_GATE = System.getenv("SIM_WEAK_GATE") != "0"
         val STEP_COUNTER = System.getenv("SIM_STEP_COUNTER") != "0"
-        const val DROP_RSSI = -102.0
         const val SUPERVISION_MS = 3_000L
         const val PRESENCE_MIN_RSSI = -95.0
         // ProximityService constants (14/10).

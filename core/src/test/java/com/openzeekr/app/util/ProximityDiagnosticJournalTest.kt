@@ -137,6 +137,27 @@ class ProximityDiagnosticJournalTest {
         assertEquals("LOCK_CONFIRMED", ProximityDiagnosticJournal.event("prox", "lock confirmed (manual) -> departure latched"))
     }
 
+    @Test fun aReturnToTheCarAndAVetoedLockAreJournaledAsCategories() {
+        // 0.3.19: a return to the car without a strong reading, and which check kept an automatic Lock back.
+        assertEquals("RETURN_TO_CAR -84", ProximityDiagnosticJournal.event("prox",
+            "return to the car without a strong reading (rssi=-84) -> steps since the car count from here"))
+        assertNull(ProximityDiagnosticJournal.event("prox", "return to the car without a strong reading (rssi=near) -> x"))
+        assertEquals("LOCK_VETOED far-no-motion steps_since_return", ProximityDiagnosticJournal.event("prox",
+            "far-no-motion: Lock vetoed - only 5 steps since the return to the car (detector=10 counter=12); " +
+                "user at the car; NO LOCK SENT; reminderPosted=true"))
+        assertEquals("LOCK_VETOED verified-link-departure steps_since_car", ProximityDiagnosticJournal.event("prox",
+            "verified-link-departure: Lock vetoed - only 11 steps since the car (detector=10 counter=12); " +
+                "user at the car; NO LOCK SENT; reminderPosted=true"))
+        assertEquals("LOCK_VETOED ble-departure strong_now", ProximityDiagnosticJournal.event("prox",
+            "ble-departure: Lock vetoed - fresh reading -71 dBm at the car; user at the car; NO LOCK SENT; reminderPosted=false"))
+        assertEquals("LOCK_VETOED ble-departure lock_range", ProximityDiagnosticJournal.event("prox",
+            "ble-departure: Lock vetoed - signal back in the lock range (-80 dBm); user at the car; NO LOCK SENT; reminderPosted=false"))
+        assertEquals("LOCK_VETOED walk-away-lock strong_recent", ProximityDiagnosticJournal.event("prox",
+            "walk-away-lock: Lock vetoed - strong reading 3.2 s ago; user at the car; NO LOCK SENT; reminderPosted=false"))
+        assertEquals("LOCK_VETOED ble-departure walking_back", ProximityDiagnosticJournal.event("prox",
+            "ble-departure: cloud Lock vetoed - walking back (-90 -> -84 dBm)"))
+    }
+
     private fun withFile(test: (File) -> Unit) {
         val dir = Files.createTempDirectory("proximity-journal-test").toFile()
         try { test(File(dir, "events.log")) } finally { dir.deleteRecursively() }

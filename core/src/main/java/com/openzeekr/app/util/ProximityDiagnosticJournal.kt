@@ -32,6 +32,11 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
         private val bleLockAuthorized = Regex("^ble departure lock authorized \\(rssi=(-[0-9]{2,3}) kind=(walk|very_deep|" +
             "very_deep_gradual|none)\\)")
         private val lockAlarm = Regex("lock alarm (raised|unavailable|suppressed) \\(([A-Z_]{1,40})\\)")
+        // 0.3.19: which check kept an automatic Lock back (a category, never the readings behind it).
+        private val lockVetoed = Regex("(ble-departure|verified-link-departure|walk-away-lock|idle-far-lock|far-no-motion): " +
+            "(?:cloud )?Lock vetoed - (fresh reading|signal back in the lock range|only [0-9]{1,5} steps since the return to the car|" +
+            "only [0-9]{1,5} steps since the car|strong reading|walking back)\\b.*")
+        private val returnToCar = Regex("return to the car without a strong reading \\(rssi=(-[0-9]{2,3})\\) .*")
         private val bleDepartureRevoked = Regex(
             "ble departure revoked \\((strong_near|signal_recovered|time_not_advancing)\\)")
         private val vehicleStatus = Regex("vehicle status observed session=([1-9][0-9]{0,18}) approach=([01]) walkAway=([01]) pe=([01]) ps=([01]) central=([0-3])")
@@ -122,6 +127,20 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                         ?.let { m -> "UNLOCK_STARTED ${m.groupValues[2]} ${m.groupValues[1]}" +
                             m.groupValues[3].let { if (it.isEmpty()) "" else " screen=$it" } } ?: "UNLOCK_STARTED"
                     message.startsWith("car locked itself (") -> "CAR_SELF_LOCK"
+                    returnToCar.matches(message) -> returnToCar.matchEntire(message)?.let { "RETURN_TO_CAR ${it.groupValues[1]}" }
+                    lockVetoed.matches(message) -> lockVetoed.matchEntire(message)?.let { m ->
+                        val why = m.groupValues[2].let {
+                            when {
+                                it.startsWith("fresh") -> "strong_now"
+                                it.startsWith("signal") -> "lock_range"
+                                it.endsWith("return to the car") -> "steps_since_return"
+                                it.startsWith("only") -> "steps_since_car"
+                                it.startsWith("strong") -> "strong_recent"
+                                else -> "walking_back"
+                            }
+                        }
+                        "LOCK_VETOED ${m.groupValues[1]} $why"
+                    }
                     message.startsWith("manual Lock not executed:") -> "MANUAL_LOCK_NOT_EXECUTED"
                     Regex("(ble-departure|verified-link-departure|walk-away-lock|idle-far-lock|far-no-motion): " +
                         "locked via cloud; a newer cloud report confirms it").matches(message) -> "AUTO_LOCK_CLOUD_VERIFIED"

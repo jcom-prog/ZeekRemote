@@ -71,6 +71,7 @@ on:
       - zeekremote-0.3.16-departure-delete
       - zeekremote-0.3.17-seat-heat
       - zeekremote-0.3.18-schedule-sync
+      - zeekremote-0.3.19-near-return
 
 permissions:
   contents: read
@@ -296,8 +297,8 @@ jobs:
           grep -Fq 'the cloud state is unavailable -> alarm (lock not verifiable)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'private fun closeAlarmEpisode(reason: String, linkLostAgain: Boolean = false)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'val WORST_CASES = listOf("steps-silent", "steps-dead", "gps-poor", "ar-poor", "signal-flat", "steps-late", "strong-spot", "ar-quick-still",' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
-          grep -Fxq '        "hand-wobble", "field-like", "strong-spot-walk")' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
-          for s in steps-silent steps-dead gps-poor ar-poor signal-flat steps-late strong-spot ar-quick-still hand-wobble field-like strong-spot-walk; do grep -Fq "\"$s\": {" core/src/test/resources/sim-baseline.json; done
+          grep -Fxq '        "hand-wobble", "field-like", "strong-spot-walk", "steps-stall", "link-holds")' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
+          for s in steps-silent steps-dead gps-poor ar-poor signal-flat steps-late strong-spot ar-quick-still hand-wobble field-like strong-spot-walk steps-stall link-holds; do grep -Fq "\"$s\": {" core/src/test/resources/sim-baseline.json; done
           # 0.3.10: no alarm stops early while the car is open and the user away. A withheld Lock no longer
           # silences it, weak evidence of a return only when it looks like one, and the gate counts the gap.
           if awk '/fun resolvesAlarm\(/{f=1} f && /PROXIMITY_RECOVERED_BEFORE_LOCK/{print; exit} f && /^    }/{exit}' core/src/main/java/com/openzeekr/app/ble/LockAlertPolicy.kt | grep -q .; then echo 'a withheld Lock silences the alarm again'; exit 1; fi
@@ -391,6 +392,17 @@ jobs:
           grep -Fq 'Scenario("F46 rain: quick to the car and back inside"' core/src/test/java/com/openzeekr/app/ble/sim/SimScenarios.kt
           # Study C (18/10): the simulated presence scan keeps running when re-armed in the same mode, as the app's scan does.
           grep -Fq 'if (presenceArmed && presenceMode == mode) return true' core/src/test/java/com/openzeekr/app/ble/sim/SimWorld.kt
+          # 0.3.19 (study I, simulator 18/10): a return to the car that never reads strong (back pocket, the body between
+          # phone and car) restarts "steps since the car" for the Lock veto; the journal says which check kept a Lock back;
+          # the gate has the worlds steps-stall and link-holds (the link drops below -104) and the families F47-F49.
+          grep -Fq 'internal class ReturnToCarWatch {' core/src/main/java/com/openzeekr/app/ble/ReturnToCarWatch.kt
+          grep -Fq 'stepsShortOfReturn()?.let { return it }' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq '"RETURN_TO_CAR ' core/src/main/java/com/openzeekr/app/util/ProximityDiagnosticJournal.kt
+          grep -Fq '"LOCK_VETOED ' core/src/main/java/com/openzeekr/app/util/ProximityDiagnosticJournal.kt
+          test -f core/src/test/java/com/openzeekr/app/ble/ReturnToCarWatchTest.kt
+          test -f core/src/test/java/com/openzeekr/app/ble/sim/SimReturnToCarTest.kt
+          grep -Fq 'val dropRssi: Double = env("SIM_DROP_RSSI", -104.0),' core/src/test/java/com/openzeekr/app/ble/sim/SimWorld.kt
+          for f in 'F47 short walk into the house' 'F48 loading the boot 3x, long stands' 'F49 around the car, long stands'; do grep -Fq "Scenario(\"$f\"" core/src/test/java/com/openzeekr/app/ble/sim/SimScenarios.kt; done
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -412,7 +424,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='142' versionName='0.3.18-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='143' versionName='0.3.19-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

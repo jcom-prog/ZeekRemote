@@ -65,9 +65,10 @@ internal object SimRunner {
      *  0.3.11 (user decision 16/10): two more from the measurement walk of 16/10.
      *  0.3.12 (user decision 16/10): quick STILL, the hand wobble, and the field of 16/10 in one world.
      *  0.3.13 (user decision 17/10): the strong spot also while walking.
-     *  Quick walk 18/10 (user decision): late steps up to 18 s, already after 5 s of standing (steps-late). */
+     *  Quick walk 18/10 (user decision): late steps up to 18 s, already after 5 s of standing (steps-late).
+     *  0.3.19 (user decision 18/10): steps that stall in the middle of a walk, and a link that holds deeper indoors. */
     val WORST_CASES = listOf("steps-silent", "steps-dead", "gps-poor", "ar-poor", "signal-flat", "steps-late", "strong-spot", "ar-quick-still",
-        "hand-wobble", "field-like", "strong-spot-walk")
+        "hand-wobble", "field-like", "strong-spot-walk", "steps-stall", "link-holds")
 
     /** The world of a run. A stress world depends on the seed only, so two app versions meet the same world. */
     fun physicsFor(suite: String, seed: Long): SimPhysics = when (suite) {
@@ -88,6 +89,10 @@ internal object SimRunner {
         "strong-spot-walk" -> SimPhysics(name = suite, spotDb = 7.0, spotWhileWalking = true)
         // Field 16/10, phone in the hand: walking wobbles 1.9-2.4 dB at the 1 s scale (sim 3 dB -> 2.2).
         "hand-wobble" -> SimPhysics(name = suite, handWobbleDb = 3.0)
+        // Field 18/10: the step stream stalled for 10-18 s in the middle of a short walk.
+        "steps-stall" -> SimPhysics(name = suite, midStallMinMs = 10_000L, midStallMaxMs = 18_000L)
+        // Field 18/10: the link held for minutes indoors at about -100..-105.
+        "link-holds" -> SimPhysics(name = suite, dropRssi = -107.0)
         // The field of 16/10 together: late steps after standing, quick STILL (profileFor), poor GPS as in
         // "gps-poor", and the hand wobble.
         "field-like" -> SimPhysics(name = suite, lateStepsMinMs = 8_000L, lateStepsMaxMs = 14_000L,

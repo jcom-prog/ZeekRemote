@@ -287,6 +287,10 @@ class ProximityController internal constructor(
     private var stepsAtLastStrongNear: Long? = null
     // The hub counter's own total at that reading: a baseline per source (0.3.2, simulation audit C).
     private var counterAtLastStrongNear: Long? = null
+    // 0.3.19: a return to the car that never read strong ([ReturnToCarWatch]) and the step counts then.
+    private val returnToCar = ReturnToCarWatch()
+    private var stepsAtReturn: Long? = null
+    private var counterAtReturn: Long? = null
     // Walking and stopping from the step total, for the BLE departure proof (0.3.2).
     private val departureSteps = DepartureStepWatch()
     // A walk-away verification ended because the signal came back above the lock threshold.
@@ -722,6 +726,7 @@ class ProximityController internal constructor(
         counterAtUnlock = motion.counterSteps
         strongestRssiSinceUnlock = Int.MIN_VALUE
         lastStrongNearAtMs = 0L
+        returnToCar.reset(); stepsAtReturn = null; counterAtReturn = null
         lastShadowDepartureAtMs = 0L
         shadowDepartureWarned = false
         lastWalkAwayCandidateAtMs = 0L
@@ -1096,6 +1101,12 @@ class ProximityController internal constructor(
     private fun recordReading(rssi: Int) {
         val now = clock.wallMs()
         recentReadings.addLast(now to rssi)
+        val mark = returnToCar.observe(now, rssi, gattEma, config().sensitivityLockRssi, armedUnlocked)
+        if (mark != ReturnToCarWatch.Mark.NONE) {
+            if (mark == ReturnToCarWatch.Mark.RETURN)
+                Logx.d("prox", "return to the car without a strong reading (rssi=$rssi) -> steps since the car count from here")
+            stepsAtReturn = motion.observedSteps; counterAtReturn = motion.counterSteps
+        }
         // 0.3.12: two weak fresh readings in a row break a strong streak ([markStrongNear]).
         if (rssi < STRONG_NEAR_DIAGNOSTIC_RSSI) { if (++weakReadingsInRow >= 2) streakBrokenAtMs = now } else weakReadingsInRow = 0
         while (recentReadings.isNotEmpty() && now - recentReadings.first().first > RECENT_READINGS_MS) recentReadings.removeFirst()
@@ -1117,6 +1128,7 @@ class ProximityController internal constructor(
             if (level > config().sensitivityLockRssi) return "signal back in the lock range (${level.toInt()} dBm)"
         }
         stepsShortOfDeparture()?.let { return it }
+        stepsShortOfReturn()?.let { return it }
         if (lastStrongNearAtMs != 0L && now - lastStrongNearAtMs <= LOCK_VETO_RECENT_STRONG_MS)
             return "strong reading ${(now - lastStrongNearAtMs) / 100 / 10.0} s ago"
         val earlier = recentReadings.filter { now - it.first in LOCK_VETO_RISE_FROM_MS..LOCK_VETO_RISE_TO_MS }.maxOfOrNull { it.second }
@@ -1167,6 +1179,20 @@ class ProximityController internal constructor(
     private fun stepsAwayFromCar(): Long? =
         if (stepsAtLastStrongNear != null) stepsSince(stepsAtLastStrongNear, counterAtLastStrongNear)
         else stepsSince(stepsAtUnlock, counterAtUnlock)
+
+    /**
+     * 0.3.19 (study I): [LOCK_MIN_STEPS_SINCE_CAR] also counts from a return to the car that never read strong
+     * ([ReturnToCarWatch]), when that came after the latest strong reading. Simulator F49: back pocket, back at the car
+     * between two long stands; 19 steps "since the car" were 3 m away, and a GNSS reference taken in a multipath jump
+     * proved a departure. Lock veto only: the link-loss alarm keeps counting from the strong reading.
+     */
+    private fun stepsShortOfReturn(): String? {
+        if ((stepsSinceUnlock() ?: 0L) <= 0L) return null
+        if (stepsAtReturn == null || returnToCar.returnedAtMs <= lastStrongNearAtMs) return null
+        val sinceReturn = stepsSince(stepsAtReturn, counterAtReturn) ?: return null
+        val steps = stepsAwayFromCar()?.let { minOf(it, sinceReturn) } ?: sinceReturn
+        return if (steps < LOCK_MIN_STEPS_SINCE_CAR) "only $steps steps since the return to the car (${motion.stepSummary})" else null
+    }
 
     private fun departureSuspected(): Boolean =
         LockAlertPolicy.departureSuspected(lastWalkAwayCandidateAtMs, lastStrongNearAtMs) ||
