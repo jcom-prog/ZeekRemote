@@ -47,6 +47,16 @@ class TravelPlanListTest {
         assertEquals(listOf(p), Departures.visible(r.plans.filter { it.btId == 3 }))
     }
 
+    @Test fun aPlanWithoutItsDisplayStateIsShown() {
+        // 0.3.20: off and hidden is a plan the official app deleted; a plan that does not say whether it is shown is not
+        // taken for one.
+        val noDisplay = """{"btId":3,"name":"Test","sts":0,"bookingType":0,"temporaryTime":"2099:12:12:08:00:00",
+            "cycleTimes":[{"day":7,"sts":1,"time":"04:00:00"}],"preHeatSts":0}"""
+        val r = TravelPlanList.read(arr("[$plan,$freeSlot,$noDisplay]"))
+        assertEquals(setOf(3), r.readOnly)
+        assertEquals(listOf(1, 3), Departures.visible(r.plans).map { it.btId })
+    }
+
     @Test fun aPlanThatCannotBeReadAtAllStillHoldsItsSlot() {
         val broken = """{"btId":4,"name":"Holiday","sts":"on?","cycleTimes":"weekly"}"""
         val noId = """{"name":"Mystery","sts":1}"""

@@ -55,7 +55,7 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
         private val AR_ACTIVITIES = mapOf("0" to "vehicle", "1" to "bicycle", "2" to "on_foot", "3" to "still",
             "7" to "walking", "8" to "running")
         // One schedule write (0.3.8): categories and slot numbers only - no name, time or temperature fits.
-        private const val SCHEDULE_SLOT = "[0-9]{1,2}:(?:on|off)/(?:used|empty)/[0-7]"
+        private const val SCHEDULE_SLOT = "[0-9]{1,2}:(?:on|off)/(?:used|empty|hidden)/[0-7]"
         private val scheduleWrite = Regex("schedule write (kind=(?:create|edit|switch|delete|charge) " +
             "slot=(?:[0-9]{1,2}|-) sent=(?:accepted|error|refused code=[A-Za-z0-9_.-]{1,16}) session=(?:yes|no|-) " +
             "result=(?:confirmed|pending|failed) polls=[0-9]{1,3} " +
@@ -164,6 +164,9 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                     message == "measurement mode off" -> "MEASURE_MODE off"
                     message.startsWith("independent departure unverified:") -> "DEPARTURE_UNVERIFIED"
                     message == "ble departure confirmed" -> "BLE_DEPARTURE_CONFIRMED"
+                    // 0.3.20 (study J): the alarm waited for a very-deep proof; the drive's motion held one back.
+                    message.startsWith("departure alarm held: a very-deep proof is under way") -> "LOCK_ALARM_HELD very_deep"
+                    message.startsWith("very-deep proof held: MOVING from the drive only") -> "BLE_DEPARTURE_HELD drive_motion"
                     message.startsWith("lock alarm ") -> lockAlarm.matchEntire(message)
                         ?.let { "LOCK_ALARM ${it.groupValues[1]} ${it.groupValues[2]}" }
                     message == "ble departure route disabled (uncalibrated preset)" -> "BLE_DEPARTURE_ROUTE disabled"

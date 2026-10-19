@@ -80,6 +80,10 @@ class MotionMonitor(context: Context) : ProximityMotion {
     private val _state = MutableStateFlow(Motion.UNKNOWN)
     override val state: StateFlow<Motion> = _state.asStateFlow()
 
+    /** 0.3.20: see [ProximityMotion.vehicleMotion]. */
+    @Volatile override var vehicleMotion: Boolean = false
+        private set
+
     /** True while a moving-vehicle activity is detected (IN_VEHICLE), from Activity Recognition. */
     private val _inVehicle = MutableStateFlow(false)
     val inVehicle: StateFlow<Boolean> = _inVehicle.asStateFlow()
@@ -169,6 +173,7 @@ class MotionMonitor(context: Context) : ProximityMotion {
             if (!running) return
             tally.onDetectorStep()
             logDetectorStep()
+            vehicleMotion = false
             setMoving()
             stillHandler.removeCallbacks(stepStillRunnable)
             stillHandler.postDelayed(stepStillRunnable, STEP_STILL_TIMEOUT_MS)
@@ -177,12 +182,14 @@ class MotionMonitor(context: Context) : ProximityMotion {
     /** When hardware motion triggers own wake-up, count steps without changing that wake policy. */
     private val diagnosticStepListener = object : SensorEventListener {
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
-        override fun onSensorChanged(event: SensorEvent) { if (running) { tally.onDetectorStep(); logDetectorStep() } }
+        override fun onSensorChanged(event: SensorEvent) { if (running) { tally.onDetectorStep(); logDetectorStep(); vehicleMotion = false } }
     }
     private val onStepCounter = object : SensorEventListener {
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
         override fun onSensorChanged(event: SensorEvent) {
             if (running && event.values.isNotEmpty()) {
+                // A rising counter is walking (a total that is only read again is not).
+                if ((tally.counterSteps() ?: Long.MAX_VALUE) < event.values[0].toLong()) vehicleMotion = false
                 tally.onCounter(event.values[0].toLong())
                 logCounter(event.values[0].toLong())
             }
@@ -250,6 +257,7 @@ class MotionMonitor(context: Context) : ProximityMotion {
         runCatching { sensors?.unregisterListener(onStepCounter) }
         stepCounterActive = false
         diagnosticStepListenerActive = false
+        vehicleMotion = false
         stillHandler.removeCallbacks(stepStillRunnable)
         stopActivityRecognition()
         active = null
@@ -281,6 +289,7 @@ class MotionMonitor(context: Context) : ProximityMotion {
             stillSinceElapsedMs = SystemClock.elapsedRealtime()
             _state.value = Motion.STILL
             _inVehicle.value = false
+            vehicleMotion = false
             Logx.d("motion", "-> STILL")
         }
     }
@@ -355,9 +364,9 @@ class MotionMonitor(context: Context) : ProximityMotion {
         if (!running || source != Source.ACTIVITY) return
         when (activityType) {
             DetectedActivity.STILL -> setStill()
-            DetectedActivity.IN_VEHICLE -> { _inVehicle.value = true; setMoving() }
+            DetectedActivity.IN_VEHICLE -> { _inVehicle.value = true; vehicleMotion = true; setMoving() }
             DetectedActivity.WALKING, DetectedActivity.ON_FOOT,
-            DetectedActivity.RUNNING, DetectedActivity.ON_BICYCLE -> setMoving()
+            DetectedActivity.RUNNING, DetectedActivity.ON_BICYCLE -> { vehicleMotion = false; setMoving() }
         }
     }
 

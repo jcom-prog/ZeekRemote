@@ -29,6 +29,12 @@ internal class BleDepartureRoute private constructor(lockThreshold: Int) {
     /** 0.3.12: the deep-far window of a walk-away is running (see [BleDepartureEvidence.weakWindowRunning]). */
     val weakWindowRunning: Boolean get() = evidence.weakWindowRunning
 
+    /** 0.3.20: see [BleDepartureEvidence.deepProofRunningMs]. */
+    fun deepProofRunningMs(nowMs: Long): Long? = evidence.deepProofRunningMs(nowMs)
+
+    /** 0.3.20: see [BleDepartureEvidence.driveMotionHeld]. */
+    val driveMotionHeld: Boolean get() = evidence.driveMotionHeld
+
     /** Which proof confirmed the departure: walk, very_deep or very_deep_gradual. */
     val confirmKind: String get() = evidence.confirmKind
 
@@ -46,10 +52,10 @@ internal class BleDepartureRoute private constructor(lockThreshold: Int) {
     fun authorizesBleLock(nowMs: Long): Boolean = ledger.authorizesBleLock(nowMs)
 
     /** A fresh GATT reading on the continuous sampling path; true when a BLE Lock is authorized. */
-    fun observe(nowMs: Long, rawRssi: Int, smoothedRssi: Int, moving: Boolean, steps: Long?): Boolean {
+    fun observe(nowMs: Long, rawRssi: Int, smoothedRssi: Int, moving: Boolean, steps: Long?, vehicleOnly: Boolean = false): Boolean {
         newlyConfirmed = false
         revokeIfContradicted(nowMs, rawRssi, smoothedRssi)
-        val decision = evidence.observe(nowMs, rawRssi, smoothedRssi, moving, steps)
+        val decision = evidence.observe(nowMs, rawRssi, smoothedRssi, moving, steps, vehicleOnly)
         if (decision != BleDepartureEvidence.Decision.CONFIRMED) return false
         val hadProof = ledger.hasProof
         ledger.onConfirmed(nowMs)

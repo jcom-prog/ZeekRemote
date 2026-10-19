@@ -33,6 +33,38 @@ class DeparturesTest {
         whlSetting = TravelWheelSetting(duration = 15, level = 2, sts = 0),
     )
 
+    /** 0.3.20 (field 19/10): a plan the official app deleted - off and hidden, with its name, days and blocks. */
+    private fun deletedThere(id: Int) = ownPlan(id, "Plan B", sts = 0).copy(displaySts = 0)
+
+    @Test fun aPlanTheOfficialAppDeletedIsGoneHereAndItsSlotIsFree() {
+        val plans = listOf(ownPlan(1), deletedThere(2), emptySlot(3), ownPlan(4, "Plan C").copy(displaySts = 0))
+        assertEquals("off and hidden is gone; on and hidden stays", listOf(1, 4), Departures.visible(plans).map { it.btId })
+        assertEquals("an unused slot first", 3, Departures.freeSlotId(plans))
+        assertEquals("then a deleted plan's slot", 2, Departures.freeSlotId(listOf(ownPlan(1), deletedThere(2), ownPlan(3, "Plan C"))))
+        assertTrue(Departures.isFree(deletedThere(2)) && Departures.isFree(emptySlot(3)))
+        assertTrue("a delete that reads back hidden landed", Departures.gone(plans, 2))
+        assertFalse(Departures.gone(plans, 4))
+        assertEquals("switched off by its own app, a plan stays", listOf(1), Departures.visible(listOf(ownPlan(1, sts = 0))).map { it.btId })
+        val withDefaults = deletedThere(2).copy(csSetting = TravelClimateSetting(duration = 20, sts = 0, temp = "23.0"))
+        assertEquals("its defaults still count", 20, Departures.template(listOf(withDefaults, emptySlot(3))).climateMinutes)
+    }
+
+    @Test fun aSwitchOrAnEditHereShowsThePlanInBothApps() {
+        val hiddenOn = ownPlan(1).copy(displaySts = 0)
+        assertEquals(0 to 1, Departures.switched(hiddenOn, false).let { it.sts to it.displaySts })
+        assertEquals(1 to 1, Departures.switched(ownPlan(1, sts = 0), true).let { it.sts to it.displaySts })
+        assertEquals(1, Departures.applied(hiddenOn, Departures.draftOf(hiddenOn)).displaySts)
+    }
+
+    @Test fun aNewPlanOverADeletedOneKeepsNothingOfIt() {
+        val d = DepartureDraft("Test", "04:00:00", setOf(7), tempC = 21.0)
+        val p = Departures.fromSlot(deletedThere(2), d)
+        assertEquals(Triple("Test", 1, 1), Triple(p.name, p.sts, p.displaySts))
+        assertEquals(d, Departures.draftOf(p))
+        assertEquals(Departures.PLACEHOLDER_TIME, p.temporaryTime)
+        assertTrue("no seat of the old plan stays on", p.heatSettings.none { it.sts == 1 })
+    }
+
     @Test fun theCarsUnusedSlotsAreHiddenAndNeverOverwritten() {
         val plans = listOf(ownPlan(1), emptySlot(2), emptySlot(3))
         assertEquals(listOf(1), Departures.visible(plans).map { it.btId })

@@ -181,6 +181,15 @@ internal data class SimPhysics(
     /** 0.3.19 (field 18/10): the true RSSI below which the link drops after [SimWorld.SUPERVISION_MS]. The link dropped
      *  after a sustained -103..-106 and held for minutes at -100..-103. SIM_DROP_RSSI. */
     val dropRssi: Double = env("SIM_DROP_RSSI", -104.0),
+    /** Study J worst case (field 16/10-19/10, S24+): after a drive the counter and the detector hold every step until the
+     *  user has walked this long without a stop of more than [AFTER_DRIVE_STOP_MS], then hand them over at once or (in
+     *  [afterDriveDropP] of the drives) drop them; Activity Recognition still reports the drive (MOVING) for minutes after
+     *  it. 0 = off. */
+    val afterDriveReleaseMinMs: Long = 0L,
+    val afterDriveReleaseMaxMs: Long = 0L,
+    val afterDriveDropP: Double = 0.5,
+    val afterDriveMovingMinMs: Long = 180_000L,
+    val afterDriveMovingMaxMs: Long = 450_000L,
 ) {
     fun describe() = "%s phone%+.1fdB slope%.1f fade%.1f gnss%s ttff%.0fs hub%.0fs warm%.0f self%.0fs refuse%.2f cloud%.0fs/fail%.2f/lag%.0fs".format(
         name, phoneOffsetDb, pathSlope, fadeSigmaDb, gnssAccMedianM?.let { "%.1fm".format(it) } ?: "-", gnssTtffMs / 1000.0,
@@ -189,10 +198,13 @@ internal data class SimPhysics(
         (if (lateStepsMaxMs > 0) " steps-late%.0f-%.0fs".format(lateStepsMinMs / 1000.0, lateStepsMaxMs / 1000.0) else "") +
         (if (spotDb != 0.0) " spot%+.0fdB".format(spotDb) + (if (spotWhileWalking) "-walking" else "") else "") +
         (if (handWobbleDb != 0.0) " hand-wobble%.1fdB".format(handWobbleDb) else "") +
-        (if (midStallMaxMs > 0) " steps-stall%.0f-%.0fs".format(midStallMinMs / 1000.0, midStallMaxMs / 1000.0) else "")
+        (if (midStallMaxMs > 0) " steps-stall%.0f-%.0fs".format(midStallMinMs / 1000.0, midStallMaxMs / 1000.0) else "") +
+        (if (afterDriveReleaseMaxMs > 0) " steps-after-drive%.0f-%.0fs".format(afterDriveReleaseMinMs / 1000.0, afterDriveReleaseMaxMs / 1000.0) else "")
 
     companion object {
         private fun env(name: String, default: Double) = System.getenv(name)?.toDouble() ?: default
+        /** Study J: a stop longer than this restarts the walk the held steps wait for ([afterDriveReleaseMinMs]). */
+        const val AFTER_DRIVE_STOP_MS = 2_000L
         /** Standing still at least this long makes the next walk's first steps late ([lateStepsMinMs]);
          *  field 18/10: a short stop at the car was enough. */
         const val LATE_STEPS_AFTER_STILL_MS = 5_000L
@@ -462,6 +474,8 @@ internal class SimWorld(
         override val stepSummary: String get() = "detector=$steps counter=${if (STEP_COUNTER) hubSeen.toString() else "none"}"
         override val counterSteps: Long? get() = if (motionProfile.hasStepDetector && STEP_COUNTER) hubSeen else null
         override var onMovingEdge: (() -> Unit)? = null
+        /** Study J2: see [com.openzeekr.app.ble.ProximityMotion.vehicleMotion]. */
+        override var vehicleMotion = false; private set
         private var running = false
         override fun start() { running = true; if (_state.value == MotionMonitor.Motion.UNKNOWN) setStill() }
         override fun stop() { running = false; _state.value = MotionMonitor.Motion.UNKNOWN }
@@ -475,8 +489,41 @@ internal class SimWorld(
         private var lateUntilMs = Long.MIN_VALUE; private var lateDetectorSteps = 0L
         /** 0.3.19 worst case: when this walk may stall ([SimPhysics.midStallMaxMs]). */
         private var stallCheckAtMs = Long.MIN_VALUE
+        /** Study J worst case: the steps held after a drive ([SimPhysics.afterDriveReleaseMaxMs]). */
+        private var driving = false; private var driveHold = false
+        private var driveWalkMs = 0L; private var driveStopMs = 0L; private var driveReleaseMs = 0L
+        private var heldHub = 0.0; private var heldDetector = 0L
+        private var vehicleMovingUntilMs = Long.MIN_VALUE
+        private val vehicleMoving get() = driving || now() < vehicleMovingUntilMs
+
+        fun driveStarted() {
+            if (physics.afterDriveReleaseMaxMs <= 0) return
+            driving = true; driveHold = true; driveWalkMs = 0L; driveStopMs = 0L; heldHub = 0.0; heldDetector = 0L
+            vehicleMotion = true
+            driveReleaseMs = rHub.uniform(physics.afterDriveReleaseMinMs.toDouble(), physics.afterDriveReleaseMaxMs.toDouble()).toLong()
+            setMoving()
+        }
+
+        fun driveEnded() {
+            if (!driving) return
+            driving = false
+            vehicleMovingUntilMs = now() + rMotion.uniform(physics.afterDriveMovingMinMs.toDouble(), physics.afterDriveMovingMaxMs.toDouble()).toLong()
+        }
 
         fun tick(dtMs: Long, cpuAwake: Boolean) {
+            // Study J: the walk the held steps wait for; then all at once, or (half the drives) never.
+            if (driveHold && !driving) {
+                if (walking) { driveWalkMs += dtMs; driveStopMs = 0L }
+                else { driveStopMs += dtMs; if (driveStopMs > SimPhysics.AFTER_DRIVE_STOP_MS) driveWalkMs = 0L }
+                if (driveWalkMs >= driveReleaseMs) {
+                    driveHold = false
+                    if (!rHub.chance(physics.afterDriveDropP)) {
+                        hubSteps += heldHub
+                        if (heldDetector > 0) { steps += heldDetector; lastStepMs = now(); vehicleMotion = false; setMoving() }
+                    }
+                    heldHub = 0.0; heldDetector = 0L
+                }
+            }
             if (walking && !wasWalking && physics.lateStepsMaxMs > 0 &&
                 (walkEndedMs == Long.MIN_VALUE || now() - walkEndedMs >= SimPhysics.LATE_STEPS_AFTER_STILL_MS))
                 lateUntilMs = now() + rHub.uniform(physics.lateStepsMinMs.toDouble(), physics.lateStepsMaxMs.toDouble()).toLong()
@@ -495,7 +542,7 @@ internal class SimWorld(
             val late = now() < lateUntilMs
             if (walking) {
                 hubBoutSteps += dtMs / 550.0
-                if (hubBoutSteps >= physics.stepWarmup) hubSteps += 0.9 * dtMs / 550.0
+                if (hubBoutSteps >= physics.stepWarmup) { if (driveHold) heldHub += 0.9 * dtMs / 550.0 else hubSteps += 0.9 * dtMs / 550.0 }
             } else hubBoutSteps = 0.0
             // 0.3.9 worst cases: a counter that goes silent while the user walks, or never delivers.
             if (physics.hubFreezeMs > 0 && walking && now() >= freezeUntilMs) {
@@ -503,21 +550,24 @@ internal class SimWorld(
                 freezeUntilMs = freezeFromMs + rHub.uniform(physics.hubFreezeMs / 2.0, physics.hubFreezeMs.toDouble()).toLong()
             }
             val hubSilent = physics.hubNone || (now() >= freezeFromMs && now() < freezeUntilMs)
-            if (!hubSilent && !late && now() - hubSnapMs >= physics.hubLagMs) { hubSnapMs = now(); hubSeen = hubSteps.toLong() }
+            if (!hubSilent && !late && now() - hubSnapMs >= physics.hubLagMs) {
+                hubSnapMs = now(); if (hubSteps.toLong() > hubSeen) vehicleMotion = false; hubSeen = hubSteps.toLong()
+            }
             // The held detector steps arrive at once when the late window ends (field: "+9 in 73,8 s").
-            if (!late && lateDetectorSteps > 0) { steps += lateDetectorSteps; lateDetectorSteps = 0L; lastStepMs = now(); setMoving() }
+            if (!late && lateDetectorSteps > 0) { steps += lateDetectorSteps; lateDetectorSteps = 0L; lastStepMs = now(); vehicleMotion = false; setMoving() }
             if (walking) {
                 stopStartMs = -1L
                 if (boutStartMs < 0) {
                     boutStartMs = now(); boutLagMs = rMotion.uniform(motionProfile.onLagMinMs.toDouble(), motionProfile.onLagMaxMs.toDouble()).toLong()
                     boutMissed = rMotion.chance(motionProfile.missBoutP)
                 }
-                if (!boutMissed && now() - boutStartMs >= boutLagMs) setMoving()
+                // Study J: Activity Recognition still reports the drive - no walking transition either.
+                if (!boutMissed && now() - boutStartMs >= boutLagMs && !vehicleMoving) { vehicleMotion = false; setMoving() }
                 if (motionProfile.stepAssistWhileAwake && cpuAwake) {
                     stepAccum += dtMs / 550.0
                     while (stepAccum >= 1.0) {
                         stepAccum -= 1.0
-                        if (late) lateDetectorSteps++ else { steps++; lastStepMs = now(); setMoving() }
+                        if (driveHold) heldDetector++ else if (late) lateDetectorSteps++ else { steps++; lastStepMs = now(); vehicleMotion = false; setMoving() }
                     }
                 }
             } else {
@@ -525,7 +575,8 @@ internal class SimWorld(
                 if (stopStartMs < 0) {
                     stopStartMs = now(); stopLagMs = rMotion.uniform(motionProfile.offLagMinMs.toDouble(), motionProfile.offLagMaxMs.toDouble()).toLong()
                 }
-                if (now() - stopStartMs >= stopLagMs) setStill()
+                // Study J: Activity Recognition still reports the drive.
+                if (now() - stopStartMs >= stopLagMs && !vehicleMoving) setStill()
             }
             // Step assist: no step for 5 s -> STILL (MotionMonitor.STEP_STILL_TIMEOUT_MS), when awake.
             if (lastStepMs >= 0 && cpuAwake && now() - lastStepMs >= 5_000L && !(walking && !boutMissed && now() - boutStartMs >= boutLagMs)) {
@@ -546,6 +597,7 @@ internal class SimWorld(
             if (_state.value != MotionMonitor.Motion.STILL) {
                 stillSinceMs = now(); _state.value = MotionMonitor.Motion.STILL; wake(5_000L); log('D', "motion", "-> STILL")
             }
+            vehicleMotion = false; vehicleMovingUntilMs = Long.MIN_VALUE
         }
         fun isStillFor(ms: Long) = _state.value == MotionMonitor.Motion.STILL && stillSinceMs >= 0 && now() - stillSinceMs >= ms
         fun isMovingFor(ms: Long) = _state.value == MotionMonitor.Motion.MOVING && movingSinceMs >= 0 && now() - movingSinceMs >= ms
@@ -1179,7 +1231,9 @@ internal class SimWorld(
                     // In the cabin, no body loss: the outdoor path-loss fit reads ~-69 at 0.7 m.
                     // Stays in the cabin until the next walk (a reopen by hand does not move it).
                     walking = false; facing = Facing.TOWARD; extraShadowDb = 21.0 - carryNow.db
+                    motion.driveStarted()
                     run(leg.ms)
+                    motion.driveEnded()
                 }
                 Leg.ReopenByOther -> { if (car.locked) car.actuate(false, "by hand"); car.openDoor(); run(100) }
                 Leg.ManualLock -> {

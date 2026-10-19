@@ -46,6 +46,9 @@ interface ProximityMotion {
      *  it and the detector, which hides counter steps once the detector is ahead. */
     val counterSteps: Long? get() = null
     var onMovingEdge: (() -> Unit)?
+    /** 0.3.20: MOVING only because Activity Recognition reported a drive (IN_VEHICLE) and nothing has shown walking
+     *  since - no walking transition, no step, no STILL (field 16/10 and 19/10: MOVING for minutes after the drive). */
+    val vehicleMotion: Boolean get() = false
     fun start()
     fun stop()
 }

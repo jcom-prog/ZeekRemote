@@ -33,7 +33,8 @@ data class DepartureDraft(
  * Departure ("booking travel") plans: the rules for showing them and for turning an edit back into a
  * plan the car accepts. The car keeps a fixed number of plan slots. An unused slot reads back as
  * "BookTravel" with no days and the stock placeholder time; the official app hides it, and so do we.
- * A new plan only ever goes into such a free slot, never onto a plan that is in use.
+ * A new plan only ever goes into such a free slot, or (0.3.20) one holding a plan the official app
+ * deleted, never onto a plan that is in use.
  */
 object Departures {
     /** Stock's far-future placeholder for a recurring plan's temporaryTime (the server rejects empty). */
@@ -97,17 +98,29 @@ object Departures {
             (p.temporaryTime.isBlank() || p.temporaryTime == PLACEHOLDER_TIME) &&
             (p.name.isBlank() || p.name.equals(EMPTY_SLOT_NAME, ignoreCase = true))
 
-    /** The plans the user made; the car's unused slots are left out. */
-    fun visible(plans: List<BookingTravelSetting>): List<BookingTravelSetting> = plans.filterNot(::isEmptySlot)
+    /**
+     * 0.3.20 (field 19/10): the official app deletes a plan by switching it off and hiding it (displaySts 0); the car
+     * keeps its name, days and blocks, and the official app no longer shows it. Its switch only turns a plan off, and
+     * that plan stays shown. Off and hidden is a deleted plan here too. A hidden plan that is still on stays shown:
+     * the car may still run it (field 18/10: a plan read back on and hidden), and here it can be switched or deleted.
+     */
+    fun isHidden(p: BookingTravelSetting): Boolean = p.sts == 0 && p.displaySts == 0
 
-    /** The slot for a new plan: the first unused one (slot 1 when the car reported none at all), or
-     *  null when every slot holds a plan. */
+    /** A slot a new plan may go into: an unused one, or one holding a plan the official app deleted. */
+    fun isFree(p: BookingTravelSetting): Boolean = isEmptySlot(p) || isHidden(p)
+
+    /** The plans the user has; the car's unused slots and the plans the official app deleted are left out. */
+    fun visible(plans: List<BookingTravelSetting>): List<BookingTravelSetting> = plans.filterNot(::isFree)
+
+    /** The slot for a new plan: the first unused one, else the first holding a plan the official app deleted (slot 1
+     *  when the car reported none at all), or null when every slot holds a plan. */
     fun freeSlotId(plans: List<BookingTravelSetting>): Int? =
-        if (plans.isEmpty()) 1 else plans.firstOrNull(::isEmptySlot)?.btId?.coerceAtLeast(1)
+        if (plans.isEmpty()) 1 else (plans.firstOrNull(::isEmptySlot) ?: plans.firstOrNull(::isFree))?.btId?.coerceAtLeast(1)
 
     fun template(plans: List<BookingTravelSetting>): Template {
         val off = seatOffLevel(plans)
-        val src = visible(plans).firstOrNull { it.csSetting != null } ?: return Template(seatOffLevel = off)
+        // A plan the official app deleted still holds its defaults (0.3.20).
+        val src = plans.filterNot(::isEmptySlot).firstOrNull { it.csSetting != null } ?: return Template(seatOffLevel = off)
         val seat = src.heatSettings.firstOrNull { it.location in FRONT_SEATS }
         val d = Template()
         return Template(
@@ -209,14 +222,21 @@ object Departures {
         )
     }
 
+    /** [p] switched on or off. 0.3.20: shown again, so a plan the official app hid while it was on (see [isHidden])
+     *  stays a plan in both apps once switched off here. */
+    fun switched(p: BookingTravelSetting, on: Boolean, t: Template = Template()): BookingTravelSetting =
+        sanitizedForWrite(p, t).copy(sts = if (on) 1 else 0, displaySts = 1)
+
     /** [p] changed as the editor says. What the editor does not show (fragrance, ventilation, durations, the slot)
      *  and every seat the editor left on as it was are kept exactly as the car reported them. 0.3.18: a seat that is
-     *  off is written as the car stores it (see [seatOffLevel]), also one that was already off but kept I-III. */
+     *  off is written as the car stores it (see [seatOffLevel]), also one that was already off but kept I-III.
+     *  0.3.20: shown, as in [switched]. */
     fun applied(p: BookingTravelSetting, d: DepartureDraft, t: Template = Template()): BookingTravelSetting {
         val base = sanitizedForWrite(p, t)
         val before = draftOf(p)
         return base.copy(
             name = d.name.trim().ifBlank { p.name.ifBlank { "Departure" } },
+            displaySts = 1,
             cycleTimes = week(d),
             preHeatSts = if (d.batteryMaintenance) 1 else 0,
             csSetting = base.csSetting!!.copy(sts = if (d.climate) 1 else 0, temp = temp(d.tempC)),
@@ -271,10 +291,10 @@ object Departures {
         )
     }
 
-    /** True when the read-back no longer holds a plan in slot [btId] (the slot reads back empty or is
-     *  missing): the delete landed. */
+    /** True when the read-back no longer holds a plan in slot [btId] (the slot reads back empty, off and hidden, or
+     *  is missing): the delete landed. */
     fun gone(plans: List<BookingTravelSetting>, btId: Int): Boolean =
-        plans.none { it.btId == btId && !isEmptySlot(it) }
+        plans.none { it.btId == btId && !isFree(it) }
 
     /** True when the car's read-back holds [want] (same name, state, days and time): the write landed. */
     fun landed(plans: List<BookingTravelSetting>, want: BookingTravelSetting): Boolean = plans.any {

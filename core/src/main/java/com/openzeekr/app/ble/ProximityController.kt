@@ -675,7 +675,7 @@ class ProximityController internal constructor(
         departureAnchorJob?.cancel(); departureAnchor = null
         linkDepartureJob?.cancel(); linkDepartureJob = null
         farNoMotionCheck?.cancel(); farNoMotionCheck = null; farNoMotionCheckAtMs = 0L
-        farNoMotionAttempts = 0; departureAlarmHolds = 0
+        farNoMotionAttempts = 0; departureAlarmHolds = 0; departureAlarmDeepHolds = 0; driveMotionLogged = false
         departureProofAtMs = 0L
         gnssWindowsThisEpoch = 0; gnssBudgetLogged = false
         bleRoute = BleDepartureRoute.forLockThreshold(config().sensitivityLockRssi)
@@ -1243,6 +1243,9 @@ class ProximityController internal constructor(
     private var farNoMotionCheckAtMs = 0L
     private var farNoMotionAttempts = 0
     private var departureAlarmHolds = 0
+    // 0.3.20: the departure alarm waited for a step-free very-deep proof under way (once per unlock).
+    private var departureAlarmDeepHolds = 0
+    private var driveMotionLogged = false
 
     /**
      * Walked away without any motion or step signal (S24+ screen off): once the link shows a
@@ -1400,12 +1403,12 @@ class ProximityController internal constructor(
      * the phone has not been back at the car and a fresh reading is weak (or the link is gone),
      * sound the alarm. Any route that locks, a return to the car, or a new epoch cancels this.
      */
-    private fun armDepartureAlarm() {
+    private fun armDepartureAlarm(delayMs: Long = LockAlertPolicy.DEPARTURE_ALARM_DELAY_MS) {
         if (departureAlarmJob?.isActive == true) return
         departureAlarmJob = scope.launch {
             // Plan H8: a timer stops while the CPU sleeps; hold it for this bounded wait.
-            val wl = acquireSafetyWakelock(LockAlertPolicy.DEPARTURE_ALARM_DELAY_MS + 15_000L)
-            try { delay(LockAlertPolicy.DEPARTURE_ALARM_DELAY_MS) } finally { releaseSafetyWakelock(wl) }
+            val wl = acquireSafetyWakelock(delayMs + 15_000L)
+            try { delay(delayMs) } finally { releaseSafetyWakelock(wl) }
             // A Lock in progress owns the outcome and raises its own alert if it fails.
             while (lockJob?.isActive == true) delay(1_000L)
             // Best of a few fresh readings: one body-shadowed reading at the car must not sound it.
@@ -1415,6 +1418,9 @@ class ProximityController internal constructor(
                 if (ble.state.value == DkBleManager.State.SESSION_READY)
                     ble.pollRemoteRssi()?.let { r -> noteFreshReading(r); fresh = maxOf(fresh ?: r, r) }
             }
+            // 0.3.20 (field 16/10): a Lock that began during these reads owns the outcome too - the alarm sounded 0.6 s
+            // after a very-deep Lock had started.
+            while (lockJob?.isActive == true) delay(1_000L)
             if (!_state.value.running || !LockAlertPolicy.departureAlarmDue(departureSuspected(), armedUnlocked,
                     fresh, config().sensitivityLockRssi)) return@launch
             // Moving around the car with the body between phone and car reads like a departure
@@ -1432,6 +1438,19 @@ class ProximityController internal constructor(
                 departureAlarmJob = null
                 armDepartureAlarm()
                 return@launch
+            }
+            // 0.3.20 (study J, field 19/10): a step-free very-deep proof under way owns the next seconds - the alarm
+            // sounded 0.8 s before such a Lock. Once per unlock, bounded by what is left of that proof.
+            if (departureAlarmDeepHolds < 1) {
+                val runMs = bleRoute?.deepProofRunningMs(clock.elapsedMs())
+                if (runMs != null && runMs >= DEEP_PROOF_HOLD_MIN_RUN_MS) {
+                    departureAlarmDeepHolds++
+                    val waitMs = (BleDepartureEvidence.VERY_DEEP_MS - runMs).coerceAtLeast(0L) + DEEP_PROOF_HOLD_SLACK_MS
+                    Logx.d("prox", "departure alarm held: a very-deep proof is under way (${runMs / 1000}s); re-checking in ${waitMs / 1000}s")
+                    departureAlarmJob = null
+                    armDepartureAlarm(waitMs)
+                    return@launch
+                }
             }
             // No key link to report the car's state: ask the cloud first (0.3.2; simulator F40: the
             // car was locked by hand while Bluetooth was off and the alarm sounded anyway).
@@ -1670,7 +1689,13 @@ class ProximityController internal constructor(
             (stepsAwayFromCar()?.let { it < STOP_RULE_MAX_STEPS_FROM_CAR } ?: true)
         val moving = (motion.state.value == MotionMonitor.Motion.MOVING || departureSteps.walking(now)) &&
             !stoppedNearCar
-        val authorized = route.observe(now, rawRssi, smoothedRssi, moving, stepsSinceUnlock())
+        // 0.3.20: MOVING that only comes from the drive (see BleDepartureEvidence.DRIVE_DESCENT_MS).
+        val vehicleOnly = motion.vehicleMotion && !departureSteps.walking(now)
+        val authorized = route.observe(now, rawRssi, smoothedRssi, moving, stepsSinceUnlock(), vehicleOnly)
+        if (route.driveMotionHeld && !driveMotionLogged) {
+            driveMotionLogged = true
+            Logx.d("prox", "very-deep proof held: MOVING from the drive only (no step or walk since)")
+        }
         // 0.3.12: once the walk-away proof has really begun - its deep-far window runs, [WALK_AWAY_ALARM_MIN_STEPS]
         // steps away from the car, the signal clearly away ([WALK_AWAY_ALARM_MARGIN_DB] beyond the lock level,
         // so never a weak pocket at the car) - the departure alarm clock runs: no Lock and no return within
@@ -2726,6 +2751,9 @@ class ProximityController internal constructor(
         private const val CLOUD_SNAPSHOT_RECHECK_MS = 400L
         private const val SHADOW_RECHECK_MS = 5_000L
         private const val DEPARTURE_ALARM_READS = 3
+        /** 0.3.20: a very-deep proof running this long holds the departure alarm until it can complete, plus this slack. */
+        private const val DEEP_PROOF_HOLD_MIN_RUN_MS = 3_000L
+        private const val DEEP_PROOF_HOLD_SLACK_MS = 3_000L
         private const val SHADOW_REARM_MS = 15_000L
         private const val STRONG_NEAR_DIAGNOSTIC_RSSI = -78
         private const val CLOUD_LOCK_MAX_REQUESTS = 2

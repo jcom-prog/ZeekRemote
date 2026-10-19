@@ -16,37 +16,46 @@ import org.junit.Test
  *  - the car applies an "edit" within seconds (every edit from 0.3.15 on confirmed in 1-2 read-backs, also with the car
  *    not woken first); it ignored every "start" and "stop" (16/10 and 18/10: still pending after a minute);
  *  - ZeekRemote's list is the car's list (getTravelPlan reads back what the car holds);
- *  - the official app shows its own changes over the car's list: after its delete the plans were gone there while the
- *    car still held them, and a plan made there showed there but not in the car's list (both 18/10);
+ *  - the official app shows its own changes over the car's list: a plan made there showed there but not in the car's
+ *    list (18/10);
  *  - the official app shows a seat by its level alone: an off seat stored with III read "III" there (18/10).
+ * 0.3.20 (field 19/10): the official app's delete does reach the car. The car switches the plan off and hides it
+ * (displaySts 0) and keeps its name, days and blocks; the official app shows only plans that are not hidden, and its
+ * switch keeps a plan shown. What 0.3.18 read as "still on the car" (18/10) was such a hidden plan. A "stop" the car took
+ * minutes later (18/10, 0.3.15) hid a plan with the state it carried: on and hidden.
  */
 class ScheduleSimTest {
 
     private class Car(val slots: MutableList<BookingTravelSetting>) {
-        /** Changes the cloud accepted but the car did not apply ("start"/"stop"): the official app shows them anyway. */
-        val intent = mutableMapOf<Int, BookingTravelSetting?>()
+        /** Changes the cloud accepted but the car did not apply yet ("start"/"stop"): the official app shows them anyway. */
+        val intent = mutableMapOf<Int, Pair<String, BookingTravelSetting>>()
 
         fun send(command: String, s: BookingTravelSetting) {
             when (command) {
                 "edit" -> { slots[slots.indexOfFirst { it.btId == s.btId }] = s; intent.remove(s.btId) }
-                "start" -> intent[s.btId] = s
-                "stop" -> intent[s.btId] = null
+                "start", "stop" -> intent[s.btId] = command to s
             }
         }
 
-        /** The car takes what waited (it never did within a minute in the field; it may when it wakes). */
+        /** The car takes what waited (it never did within a minute in the field; it may when it wakes): a new plan, or
+         *  a delete as the car does it - the plan hidden, with the state the request carried. */
         fun takesWhatWaited() {
-            for ((id, s) in intent.toMap()) { val i = slots.indexOfFirst { it.btId == id }; if (s != null && i >= 0) slots[i] = s }
+            for ((id, w) in intent.toMap()) {
+                val i = slots.indexOfFirst { it.btId == id }
+                if (i < 0) continue
+                slots[i] = if (w.first == "start") w.second else slots[i].copy(sts = w.second.sts, displaySts = 0)
+            }
             intent.clear()
         }
 
         /** What ZeekRemote reads and shows. */
         fun zeekRemote(): List<BookingTravelSetting> = Departures.visible(slots)
 
-        /** What the official app shows. */
+        /** What the official app shows: the plans the car shows, over which its own changes that wait. */
         fun officialApp(): List<BookingTravelSetting> = slots.mapNotNull { s ->
-            if (intent.containsKey(s.btId)) intent[s.btId] else s
-        }.filterNot(Departures::isEmptySlot)
+            val w = intent[s.btId]
+            when (w?.first) { null -> s; "start" -> w.second; else -> null }
+        }.filter { it.displaySts == 1 }
 
         /** A seat as the official app shows it: I-III by level, else off. */
         fun officialSeats(p: BookingTravelSetting): Map<Int, Int> =
@@ -110,16 +119,59 @@ class ScheduleSimTest {
         assertEquals(setOf(off), car.slots[1].heatSettings.map { it.level }.toSet())
     }
 
-    @Test fun aDeleteInTheOfficialAppDoesNotReachTheCar() {
-        // 18/10: gone in the official app (also after a restart), still on the car and so still here.
+    @Test fun aDeleteInTheOfficialAppIsGoneHereToo() {
+        // 19/10: made in the official app, then deleted there. The car held it off and hidden with its name, days and
+        // blocks, and 0.3.19 showed it here as switched off.
         val car = car()
-        car.send("edit", Departures.fromSlot(car.slots[1], test, Departures.template(car.slots)))
-        car.send("stop", car.slots[1])
-        assertTrue(car.officialApp().none { it.name == "Test" })
-        assertTrue(car.zeekRemote().any { it.name == "Test" })
-        // ZeekRemote's delete (an edit, 0.3.16) reaches the car.
-        car.send("edit", Departures.emptied(car.slots[1], t = Departures.template(car.slots)))
-        assertFalse(car.zeekRemote().any { it.name == "Test" })
+        val made = Departures.fromSlot(car.slots[1], test.copy(name = "Other app"), Departures.template(car.slots))
+        car.send("start", made)
+        car.takesWhatWaited()
+        assertTrue(car.zeekRemote().any { it.name == "Other app" } && car.officialApp().any { it.name == "Other app" })
+        car.send("stop", made.copy(sts = 0))
+        assertTrue("gone there at once", car.officialApp().none { it.name == "Other app" })
+        car.takesWhatWaited()
+        val held = car.slots.single { it.btId == made.btId }
+        assertEquals("the car keeps it, off and hidden", Triple("Other app", 0, 0), Triple(held.name, held.sts, held.displaySts))
+        assertTrue("gone here too", car.zeekRemote().none { it.name == "Other app" })
+        assertEquals("its place is free again", 4, car.slots.count(Departures::isFree))
+        // Switched off in the official app, a plan stays in both lists (19/10).
+        car.send("edit", ownPlan.copy(sts = 0))
+        assertTrue(car.zeekRemote().any { it.name == "Plan A" } && car.officialApp().any { it.name == "Plan A" })
+    }
+
+    @Test fun aNewPlanGoesIntoTheSlotOfADeletedOneOnlyWhenNoUnusedSlotIsLeft() {
+        // A plan the official app made and deleted (its seats stay on in the car, 19/10), next to unused slots: a new
+        // plan takes an unused slot. With every other slot in use it takes the deleted plan's slot, with nothing of it.
+        val deleted = ownPlan.copy(btId = 2, name = "Plan B", sts = 0, displaySts = 0,
+            heatSettings = seats(1 to 3, 2 to 3, 3 to 3, 5 to 3, on = setOf(1, 2, 3, 5)))
+        val withFree = Car(mutableListOf(ownPlan, deleted, freeSlot(3), freeSlot(4), freeSlot(5)))
+        assertEquals(3, Departures.freeSlotId(withFree.slots))
+        val full = Car(mutableListOf(ownPlan, deleted, ownPlan.copy(btId = 3, name = "Plan C"), ownPlan.copy(btId = 4, name = "Plan D"),
+            ownPlan.copy(btId = 5, name = "Plan E")))
+        assertEquals(2, Departures.freeSlotId(full.slots))
+        val t = Departures.template(full.slots)
+        full.send("edit", Departures.fromSlot(full.slots[1], test, t))
+        val here = full.zeekRemote().single { it.btId == 2 }
+        assertEquals(here, full.officialApp().single { it.btId == 2 })
+        assertEquals("name, days, time and settings all from the editor", test, Departures.draftOf(here))
+        assertEquals("rear right off in the official app too", test.seats, full.officialSeats(here))
+    }
+
+    @Test fun aPlanHiddenWhileOnStaysShownUntilSwitchedOffOrDeletedHere() {
+        // 18/10: a delete the car took minutes later hid a plan that was on. The car may still run it: shown here, not in
+        // the official app. Switched off here it is an ordinary plan in both apps again; deleted here it is gone.
+        val car = car()
+        car.send("stop", ownPlan)
+        car.takesWhatWaited()
+        assertEquals(1 to 0, car.slots[0].sts to car.slots[0].displaySts)
+        assertTrue(car.zeekRemote().any { it.name == "Plan A" })
+        assertTrue(car.officialApp().none { it.name == "Plan A" })
+        val t = Departures.template(car.slots)
+        car.send("edit", Departures.switched(car.slots[0], false, t))
+        assertEquals(0, car.zeekRemote().single { it.name == "Plan A" }.sts)
+        assertEquals(0, car.officialApp().single { it.name == "Plan A" }.sts)
+        car.send("edit", Departures.emptied(car.slots[0], t = t))
+        assertFalse(car.zeekRemote().any { it.name == "Plan A" } || car.officialApp().any { it.name == "Plan A" })
     }
 
     @Test fun aPlanMadeInTheOfficialAppShowsHereOnceTheCarHasIt() {

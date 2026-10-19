@@ -72,6 +72,7 @@ on:
       - zeekremote-0.3.17-seat-heat
       - zeekremote-0.3.18-schedule-sync
       - zeekremote-0.3.19-near-return
+      - zeekremote-0.3.20-home-by-car
 
 permissions:
   contents: read
@@ -79,7 +80,9 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # 0.3.20: the gate has 16 worlds and the home-by-car families now (0.3.19 used 42 of 45 minutes; locally the
+    # gate went from 26 to 43 minutes).
+    timeout-minutes: 120
 
     steps:
       - name: Check out source
@@ -297,8 +300,8 @@ jobs:
           grep -Fq 'the cloud state is unavailable -> alarm (lock not verifiable)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'private fun closeAlarmEpisode(reason: String, linkLostAgain: Boolean = false)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'val WORST_CASES = listOf("steps-silent", "steps-dead", "gps-poor", "ar-poor", "signal-flat", "steps-late", "strong-spot", "ar-quick-still",' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
-          grep -Fxq '        "hand-wobble", "field-like", "strong-spot-walk", "steps-stall", "link-holds")' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
-          for s in steps-silent steps-dead gps-poor ar-poor signal-flat steps-late strong-spot ar-quick-still hand-wobble field-like strong-spot-walk steps-stall link-holds; do grep -Fq "\"$s\": {" core/src/test/resources/sim-baseline.json; done
+          grep -Fxq '        "hand-wobble", "field-like", "strong-spot-walk", "steps-stall", "link-holds", "steps-after-drive")' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
+          for s in steps-silent steps-dead gps-poor ar-poor signal-flat steps-late strong-spot ar-quick-still hand-wobble field-like strong-spot-walk steps-stall link-holds steps-after-drive; do grep -Fq "\"$s\": {" core/src/test/resources/sim-baseline.json; done
           # 0.3.10: no alarm stops early while the car is open and the user away. A withheld Lock no longer
           # silences it, weak evidence of a return only when it looks like one, and the gate counts the gap.
           if awk '/fun resolvesAlarm\(/{f=1} f && /PROXIMITY_RECOVERED_BEFORE_LOCK/{print; exit} f && /^    }/{exit}' core/src/main/java/com/openzeekr/app/ble/LockAlertPolicy.kt | grep -q .; then echo 'a withheld Lock silences the alarm again'; exit 1; fi
@@ -403,6 +406,20 @@ jobs:
           test -f core/src/test/java/com/openzeekr/app/ble/sim/SimReturnToCarTest.kt
           grep -Fq 'val dropRssi: Double = env("SIM_DROP_RSSI", -104.0),' core/src/test/java/com/openzeekr/app/ble/sim/SimWorld.kt
           for f in 'F47 short walk into the house' 'F48 loading the boot 3x, long stands' 'F49 around the car, long stands'; do grep -Fq "Scenario(\"$f\"" core/src/test/java/com/openzeekr/app/ble/sim/SimScenarios.kt; done
+          # 0.3.20 (field 19/10): a plan the official app deleted (off and hidden) is gone here too and its slot is free;
+          # a switch or an edit here shows the plan in both apps.
+          grep -Fq 'fun isHidden(p: BookingTravelSetting): Boolean = p.sts == 0 && p.displaySts == 0' core/src/main/java/com/openzeekr/app/remote/Departures.kt
+          grep -Fq 'val updated = Departures.switched(d, on, template)' app/src/main/java/com/openzeekr/app/ui/ScheduleScreen.kt
+          grep -Fq '(?:used|empty|hidden)' core/src/main/java/com/openzeekr/app/util/ProximityDiagnosticJournal.kt
+          # 0.3.20 (study J, field 16/10 and 19/10): home by car - MOVING from the drive alone is no walk for the very-deep
+          # proof, and the departure alarm waits for a Lock under way and for a very-deep proof about to complete.
+          grep -Fq 'const val DRIVE_DESCENT_MS = 4_000L' core/src/main/java/com/openzeekr/app/ble/BleDepartureEvidence.kt
+          grep -Fq 'val vehicleOnly = motion.vehicleMotion && !departureSteps.walking(now)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'private const val DEEP_PROOF_HOLD_MIN_RUN_MS = 3_000L' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'DetectedActivity.IN_VEHICLE -> { _inVehicle.value = true; vehicleMotion = true; setMoving() }' core/src/main/java/com/openzeekr/app/ble/MotionMonitor.kt
+          test -f core/src/test/java/com/openzeekr/app/ble/sim/SimHomeByCarTest.kt
+          for f in 'F50 drive home, short walk into the house' 'F51 drive home, unload the boot, into the house' 'F52 drive home, a while inside the door, further in'; do grep -Fq "Scenario(\"$f\"" core/src/test/java/com/openzeekr/app/ble/sim/SimScenarios.kt; done
+          grep -Fq '"ALARM_THEN_LOCK"' core/src/test/java/com/openzeekr/app/ble/sim/SimScenarios.kt
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -424,7 +441,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='143' versionName='0.3.19-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='144' versionName='0.3.20-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

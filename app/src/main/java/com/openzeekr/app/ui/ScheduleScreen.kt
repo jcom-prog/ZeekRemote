@@ -240,7 +240,7 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
                 color = Brand.muted, fontSize = 12.sp,
             )
             val shown = Departures.visible(departures)
-            val freeSlots = writable().count(Departures::isEmptySlot)
+            val freeSlots = writable().count(Departures::isFree)
             if (depLoading) {
                 LoadingRow()
             } else if (shown.isEmpty()) {
@@ -255,7 +255,7 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
                         onToggle = { on ->
                             // The whole plan with the new state: sending it twice is harmless. The list shows
                             // the car's read-back after the write, so an unconfirmed switch shows as it was.
-                            val updated = Departures.sanitizedForWrite(d.copy(sts = if (on) 1 else 0), template)
+                            val updated = Departures.switched(d, on, template)
                             write(
                                 done = if (on) "Departure switched on ✓" else "Departure switched off ✓",
                                 notConfirmed = NOT_CONFIRMED_CHANGE, failed = "Update failed",
@@ -315,7 +315,7 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
             initial = original?.let(Departures::draftOf) ?: DepartureDraft(),
             // The seats the plan (or the free slot a new one goes into) lists; nothing is added to it.
             seats = Departures.seatsOf(original ?: Departures.freeSlotId(writable())?.let { slot ->
-                writable().firstOrNull { it.btId == slot && Departures.isEmptySlot(it) } }),
+                writable().firstOrNull { it.btId == slot && Departures.isFree(it) } }),
             minutesBefore = template.climateMinutes,
             isNew = original == null,
             onDismiss = { creating = false; editing = null },
@@ -331,7 +331,7 @@ fun ScheduleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
                         else -> {
                             // 0.3.14: written over the free slot as the car reported it (see Departures.fromSlot);
                             // built from scratch only when the car reported no slots at all.
-                            val plan = writable().firstOrNull { it.btId == slot && Departures.isEmptySlot(it) }
+                            val plan = writable().firstOrNull { it.btId == slot && Departures.isFree(it) }
                                 ?.let { Departures.fromSlot(it, draft, template) } ?: Departures.newPlan(draft, slot, template)
                             write(done = "Departure stored on the car ✓", notConfirmed = NOT_CONFIRMED_CREATE, failed = "Create failed") {
                                 deps.schedule.createDeparture(plan)
@@ -389,6 +389,8 @@ private fun DepartureRow(
             )
             if (extras.isNotEmpty()) Text(extras.joinToString(" · "), color = Brand.faint, fontSize = 11.sp)
             if (readOnly) Text("Not fully readable here: change it in the official app.", color = Brand.faint, fontSize = 11.sp)
+            // 0.3.20: deleted in the official app while it was on - the car may still run it (see Departures.isHidden).
+            if (setting.displaySts == 0) Text("Hidden in the official app, still on in the car.", color = Brand.faint, fontSize = 11.sp)
         }
         if (!readOnly) {
             Switch(checked = setting.sts == 1, onCheckedChange = onToggle, enabled = enabled, colors = brandSwitchColors(Brand.good))

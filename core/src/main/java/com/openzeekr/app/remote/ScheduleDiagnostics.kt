@@ -27,12 +27,14 @@ internal object ScheduleDiagnostics {
     fun refused(code: String?): String = "refused code=" + (code.orEmpty().filter { it.isLetterOrDigit() || it in "_.-" }
         .take(16).ifEmpty { "none" })
 
-    /** Per slot: number, on/off, used/empty and how many days are active, e.g. "1:off/used/4,2:off/empty/0". */
+    /** Per slot: number, on/off, used/empty (0.3.20: or hidden, a plan the official app deleted) and how many days
+     *  are active, e.g. "1:off/used/4,2:off/empty/0,3:off/hidden/1". */
     fun slots(plans: List<BookingTravelSetting>?): String {
         if (plans.isNullOrEmpty()) return "none"
         return plans.take(10).joinToString(",") { p ->
             val days = p.cycleTimes.count { it.sts == 1 }.coerceIn(0, 7)
-            "${p.btId.coerceIn(0, 99)}:${if (p.sts == 1) "on" else "off"}/${if (Departures.isEmptySlot(p)) "empty" else "used"}/$days"
+            val use = when { Departures.isEmptySlot(p) -> "empty"; Departures.isHidden(p) -> "hidden"; else -> "used" }
+            "${p.btId.coerceIn(0, 99)}:${if (p.sts == 1) "on" else "off"}/$use/$days"
         }
     }
 
@@ -43,7 +45,8 @@ internal object ScheduleDiagnostics {
      */
     fun found(plans: List<BookingTravelSetting>?, want: BookingTravelSetting?): String {
         if (plans == null || want == null) return "-"
-        val p = plans.firstOrNull { it.name == want.name && !Departures.isEmptySlot(it) } ?: return "none"
+        // 0.3.20: a plan the official app deleted may still carry the name (see Departures.isHidden).
+        val p = plans.firstOrNull { it.name == want.name && !Departures.isFree(it) } ?: return "none"
         fun same(b: Boolean) = if (b) "same" else "other"
         val days = p.cycleTimes.filter { it.sts == 1 }.map { it.day }.toSet() == want.cycleTimes.filter { it.sts == 1 }.map { it.day }.toSet()
         val time = p.cycleTimes.firstOrNull { it.sts == 1 }?.time == want.cycleTimes.firstOrNull { it.sts == 1 }?.time

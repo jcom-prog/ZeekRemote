@@ -224,6 +224,24 @@ internal object SimScenarios {
         Scenario("F49 around the car, long stands", "walk around the car within 4 m, 30 s stands", 30.0,
             approachAndOpen() + listOf(Mark("expect-stay-unlocked"), Walk(3.5, 0.8), Stand(30_000, Facing.AWAY, -6.0),
                 Walk(1.0, 0.8), Walk(4.0, 0.8), Stand(30_000, Facing.SIDE, -10.0), Walk(1.5, 0.8), Stand(10_000))),
+        // Study J (field 16/10 and 19/10): home by car. After the drive the phone held every step of the short walk into
+        // the house and Activity Recognition still said MOVING; the car locked only with the user inside, after the alarm.
+        Scenario("F50 drive home, short walk into the house", "drive; the car unlocks on parking; 10 s at the car; 15 m into the house", 2.0,
+            listOf(Mark("-"), PhoneInCar(60_000), CarUnlocksItself, OpenDoor, Stand(3_000), Shuffle(10_000), Mark("expect-lock"),
+                Walk(15.0, 1.4), Stand(150_000, Facing.AWAY, -8.0, indoor = true))),
+        // Study J: home by car, the boot unloaded first - two 30 s stands behind the car with the body between phone and
+        // car while Activity Recognition still says MOVING. The car stays open until the user walks in.
+        Scenario("F51 drive home, unload the boot, into the house", "drive; parked; 2x 30 s at the boot, body between; 15 m into the house", 2.0,
+            listOf(Mark("-"), PhoneInCar(60_000), CarUnlocksItself, OpenDoor, Stand(3_000), Mark("expect-stay-unlocked"),
+                Walk(3.0, 0.8), Stand(30_000, Facing.AWAY, -12.0), Walk(1.0, 0.8), Stand(5_000),
+                Walk(3.0, 0.8), Stand(30_000, Facing.AWAY, -12.0), Walk(1.0, 0.8), Stand(5_000),
+                Mark("expect-lock"), Walk(15.0, 1.4), Stand(150_000, Facing.AWAY, -8.0, indoor = true))),
+        // Study J (field 19/10): home by car, a while just inside the door (the signal hovers above the very-deep level),
+        // then further in. The alarm sounded a second before the very-deep Lock.
+        Scenario("F52 drive home, a while inside the door, further in", "drive; parked; 10 s at the car; 15 m to the door; 15 s inside it; 5 m further in", 2.0,
+            listOf(Mark("-"), PhoneInCar(60_000), CarUnlocksItself, OpenDoor, Stand(3_000), Shuffle(10_000), Mark("expect-lock"),
+                Walk(15.0, 1.4), Stand(15_000, Facing.AWAY, -2.0, indoor = true), Walk(20.0, 1.0),
+                Stand(150_000, Facing.AWAY, -8.0, indoor = true))),
     )
 
     /** Every field incident and the families that reproduce it (incident history, 14/10). */
@@ -259,6 +277,7 @@ internal object SimScenarios {
         FieldCase("#29 13/10 0.2.15", "status-133 storms at the edge of range", listOf("F07", "F17"), "stress: SIM_PRESENCE_EDGE=1"),
         FieldCase("#30 14/10 0.2.16", "no auto-Lock (step detector silent)", listOf("F29", "F22", "F04")),
         FieldCase("#31 18/10 0.3.13", "quick walk (rain): steps late after a short stop at the car; open just in time", listOf("F46", "F15", "F16")),
+        FieldCase("#32 16/10+19/10 0.3.18", "home by car: no steps after the drive; alarm just before the very-deep Lock", listOf("F52", "F50", "F42")),
     )
 
     /**
@@ -342,6 +361,9 @@ internal object SimOracle {
                 // The user stayed at the car for the next 30 s: alarm for nothing.
                 val near = samples.filter { it.atMs in e.atMs..(e.atMs + 30_000) }.all { it.distanceM <= 4.0 }
                 if (near && e.distanceM <= 4.0) out += f("ALARM_WHILE_AT_CAR", e)
+                // Study J (field 16/10 and 19/10): the alarm sounded and the app locked the car moments later.
+                ev.firstOrNull { it.kind == "CAR_LOCKED" && (it.detail == "key" || it.detail == "cloud") && it.atMs in e.atMs..(e.atMs + 20_000) }
+                    ?.let { out += f("ALARM_THEN_LOCK", e, "alarm, then the app locked the car %.1f s later".format((it.atMs - e.atMs) / 1000.0)) }
             }
         }
         // 0.3.10: a sounding alarm silenced while the car is still open (its own lock events, not the 1 s

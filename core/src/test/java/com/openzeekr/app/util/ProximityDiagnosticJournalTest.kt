@@ -207,6 +207,14 @@ class ProximityDiagnosticJournalTest {
         assertFalse(file.readText().contains("PRIVATE_DEVICE_ADDRESS"))
     }
 
+    @Test fun theAlarmWaitAndTheDriveMotionAreJournaledAsCategories() {
+        // 0.3.20 (study J).
+        assertEquals("LOCK_ALARM_HELD very_deep",
+            ProximityDiagnosticJournal.event("prox", "departure alarm held: a very-deep proof is under way (9s); re-checking in 6s"))
+        assertEquals("BLE_DEPARTURE_HELD drive_motion",
+            ProximityDiagnosticJournal.event("prox", "very-deep proof held: MOVING from the drive only (no step or walk since)"))
+    }
+
     @Test fun cloudLockFailureAndReopenAreJournaledAsCategoriesOnly() {
         assertEquals("CLOUD_LOCK_FAILED IDLE",
             ProximityDiagnosticJournal.event("ctl", "LOCK: cloud request failed (key link IDLE)"))

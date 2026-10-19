@@ -68,7 +68,7 @@ internal object SimRunner {
      *  Quick walk 18/10 (user decision): late steps up to 18 s, already after 5 s of standing (steps-late).
      *  0.3.19 (user decision 18/10): steps that stall in the middle of a walk, and a link that holds deeper indoors. */
     val WORST_CASES = listOf("steps-silent", "steps-dead", "gps-poor", "ar-poor", "signal-flat", "steps-late", "strong-spot", "ar-quick-still",
-        "hand-wobble", "field-like", "strong-spot-walk", "steps-stall", "link-holds")
+        "hand-wobble", "field-like", "strong-spot-walk", "steps-stall", "link-holds", "steps-after-drive")
 
     /** The world of a run. A stress world depends on the seed only, so two app versions meet the same world. */
     fun physicsFor(suite: String, seed: Long): SimPhysics = when (suite) {
@@ -93,6 +93,9 @@ internal object SimRunner {
         "steps-stall" -> SimPhysics(name = suite, midStallMinMs = 10_000L, midStallMaxMs = 18_000L)
         // Field 18/10: the link held for minutes indoors at about -100..-105.
         "link-holds" -> SimPhysics(name = suite, dropRssi = -107.0)
+        // Study J (field 16/10-19/10): after a drive the steps came only after 12-25 s of walking, at once, or not at all,
+        // and Activity Recognition said MOVING for minutes.
+        "steps-after-drive" -> SimPhysics(name = suite, afterDriveReleaseMinMs = 12_000L, afterDriveReleaseMaxMs = 25_000L, dropRssi = -107.0)
         // The field of 16/10 together: late steps after standing, quick STILL (profileFor), poor GPS as in
         // "gps-poor", and the hand wobble.
         "field-like" -> SimPhysics(name = suite, lateStepsMinMs = 8_000L, lateStepsMaxMs = 14_000L,

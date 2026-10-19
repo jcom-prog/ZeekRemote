@@ -25,6 +25,18 @@ class ScheduleDiagnosticsTest {
         assertEquals("SCHEDULE_WRITE " + line.removePrefix("schedule write "), ProximityDiagnosticJournal.event("sched", line))
     }
 
+    @Test fun aPlanTheOfficialAppDeletedShowsAsHidden() {
+        // 0.3.20 (field 19/10): off and hidden, its days kept.
+        val deleted = used.copy(btId = 3, sts = 0, displaySts = 0)
+        val readback = ScheduleDiagnostics.slots(listOf(used, empty, deleted))
+        assertEquals("1:on/used/2,2:off/empty/0,3:off/hidden/2", readback)
+        val line = "schedule write kind=create slot=2 sent=accepted session=yes result=confirmed polls=2 readback=$readback found=none"
+        assertEquals("SCHEDULE_WRITE " + line.removePrefix("schedule write "), ProximityDiagnosticJournal.event("sched", line))
+        // A plan sent with the name a deleted one still carries is found in its own slot.
+        val sent = used.copy(btId = 4)
+        assertEquals("slot4 name=same days=same time=same on=same temp=same seats=same", ScheduleDiagnostics.found(listOf(deleted, sent), sent))
+    }
+
     @Test fun theJournalRefusesAnythingThatCouldCarryAPrivateValue() {
         val base = "schedule write kind=create slot=2 sent=accepted session=no result=pending polls=20 readback=none found=none"
         assertEquals("SCHEDULE_WRITE kind=create slot=2 sent=accepted session=no result=pending polls=20 readback=none found=none",

@@ -59,9 +59,10 @@ object TravelPlanList {
             temporaryTime = "", cycleTimes = emptyList(), preHeatSts = 0)
     }
 
-    // The fields the plan needs, with the value an absent or null one is read as.
+    // The fields the plan needs, with the value an absent or null one is read as. 0.3.20: a plan whose display state is
+    // unknown is read as shown - off and hidden is a plan the official app deleted (Departures.isHidden).
     private val SEAT = mapOf("duration" to 0, "level" to 0, "location" to 0, "sts" to 0)
-    private val PLAN = mapOf("name" to "", "sts" to 0, "displaySts" to 0, "bookingType" to Departures.BOOKING_RECURRING,
+    private val PLAN = mapOf("name" to "", "sts" to 0, "displaySts" to 1, "bookingType" to Departures.BOOKING_RECURRING,
         "temporaryTime" to "", "cycleTimes" to emptyList<Any>(), "preHeatSts" to 0)
     private val NESTED = mapOf(
         "cycleTimes" to mapOf("day" to 0, "sts" to 0, "time" to ""),

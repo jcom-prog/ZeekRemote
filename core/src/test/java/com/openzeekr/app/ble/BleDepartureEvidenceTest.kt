@@ -20,14 +20,14 @@ class BleDepartureEvidenceTest {
         /** One fresh sample every [stepMs]; [stepsPerSecond] while moving. */
         fun run(durationMs: Long, raw: (Long) -> Int, smoothed: (Long) -> Int = raw,
                 moving: Boolean = true, stepsPerSecond: Double = 1.8, stepMs: Long = 200L,
-                stepsAvailable: Boolean = true) {
+                stepsAvailable: Boolean = true, vehicleOnly: Boolean = false) {
             val end = t + durationMs
             var stepAcc = 0.0
             while (t < end) {
                 t += stepMs
                 if (moving) { stepAcc += stepsPerSecond * stepMs / 1000.0
                     while (stepAcc >= 1.0) { steps++; stepAcc -= 1.0 } }
-                val d = e.observe(t, raw(t), smoothed(t), moving, if (stepsAvailable) steps else null)
+                val d = e.observe(t, raw(t), smoothed(t), moving, if (stepsAvailable) steps else null, vehicleOnly)
                 if (d == BleDepartureEvidence.Decision.CONFIRMED && firstConfirmAt == null)
                     firstConfirmAt = t
             }
@@ -351,6 +351,45 @@ class BleDepartureEvidenceTest {
         f.run(10 * 60_000, { at -> (-70 - (at - leaveAt) / 1000.0).toInt().coerceAtLeast(-95) },
             moving = false, stepsAvailable = false)
         assertNull(f.firstConfirmAt)
+    }
+
+    // ---- 0.3.20 (study J): MOVING that only comes from a drive ----
+
+    @Test fun theDrivesMotionAloneNeverConfirmsADropAtTheBoot() {
+        // After a drive Activity Recognition says MOVING and no step comes; at the boot the body drops the signal at once.
+        val f = arrivedFeed()
+        f.run(60_000, { -98 }, stepsAvailable = false, vehicleOnly = true)
+        assertNull(f.firstConfirmAt)
+        assertTrue("held back, and said so", f.e.driveMotionHeld)
+    }
+
+    @Test fun theDrivesMotionConfirmsAfterAGradualFall() {
+        // Walking into the house: about 2 dB/s from -70, below the lock level after 6 s, very deep 6.5 s later.
+        val f = arrivedFeed()
+        val leaveAt = f.t
+        f.run(40_000, { at -> (-70 - (at - leaveAt) * 2 / 1000.0).toInt().coerceAtLeast(-100) }, stepsAvailable = false, vehicleOnly = true)
+        assertTrue("confirmed", f.firstConfirmAt != null)
+        assertEquals("very_deep", f.e.confirmKind)
+    }
+
+    @Test fun aLaterDipGetsNoCreditForTheWholeSpellBelowTheLockLevel() {
+        // Simulator F51: below the lock level already on the way to the boot, then very deep, one reading at -93 and
+        // very deep again - 12 s after the spell began, which used to read as a gradual fall.
+        val f = arrivedFeed()
+        f.run(2_000, { -86 }, stepsAvailable = false, vehicleOnly = true)
+        f.run(8_000, { -98 }, stepsAvailable = false, vehicleOnly = true)
+        f.run(200, { -93 }, stepsAvailable = false, vehicleOnly = true)
+        f.run(30_000, { -98 }, stepsAvailable = false, vehicleOnly = true)
+        assertNull(f.firstConfirmAt)
+    }
+
+    @Test fun aVeryDeepProofSaysHowLongItHasRun() {
+        val f = arrivedFeed()
+        assertNull(f.e.deepProofRunningMs(f.t))
+        f.run(5_000, { -98 }, stepsAvailable = false)
+        assertTrue(f.e.deepProofRunningMs(f.t)!! in 4_600L..5_000L)
+        f.run(200, { -88 }, stepsAvailable = false)
+        assertNull("a shallower reading ends it", f.e.deepProofRunningMs(f.t))
     }
 
     // ---- 0.3.1: a proven arrival (steps + rise) as the at-the-car anchor ----

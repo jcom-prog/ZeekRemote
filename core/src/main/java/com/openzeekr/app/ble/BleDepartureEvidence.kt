@@ -71,6 +71,9 @@ internal class BleDepartureEvidence(
     private var veryDeepStillSinceMs = UNSET
     private var belowLockSinceMs = UNSET
     private var descentMs = UNSET
+    // 0.3.20: the fall to the FIRST very-deep reading of this spell below the lock level (see [DRIVE_DESCENT_MS]); a
+    // later dip does not get the credit of the whole spell (simulator: hovering at -95 at the boot gave 12 s).
+    private var firstDescentMs = UNSET
     private var stillDeepSinceMs = UNSET
     private var confirmedAtMs = UNSET
     // Lowest smoothed level in each confirming window (the rising check).
@@ -97,20 +100,30 @@ internal class BleDepartureEvidence(
 
     val confirmedAt: Long? get() = confirmedAtMs.takeIf { it != UNSET }
 
+    /** 0.3.20: the latest sample held the very-deep proof back because the only motion was the drive's. */
+    var driveMotionHeld: Boolean = false
+        private set
+
+    /** 0.3.20: how long a step-free very-deep proof has been running (the longer of its two windows), or null. */
+    fun deepProofRunningMs(nowMs: Long): Long? =
+        listOf(veryDeepSinceMs, stillDeepSinceMs).filter { it != UNSET }.maxOfOrNull { nowMs - it }
+
     /**
      * @param nowMs monotonic receipt time of a *fresh* GATT reading (never a cached value)
      * @param rawRssi the reading itself; @param smoothedRssi the controller's EMA after it
      * @param stepsSinceUnlock cumulative steps in this epoch, null when no step source exists
+     * @param vehicleOnly 0.3.20: [moving] only because Activity Recognition still reports a drive (no step or walk since)
      */
     fun observe(
-        nowMs: Long, rawRssi: Int, smoothedRssi: Int, moving: Boolean, stepsSinceUnlock: Long?,
+        nowMs: Long, rawRssi: Int, smoothedRssi: Int, moving: Boolean, stepsSinceUnlock: Long?, vehicleOnly: Boolean = false,
     ): Decision {
+        driveMotionHeld = false
         val previous = lastSampleAtMs
         if (previous != UNSET && nowMs <= previous) {
             // Duplicate or backward time cannot extend any window; keep the old sample time so a
             // replayed callback cannot shift the continuity boundary forward either.
             veryDeepSinceMs = UNSET
-            belowLockSinceMs = UNSET; descentMs = UNSET; stillDeepSinceMs = UNSET
+            belowLockSinceMs = UNSET; descentMs = UNSET; stillDeepSinceMs = UNSET; firstDescentMs = UNSET
             restartObservation()
             return decide("time_not_advancing")
         }
@@ -142,12 +155,20 @@ internal class BleDepartureEvidence(
             else -> veryDeepSinceMs
         }
         veryDeepMin = if (veryDeepSinceMs == nowMs) smoothedRssi else minOf(veryDeepMin, smoothedRssi)
-        // Confirmed only while walking again, never during a stop.
+        // Confirmed only while walking again, never during a stop. 0.3.20 (study J, field 16/10 and 19/10): after a
+        // drive Activity Recognition said MOVING for minutes while the phone held every step, so standing at the boot
+        // read as walking and the simulator locked the car there (back pocket, the body between phone and car). Motion
+        // from the drive alone ([vehicleOnly]) counts as walking only after a gradual fall to the very-deep level
+        // ([DRIVE_DESCENT_MS]); at the boot the body drops the signal in one step.
+        val walkShown = !vehicleOnly || (firstDescentMs != UNSET && firstDescentMs >= DRIVE_DESCENT_MS)
         if (moving && veryDeepSinceMs != UNSET && nowMs - veryDeepSinceMs >= veryDeepMs &&
             !rising(smoothedRssi, veryDeepMin) && recededFromTurn(smoothedRssi)) {
-            if (confirmedAtMs == UNSET) confirmedAtMs = nowMs
-            confirmKind = "very_deep"
-            return decide("confirmed")
+            if (walkShown) {
+                if (confirmedAtMs == UNSET) confirmedAtMs = nowMs
+                confirmKind = "very_deep"
+                return decide("confirmed")
+            }
+            driveMotionHeld = true
         }
 
         // Motion sensor stuck at STILL during a real walk away (field, screen off: STILL
@@ -159,8 +180,9 @@ internal class BleDepartureEvidence(
         // A short sampling gap (the post-unlock fast window ending) keeps the descent
         // clock; a long one does not.
         val longGap = previous != UNSET && nowMs - previous > MAX_DESCENT_GAP_MS
-        if (longGap || smoothedRssi > lockThreshold) belowLockSinceMs = UNSET
+        if (longGap || smoothedRssi > lockThreshold) { belowLockSinceMs = UNSET; firstDescentMs = UNSET }
         else if (belowLockSinceMs == UNSET) belowLockSinceMs = nowMs
+        if (deepNow && firstDescentMs == UNSET && belowLockSinceMs != UNSET) firstDescentMs = nowMs - belowLockSinceMs
         if (!deepNow) descentMs = UNSET
         else if (descentMs == UNSET && belowLockSinceMs != UNSET) descentMs = nowMs - belowLockSinceMs
         val stillDeep = !gap && descentMs != UNSET && descentMs >= gradualDescentMs &&
@@ -264,7 +286,7 @@ internal class BleDepartureEvidence(
      */
     fun restart() {
         veryDeepSinceMs = UNSET
-        belowLockSinceMs = UNSET; descentMs = UNSET; stillDeepSinceMs = UNSET
+        belowLockSinceMs = UNSET; descentMs = UNSET; stillDeepSinceMs = UNSET; firstDescentMs = UNSET
         veryDeepStillSinceMs = UNSET
         restartObservation()
         reason = "restarted"
@@ -340,6 +362,8 @@ internal class BleDepartureEvidence(
         const val MIN_RECESSION_DB = 6
         const val DEEP_FAR_MARGIN_DB = 3
         const val VERY_DEEP_MARGIN_DB = 13
+        /** 0.3.20: the gradual fall that lets the drive's motion count as walking (simulator: 2-3 s at the boot). */
+        const val DRIVE_DESCENT_MS = 4_000L
         const val VERY_DEEP_MS = 12_000L
         const val VERY_DEEP_STILL_TOLERANCE_MS = 5_000L
         const val STILL_DEEP_MARGIN_DB = 18
