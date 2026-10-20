@@ -66,6 +66,8 @@ internal object UnverifiedLockNotifier {
                 "No accurate location reference is available. Lock manually and check the car before leaving."
             Event.LOCK_NOT_EXECUTED -> "Car NOT locked" to
                 "The car received the Lock but did not lock. Check doors, boot, bonnet and windows, then lock again."
+            Event.DEPARTURE_PROOF_PENDING -> "Leaving? The car is still unlocked" to
+                "The automatic Lock is still checking your departure. Lock now if you are leaving."
         }
         val lockButton = LockAlertPolicy.offersLock(event)
         val posted = post(context, CHANNEL_ID, NOTIFICATION_ID, title, message, alarm = false, lockButton = lockButton)

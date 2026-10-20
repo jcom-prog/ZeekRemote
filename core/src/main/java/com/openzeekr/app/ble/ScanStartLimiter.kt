@@ -12,10 +12,23 @@ internal class ScanStartLimiter {
 
     /** True (and counted) when a scan may start now. */
     @Synchronized fun tryStart(nowMs: Long): Boolean {
-        while (starts.isNotEmpty() && (nowMs - starts.first() >= WINDOW_MS || nowMs < starts.first())) starts.removeFirst()
+        prune(nowMs)
         if (starts.size >= MAX_STARTS) return false
         starts.addLast(nowMs)
         return true
+    }
+
+    /** 0.3.21: the starts still allowed now (nothing counted). */
+    @Synchronized fun free(nowMs: Long): Int { prune(nowMs); return MAX_STARTS - starts.size }
+
+    /** 0.3.21: how long until a start is allowed again; 0 = now. */
+    @Synchronized fun waitMs(nowMs: Long): Long {
+        prune(nowMs)
+        return if (starts.size < MAX_STARTS) 0L else starts.first() + WINDOW_MS - nowMs
+    }
+
+    private fun prune(nowMs: Long) {
+        while (starts.isNotEmpty() && (nowMs - starts.first() >= WINDOW_MS || nowMs < starts.first())) starts.removeFirst()
     }
 
     companion object {

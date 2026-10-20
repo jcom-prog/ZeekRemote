@@ -119,10 +119,22 @@ class ProximityService : Service() {
         deps.ble.onStatus133Recovery = {
             scope.launch {
                 val offload = deps.config.config.value.presenceOffloadEnabled
-                val armed = offload && deps.ble.armPresenceScan(approachMode = true)
+                // 0.3.21 (field 20/10): the duty cycle the keep-alive will ask for, so it need not restart the scan
+                // (the restart the ration then refused left nothing listening for 24 s).
+                val armed = offload && deps.ble.armPresenceScan(approachMode = true, lowLatency = fastPresenceWanted(deps))
                 if (armed) {
                     motionPresenceRecoveryUntilMs = SteadyClock.wallMs() + MOTION_PRESENCE_RECOVERY_MS
                     Logx.d("svc", "status 133: hardware presence re-armed; preserving arrival epoch")
+                } else if (offload && deps.ble.scanStartWaitMs() > 0) {
+                    // The ration is spent: a foreground scan would be refused as well. Re-arm once a start is free.
+                    val waitMs = deps.ble.scanStartWaitMs()
+                    Logx.w("svc", "status 133: no scan start left; presence re-armed in $waitMs ms")
+                    delay(waitMs + SCAN_START_SLACK_MS)
+                    if (!keySleeping && deps.ble.state.value in setOf(DkBleManager.State.IDLE, DkBleManager.State.ERROR) &&
+                        deps.ble.armPresenceScan(approachMode = true, lowLatency = fastPresenceWanted(deps))) {
+                        motionPresenceRecoveryUntilMs = SteadyClock.wallMs() + MOTION_PRESENCE_RECOVERY_MS
+                        Logx.d("svc", "status 133: hardware presence re-armed; preserving arrival epoch")
+                    }
                 } else {
                     Logx.w("svc", "status 133: offload unavailable; bounded foreground fallback")
                     runCatching { deps.ble.connect(null) }
@@ -166,17 +178,28 @@ class ProximityService : Service() {
                     intent.getParcelableExtra(EXTRA_SCAN_RESULT) as? android.bluetooth.le.ScanResult
                 }
                 val mac = scanResult?.device?.address ?: intent.getStringExtra(EXTRA_MAC)
+                // 0.3.21: the presence scan listens on through a direct connect until the link is up (a connect that
+                // ends in status 133 then needs no new scan start); a hit meanwhile changes nothing.
+                if (deps.ble.state.value in setOf(DkBleManager.State.CONNECTING, DkBleManager.State.CONNECTED,
+                        DkBleManager.State.SESSION_READY)) {
+                    Logx.d("svc", "presence while the link is ${deps.ble.state.value} - nothing to do")
+                    return START_STICKY
+                }
                 if (scanResult != null) {
                     val moving = deps.motion.state.value == MotionMonitor.Motion.MOVING
                     when (WeakConnectGate.onPresence(scanResult.rssi, moving)) {
                         WeakConnectGate.PresenceAction.CONNECT -> Unit
                         WeakConnectGate.PresenceAction.FOREGROUND_SCAN -> {
-                            Logx.d("svc", "presence at the edge of range (rssi=${scanResult.rssi}) while moving - " +
-                                "foreground scan connects once the car is in range")
                             // Still arrival evidence: it opens the arrival epoch that clears a Lock's
                             // departure latch (a back-pocket return never reads strong-near at the door).
                             if (deps.config.config.value.proximityEnabled) deps.proximity.onPresenceMatch(scanResult.rssi)
-                            runCatching { deps.ble.connect(null) }
+                            // 0.3.21: the foreground scan only speeds up what the listening presence scan does too.
+                            if (PresenceScanArmPolicy.mayScanAlongside(deps.ble.scanStartsFree())) {
+                                Logx.d("svc", "presence at the edge of range (rssi=${scanResult.rssi}) while moving - " +
+                                    "foreground scan connects once the car is in range")
+                                runCatching { deps.ble.connect(null) }
+                            } else Logx.d("svc", "presence at the edge of range (rssi=${scanResult.rssi}) while moving - " +
+                                "no scan start in reserve; the presence scan connects once the car is in range")
                             return START_STICKY
                         }
                         WeakConnectGate.PresenceAction.IGNORE -> {
@@ -194,7 +217,8 @@ class ProximityService : Service() {
                 if (deps.config.config.value.proximityEnabled) {
                     scanResult?.let { deps.proximity.onPresenceMatch(it.rssi) }
                 }
-                deps.ble.disarmPresenceScan()
+                // 0.3.21: the presence scan stays armed through the direct connect; the keep-alive stops it once the
+                // link is up (or a foreground scan runs).
                 // A ScanResult carries the BluetoothDevice's RANDOM/RPA address type. Never rebuild
                 // that device with getRemoteDevice(mac): Android then treats it as PUBLIC and the
                 // connect fails. If this particular split advert lacks broadcastRnd, the manager
@@ -332,6 +356,7 @@ class ProximityService : Service() {
                     continue
                 }
             }
+            var nextDelayMs = RECONNECT_INTERVAL_MS
             if (deps.ble.hasCredential && deps.ble.bluetoothAvailable) {
                 val offload = deps.config.config.value.presenceOffloadEnabled
                 when (deps.ble.state.value) {
@@ -366,10 +391,17 @@ class ProximityService : Service() {
                                 // Long-approach path: BALANCED while walking, LOW_POWER while still.
                                 // This filtered PendingIntent scan stays in the BT controller and holds
                                 // no CPU wakelock, so it can listen all day without foreground scanning.
-                                val fast = moving && SteadyClock.wallMs() < fastPresenceUntilMs
-                                if (!deps.ble.armPresenceScan(approachMode = moving, lowLatency = fast)) {
-                                    Logx.w("svc", "keep-alive: hardware presence registration failed; trying foreground fallback")
-                                    runCatching { deps.ble.connect(null) }
+                                if (!deps.ble.armPresenceScan(approachMode = moving, lowLatency = fastPresenceWanted(deps))) {
+                                    val waitMs = deps.ble.scanStartWaitMs()
+                                    if (waitMs > 0) {
+                                        // 0.3.21: the ration is spent and a foreground scan would be refused as well
+                                        // (field 20/10): come back the moment a start is free.
+                                        nextDelayMs = (waitMs + SCAN_START_SLACK_MS).coerceAtMost(RECONNECT_INTERVAL_MS)
+                                        Logx.w("svc", "keep-alive: no scan start left; presence retried in $nextDelayMs ms")
+                                    } else {
+                                        Logx.w("svc", "keep-alive: hardware presence registration failed; trying foreground fallback")
+                                        runCatching { deps.ble.connect(null) }
+                                    }
                                 }
                             }
                         } else {
@@ -386,13 +418,19 @@ class ProximityService : Service() {
                     // cycle the link — a genuine stall is caught reactively by the controller's liveness.
                     else -> {
                         lastEngagedMs = SteadyClock.wallMs()
-                        if (deps.ble.presenceArmed) deps.ble.disarmPresenceScan()
+                        // 0.3.21: not during a direct connect - if it ends in status 133 the scan listens on and its
+                        // recovery needs no new scan start (field 20/10).
+                        if (deps.ble.presenceArmed && deps.ble.state.value != DkBleManager.State.CONNECTING) deps.ble.disarmPresenceScan()
                     }
                 }
             }
-            delay(RECONNECT_INTERVAL_MS)
+            delay(nextDelayMs)
         }
     }
+
+    /** The keep-alive's duty cycle: LOW_LATENCY while moving within the bounded window after a motion wake. */
+    private fun fastPresenceWanted(deps: Deps) =
+        deps.motion.state.value == MotionMonitor.Motion.MOVING && SteadyClock.wallMs() < fastPresenceUntilMs
 
     private fun registerWakeReceiver() {
         if (wakeReceiverRegistered) return
@@ -716,6 +754,8 @@ class ProximityService : Service() {
         private const val WAKE_PROBE_DEBOUNCE_MS = 5_000L
         private const val MOTION_PRESENCE_RECOVERY_MS = 30_000L
         private const val FAST_PRESENCE_WINDOW_MS = 30_000L
+        /** 0.3.21: a retry after a spent scan-start ration comes this long after a start is free again. */
+        private const val SCAN_START_SLACK_MS = 100L
         private const val WATCHDOG_INTERVAL_MS = 5_000L
         private const val KEY_WAKE_MOTION_CONFIRM_MS = 1_500L
         private const val KEY_SLEEP_POLL_MS = 500L

@@ -197,6 +197,10 @@ internal data class SimPhysics(
      *  (two attempts at an advert of about -90 failed; one a few dB stronger, at the car, connected). null = off.
      *  SIM_PRESENCE_EDGE=1 sets -94 (field 0.2.15: no link below about -94). */
     val edge133Rssi: Double? = if (System.getenv("SIM_PRESENCE_EDGE") == "1") -94.0 else null,
+    /** Replays 0.3.20's presence-scan handling (the model check of field 20/10): a mode change stops the running scan
+     *  before the ration is asked, the status-133 recovery arms BALANCED, a presence hit stops the scan before its
+     *  direct connect, every foreground scan next to it starts. SIM_SCAN_0320=1. */
+    val scan0320: Boolean = System.getenv("SIM_SCAN_0320") == "1",
 ) {
     fun describe() = "%s phone%+.1fdB slope%.1f fade%.1f gnss%s ttff%.0fs hub%.0fs warm%.0f self%.0fs refuse%.2f cloud%.0fs/fail%.2f/lag%.0fs".format(
         name, phoneOffsetDb, pathSlope, fadeSigmaDb, gnssAccMedianM?.let { "%.1fm".format(it) } ?: "-", gnssTtffMs / 1000.0,
@@ -854,6 +858,7 @@ internal class SimWorld(
             keySleeping = false; lastAtCarMs = -1L; sleepGraceUntilMs = 0L; disarm(); lastStepsSeen = null; lastStepChangeMs = -1L
             earlyUntilMs = 0L; savedEarlyRssi = null; fastPresenceUntilMs = 0L; recoveryUntilMs = 0L
             lastEngagedMs = -1L; initialProbe = false; lastWakeProbeMs = -1L; nextKeepAliveMs = 0L; nextSleepPollMs = 0L
+            rearm133AtMs = 0L
         }
         var keySleeping = false; private set
         private var lastAtCarMs = -1L
@@ -883,18 +888,30 @@ internal class SimWorld(
         /**
          * DkBleManager.armPresenceScan. A scan already running in this mode keeps running (study C, 18/10: restarting
          * its latency on every keep-alive re-arm (8 s) let a low-power scan find the car only at the door). Another
-         * mode re-registers the scan: 0.3.20 stops the running scan first, and when the scan-start ration
-         * ([SimLink.scanStarts]) refuses the new one nothing is left (field 20/10: 24 s without a scan).
+         * mode re-registers the scan as [com.openzeekr.app.ble.PresenceScanArmPolicy] decides within the scan-start
+         * ration ([SimLink.scanStarts]). [SimPhysics.scan0320] replays 0.3.20, which stopped the running scan first:
+         * when the ration then refused the new one nothing was left (field 20/10: 24 s without a scan).
          */
         private fun arm(lowLatency: Boolean, approach: Boolean): Boolean {
             if (!btOn) return false
             val mode = if (approach && lowLatency) 2 else if (approach) 1 else 0
-            if (presenceArmed && presenceMode == mode) return true
-            if (presenceArmed) disarm()
-            if (!link.scanStarts.tryStart(clock.wallMs())) {
-                log('W', "svc", "presence scan arm deferred (Android allows 5 scan starts per 30 s)")
-                record("SCAN_DEFERRED", "presence")
-                return false
+            if (physics.scan0320) {
+                if (presenceArmed && presenceMode == mode) return true
+                if (presenceArmed) disarm()
+                if (!link.scanStarts.tryStart(clock.wallMs())) return deferred()
+            } else {
+                val now = clock.wallMs()
+                when (com.openzeekr.app.ble.PresenceScanArmPolicy.decide(presenceArmed, presenceMode == mode, link.scanStarts.free(now))) {
+                    com.openzeekr.app.ble.PresenceScanArmPolicy.Action.KEEP -> {
+                        if (presenceMode != mode) log('D', "ble", "presence scan kept (${MODE_NAMES[presenceMode]}): " +
+                            "a restart for ${MODE_NAMES[mode]} would leave no scan start in reserve")
+                        return true
+                    }
+                    com.openzeekr.app.ble.PresenceScanArmPolicy.Action.DEFER -> return deferred()
+                    else -> {}
+                }
+                link.scanStarts.tryStart(now)
+                if (presenceArmed) disarm()
             }
             presenceDelivers = link.androidStart()
             presenceArmed = true; presenceSeenSinceMs = -1L
@@ -902,12 +919,28 @@ internal class SimWorld(
             log('D', "ble", "presence scan ARMED (${MODE_NAMES[mode]})")
             return true
         }
+        private fun deferred(): Boolean {
+            log('W', "svc", "presence scan arm deferred (Android allows 5 scan starts per 30 s)")
+            record("SCAN_DEFERRED", "presence")
+            return false
+        }
         private fun disarm() {
             if (presenceArmed) log('D', "ble", "presence scan DISARMED")
             presenceArmed = false; presenceSeenSinceMs = -1L
         }
+        /** ProximityService.fastPresenceWanted: LOW_LATENCY while moving within the window after a motion wake. */
+        private fun fastWanted() = moving && now() < fastPresenceUntilMs
+        /** ProximityService (0.3.21): the status-133 recovery re-arms once a scan start is free again. */
+        private var rearm133AtMs = 0L
 
         fun tick(appRuns: Boolean) {
+            if (appRuns && rearm133AtMs in 1..now()) {
+                rearm133AtMs = 0L
+                if (!keySleeping && link.state.value == DkBleManager.State.IDLE && arm(lowLatency = fastWanted(), approach = true)) {
+                    recoveryUntilMs = now() + MOTION_PRESENCE_RECOVERY_MS
+                    log('D', "svc", "status 133: hardware presence re-armed; preserving arrival epoch")
+                }
+            }
             if (appRuns && now() >= nextSleepPollMs) { nextSleepPollMs = now() + KEY_SLEEP_POLL_MS; stationaryKeySecurity() }
             if (appRuns && now() >= nextKeepAliveMs) keepConnected()
             presenceDelivery()
@@ -953,9 +986,15 @@ internal class SimWorld(
                         initialProbe = true
                         log('D', "svc", "keep-alive: initial presence probe (already-at-car case)")
                         link.connect(null)
-                    } else if (!arm(lowLatency = moving && now() < fastPresenceUntilMs, approach = moving)) {
-                        log('W', "svc", "keep-alive: hardware presence registration failed; trying foreground fallback")
-                        link.connect(null)
+                    } else if (!arm(lowLatency = fastWanted(), approach = moving)) {
+                        val wait = if (physics.scan0320) 0L else link.scanStarts.waitMs(clock.wallMs())
+                        if (wait > 0) {
+                            nextKeepAliveMs = now() + minOf(wait + SCAN_START_SLACK_MS, RECONNECT_INTERVAL_MS)
+                            log('W', "svc", "keep-alive: no scan start left; presence retried in ${nextKeepAliveMs - now()} ms")
+                        } else {
+                            log('W', "svc", "keep-alive: hardware presence registration failed; trying foreground fallback")
+                            link.connect(null)
+                        }
                     }
                 } else {
                     if (aggressive) log('D', "svc", "keep-alive: bounded approach recovery — aggressive scan-connect")
@@ -963,7 +1002,8 @@ internal class SimWorld(
                 }
             } else {
                 lastEngagedMs = now()
-                if (presenceArmed) disarm()
+                // 0.3.21: not during a direct connect (a 133 then needs no new scan start).
+                if (presenceArmed && (physics.scan0320 || link.state.value != DkBleManager.State.CONNECTING)) disarm()
             }
         }
 
@@ -1023,10 +1063,14 @@ internal class SimWorld(
         /** ProximityService.onStatus133Recovery: re-arm the hardware presence scan in approach mode, else scan. */
         fun onStatus133Recovery() {
             if (!appAlive || !btOn) return
-            val armed = offload && arm(lowLatency = false, approach = true)
+            val armed = offload && arm(lowLatency = !physics.scan0320 && fastWanted(), approach = true)
             if (armed) {
                 recoveryUntilMs = now() + MOTION_PRESENCE_RECOVERY_MS
                 log('D', "svc", "status 133: hardware presence re-armed; preserving arrival epoch")
+            } else if (!physics.scan0320 && offload && link.scanStarts.waitMs(clock.wallMs()) > 0) {
+                val wait = link.scanStarts.waitMs(clock.wallMs())
+                log('W', "svc", "status 133: no scan start left; presence re-armed in $wait ms")
+                rearm133AtMs = now() + wait + SCAN_START_SLACK_MS
             } else {
                 log('W', "svc", "status 133: offload unavailable; bounded foreground fallback")
                 link.connect(null)
@@ -1063,12 +1107,18 @@ internal class SimWorld(
                         log('D', "svc", "status 133: deferring weak presence at rssi=$r; keeping offloaded scan armed")
                         return
                     }
-                    controller.onPresenceMatch(r); disarm()
+                    controller.onPresenceMatch(r)
+                    // 0.3.21: the scan listens on through the direct connect (0.3.20 stopped it first).
+                    if (physics.scan0320) disarm()
                     if (!link.connectFromPresence(r)) link.connect(null)
                 }
                 com.openzeekr.app.ble.WeakConnectGate.PresenceAction.FOREGROUND_SCAN -> {
-                    log('D', "svc", "presence at the edge of range while moving - foreground scan")
-                    controller.onPresenceMatch(r); link.connect(null)
+                    controller.onPresenceMatch(r)
+                    if (physics.scan0320 || com.openzeekr.app.ble.PresenceScanArmPolicy.mayScanAlongside(link.scanStarts.free(clock.wallMs()))) {
+                        log('D', "svc", "presence at the edge of range while moving - foreground scan")
+                        link.connect(null)
+                    } else log('D', "svc", "presence at the edge of range while moving - no scan start in reserve; " +
+                        "the presence scan connects once the car is in range")
                 }
                 com.openzeekr.app.ble.WeakConnectGate.PresenceAction.IGNORE ->
                     log('D', "svc", "presence at the edge of range while still - not connecting")
@@ -1407,6 +1457,8 @@ internal class SimWorld(
         const val SCAN_TIMEOUT_MS = 20_000L
         const val STATUS_133_DIRECT_RETRY_DELAY_MS = 350L
         const val STATUS_133_RESCAN_DELAY_MS = 400L
+        /** ProximityService (0.3.21): a retry after a spent ration comes this long after a start is free again. */
+        const val SCAN_START_SLACK_MS = 100L
         /** Android: an app's sixth BLE scan start within 30 s is accepted but delivers nothing. */
         const val ANDROID_SCAN_STARTS = 5
         private val MODE_NAMES = listOf("LOW_POWER idle", "BALANCED approach", "LOW_LATENCY motion wake")

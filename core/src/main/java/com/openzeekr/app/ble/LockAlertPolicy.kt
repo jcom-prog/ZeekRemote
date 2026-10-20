@@ -25,6 +25,11 @@ internal object LockAlertPolicy {
         DEPARTURE_UNVERIFIED,
         /** A weak-signal departure candidate that may be body shadowing at the car: no Lock sent. */
         DEPARTURE_CANDIDATE_UNVERIFIED,
+        /**
+         * 0.3.21 (field 20/10): a walk-away is confirmed and only its independent proof (a location window of up to
+         * 25 s) is still running: the Lock is offered at once, without sound.
+         */
+        DEPARTURE_PROOF_PENDING,
         /** A pending Lock was withheld because the phone is near the car again. */
         PROXIMITY_RECOVERED_BEFORE_LOCK,
         /** The user's own cloud Lock was accepted, but its actuation is unverified. */
@@ -57,6 +62,7 @@ internal object LockAlertPolicy {
         Event.AUTO_LOCK_STATE_UNVERIFIED,
         Event.AUTO_LOCK_CLOUD_CONFIRMED,
         Event.DEPARTURE_CANDIDATE_UNVERIFIED,
+        Event.DEPARTURE_PROOF_PENDING,
         Event.LINK_LOST_STATIONARY,
         Event.PROXIMITY_RECOVERED_BEFORE_LOCK,
         Event.MANUAL_CLOUD_LOCK_UNVERIFIED,

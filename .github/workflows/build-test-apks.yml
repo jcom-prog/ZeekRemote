@@ -73,6 +73,7 @@ on:
       - zeekremote-0.3.18-schedule-sync
       - zeekremote-0.3.19-near-return
       - zeekremote-0.3.20-home-by-car
+      - zeekremote-0.3.21-scan-and-prompt
 
 permissions:
   contents: read
@@ -427,6 +428,20 @@ jobs:
           grep -Fq '"edge-133" -> SimPhysics(name = suite, presenceFloorRssi = -100.0, edge133Rssi = -90.0)' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
           grep -Fq 'Scenario("F53 key asleep in the house, out to the car"' core/src/test/java/com/openzeekr/app/ble/sim/SimScenarios.kt
           test -f core/src/test/java/com/openzeekr/app/ble/sim/SimScanStartTest.kt
+          # 0.3.21 (field 20/10): a running presence scan is never stopped for a restart the ration refuses (the new start
+          # is counted before the running scan stops), a change of duty cycle keeps a start in reserve, and the scan
+          # listens through a direct connect; a walk-away whose proof still runs offers the Lock at once; an unbroken
+          # walk ends a lagging counter's step veto (study K2c).
+          grep -Fq 'internal object PresenceScanArmPolicy {' core/src/main/java/com/openzeekr/app/ble/PresenceScanArmPolicy.kt
+          grep -Fq 'when (PresenceScanArmPolicy.decide(presenceArmed, sameMode, scanStarts.free(now))) {' core/src/main/java/com/openzeekr/app/ble/DkBleManager.kt
+          awk '/fun armPresenceScan\(/{f=1} f && /scanStarts.tryStart\(now\)/{t=NR} f && /if \(presenceArmed\) disarmPresenceScan\(\)/{d=NR} f && /^    }/{exit} END{if (!t || !d || d < t) exit 1}' core/src/main/java/com/openzeekr/app/ble/DkBleManager.kt
+          grep -Fq 'if (deps.ble.presenceArmed && deps.ble.state.value != DkBleManager.State.CONNECTING) deps.ble.disarmPresenceScan()' core/src/main/java/com/openzeekr/app/ble/ProximityService.kt
+          grep -Fq 'if (PresenceScanArmPolicy.mayScanAlongside(deps.ble.scanStartsFree())) {' core/src/main/java/com/openzeekr/app/ble/ProximityService.kt
+          grep -Fq 'val offered = alerts.show(LockAlertPolicy.Event.DEPARTURE_PROOF_PENDING)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'private const val LOCK_WALK_BOUT_MS = 8_000L' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'Event.DEPARTURE_PROOF_PENDING -> "Leaving? The car is still unlocked" to' core/src/main/java/com/openzeekr/app/ble/UnverifiedLockNotifier.kt
+          test -f core/src/test/java/com/openzeekr/app/ble/PresenceScanArmPolicyTest.kt
+          test -f core/src/test/java/com/openzeekr/app/ble/sim/SimWalkBoutTest.kt
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -448,7 +463,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='144' versionName='0.3.20-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='145' versionName='0.3.21-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

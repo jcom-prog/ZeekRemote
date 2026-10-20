@@ -592,23 +592,40 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
      * for "parked for hours". ALL_MATCHES is used because FIRST_MATCH can remain latched
      * across a long sleep/re-arm cycle and fail to wake the app when the user returns.
      *
-     * Idempotent. Returns true if armed (or already armed).
+     * Idempotent. Returns true if armed (or already armed). 0.3.21 (field 20/10, [PresenceScanArmPolicy]): a running
+     * scan is stopped for a new duty cycle only when the ration can start the new one and keep a start in reserve;
+     * otherwise it keeps running in its mode. False only when no scan runs and the ration is spent
+     * ([scanStartWaitMs]) or Bluetooth is off.
      */
     @SuppressLint("MissingPermission")
     fun armPresenceScan(approachMode: Boolean = false, lowLatency: Boolean = false): Boolean {
         val useLowLatency = approachMode && lowLatency
-        if (presenceArmed && presenceApproachMode == approachMode &&
-            presenceLowLatency == useLowLatency) return true
+        val sameMode = presenceApproachMode == approachMode && presenceLowLatency == useLowLatency
+        val now = SteadyClock.wallMs()
+        when (PresenceScanArmPolicy.decide(presenceArmed, sameMode, scanStarts.free(now))) {
+            PresenceScanArmPolicy.Action.KEEP -> {
+                if (!sameMode) Logx.d("ble", "presence scan kept (${presenceModeName(presenceApproachMode, presenceLowLatency)}): " +
+                    "a restart for ${presenceModeName(approachMode, useLowLatency)} would leave no scan start in reserve")
+                return true
+            }
+            PresenceScanArmPolicy.Action.DEFER -> {
+                Logx.w("ble", "presence scan arm deferred (Android allows 5 scan starts per 30 s; " +
+                    "next start in ${scanStarts.waitMs(now)} ms)")
+                return false
+            }
+            PresenceScanArmPolicy.Action.RESTART, PresenceScanArmPolicy.Action.START -> {}
+        }
+        val scanner = adapter?.bluetoothLeScanner
+        if (scanner == null || adapter?.isEnabled != true) { disarmPresenceScan(); return false }
+        // Counted before the running scan stops: the ration can no longer refuse its successor.
+        if (!scanStarts.tryStart(now)) {
+            Logx.w("ble", "presence scan arm deferred (Android allows 5 scan starts per 30 s)")
+            return presenceArmed
+        }
         // Re-register when motion changes the desired duty cycle. This remains a filtered
         // PendingIntent scan handled by the Bluetooth controller; it does not hold a CPU wakelock.
         if (presenceArmed) disarmPresenceScan()
-        val scanner = adapter?.bluetoothLeScanner ?: return false
-        if (adapter?.isEnabled != true) return false
         clearStalePresenceScan(scanner)
-        if (!scanStarts.tryStart(SteadyClock.wallMs())) {
-            Logx.w("ble", "presence scan arm deferred (Android allows 5 scan starts per 30 s)")
-            return false
-        }
         val settings = ScanSettings.Builder()
             // LOW_LATENCY is allowed only during ProximityService's bounded post-motion wake window.
             // Continued walking falls back to BALANCED; parked/still remains LOW_POWER. All three
@@ -634,17 +651,23 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
             presenceApproachMode = approachMode
             presenceLowLatency = useLowLatency
             Logx.d("ble", "presence scan ARMED (offloaded 0xFDFD/0x06FE, " +
-                "${when {
-                    useLowLatency -> "LOW_LATENCY motion wake"
-                    approachMode -> "BALANCED approach"
-                    else -> "LOW_POWER idle"
-                }}, ALL_MATCHES, CPU may sleep)")
+                "${presenceModeName(approachMode, useLowLatency)}, ALL_MATCHES, CPU may sleep)")
             true
         } else {
             Logx.e("ble", "presence scan arm failed (${res.exceptionOrNull()?.message ?: "startScan!=0"})")
             false
         }
     }
+
+    private fun presenceModeName(approachMode: Boolean, lowLatency: Boolean) = when {
+        lowLatency -> "LOW_LATENCY motion wake"
+        approachMode -> "BALANCED approach"
+        else -> "LOW_POWER idle"
+    }
+
+    /** 0.3.21: scan starts the ration allows now, and how long until the next one when it is spent (0 = now). */
+    fun scanStartsFree(): Int = scanStarts.free(SteadyClock.wallMs())
+    fun scanStartWaitMs(): Long = scanStarts.waitMs(SteadyClock.wallMs())
 
     /** Stop the hardware-offloaded presence scan (e.g. once we're engaged with a live session). */
     @SuppressLint("MissingPermission")

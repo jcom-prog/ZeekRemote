@@ -25,6 +25,14 @@ class LockAlertPolicyTest {
             assertFalse("$e must not sound", LockAlertPolicy.audible(e))
     }
 
+    @Test fun theLockOfferedWhileTheDepartureProofRunsIsSilentAndOffersLock() {
+        // 0.3.21 (field 20/10): offered at once instead of 25 s later; the alarm still follows only when due.
+        assertFalse(LockAlertPolicy.audible(Event.DEPARTURE_PROOF_PENDING))
+        assertTrue(LockAlertPolicy.offersLock(Event.DEPARTURE_PROOF_PENDING))
+        assertFalse(LockAlertPolicy.resolvesAlarm(Event.DEPARTURE_PROOF_PENDING))
+        assertTrue(LockAlertPolicy.shouldPost(Event.DEPARTURE_PROOF_PENDING, bleDepartureRouteActive = true))
+    }
+
     @Test fun lockTheCarAcknowledgedOrTheCloudFreshlyConfirmedDoesNotSound() {
         // A BLE receipt plus a lagging cloud is the normal successful case; no alarm fatigue.
         assertFalse(LockAlertPolicy.audible(Event.AUTO_LOCK_STATE_UNVERIFIED))

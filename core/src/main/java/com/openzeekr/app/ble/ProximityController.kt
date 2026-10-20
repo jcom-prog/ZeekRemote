@@ -297,6 +297,11 @@ class ProximityController internal constructor(
     private var walkAwayRecovered = false
     private var lastShadowDepartureAtMs = 0L
     private var shadowDepartureWarned = false
+    // 0.3.21 (B): the Lock was offered at once when a walk-away was seen and only the independent proof was missing.
+    private var departurePromptPosted = false
+    // 0.3.21 (study K2c): when the current unbroken walk began (MOVING, not from a drive; wall clock, 0 = none).
+    private var walkBoutStartMs = 0L
+    private var walkBoutJob: Job? = null
     // Latest moving walk-away candidate in this unlock (wall clock); with no strong reading after
     // it, the user has walked away (LockAlertPolicy.departureSuspected).
     private var lastWalkAwayCandidateAtMs = 0L
@@ -423,6 +428,8 @@ class ProximityController internal constructor(
         _wakeLockNeeded.value = true   // hold until the first sample decides (bring-up needs the CPU)
         _state.value = State(running = true, phase = Phase.PASSIVE, zone = Zone.UNKNOWN)
         ble.onInboundActivity = { activityWake?.complete(Unit) } // wake the unlocked idle-wait instantly
+        walkBoutJob?.cancel()
+        walkBoutJob = scope.launch { motion.state.collect { onWalkMotion(it == MotionMonitor.Motion.MOVING && !motion.vehicleMotion) } }
         motion.onMovingEdge = {
             stepStall.onMovingEdge(clock.wallMs())
             motionWake?.complete(Unit)   // wake the FAR-still approach sleep
@@ -557,6 +564,7 @@ class ProximityController internal constructor(
         farNoMotionCheck?.cancel(); farNoMotionCheck = null
         ble.onInboundActivity = null; activityWake?.complete(Unit); activityWake = null
         motion.onMovingEdge = null; motionWake?.complete(Unit); motionWake = null
+        walkBoutJob?.cancel(); walkBoutJob = null; walkBoutStartMs = 0L
         motion.stop()
         gattEma = null; linkLostAtMs = 0L
         pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
@@ -729,6 +737,7 @@ class ProximityController internal constructor(
         returnToCar.reset(); stepsAtReturn = null; counterAtReturn = null
         lastShadowDepartureAtMs = 0L
         shadowDepartureWarned = false
+        departurePromptPosted = false
         lastWalkAwayCandidateAtMs = 0L
         walkAwayProofStartedAtMs = 0L; returnPending = false
         departureAlarmJob?.cancel(); departureAlarmJob = null
@@ -1147,11 +1156,32 @@ class ProximityController internal constructor(
      * may hold back the first steps of a walk), so the threshold stays low (calibrated F28: 15
      * counted at 19 m). Known limit: a slow walker has made that many steps at ~5 m (stress F04,
      * with an 8 s deep fade there).
+     *
+     * 0.3.21 (study K2c): a counter that lags an ordinary walk away vetoed the Lock until the user was beyond 25 m. At
+     * least [LOCK_MIN_WALK_STEPS] counted steps and an unbroken walk of [LOCK_WALK_BOUT_MS] (MOVING, not from a drive)
+     * lift the veto. Loading the boot or walking round the car has no unbroken walk that long; walking the time alone
+     * (studies K2, 1.2-1.5 steps/s) locked the car 1 m from the user in the simulator.
      */
     private fun stepsShortOfDeparture(): String? {
         if ((stepsSinceUnlock() ?: 0L) <= 0L) return null
         val sinceCar = stepsAwayFromCar() ?: return null
-        return if (sinceCar < LOCK_MIN_STEPS_SINCE_CAR) "only $sinceCar steps since the car (${motion.stepSummary})" else null
+        if (sinceCar >= LOCK_MIN_STEPS_SINCE_CAR) return null
+        val bout = walkBoutMs()
+        if (sinceCar >= LOCK_MIN_WALK_STEPS && bout >= LOCK_WALK_BOUT_MS) {
+            Logx.d("prox", "$sinceCar steps since the car, walking without a break for ${bout / 100 / 10.0} s -> no step veto")
+            return null
+        }
+        return "only $sinceCar steps since the car (${motion.stepSummary})"
+    }
+
+    private fun onWalkMotion(walking: Boolean) {
+        if (walking) { if (walkBoutStartMs == 0L) walkBoutStartMs = clock.wallMs() } else walkBoutStartMs = 0L
+    }
+
+    /** The current unbroken walk (ms); a drive's MOVING is no walk ([ProximityMotion.vehicleMotion]). */
+    private fun walkBoutMs(): Long {
+        onWalkMotion(motion.state.value == MotionMonitor.Motion.MOVING && !motion.vehicleMotion)
+        return if (walkBoutStartMs != 0L) clock.wallMs() - walkBoutStartMs else 0L
     }
 
     /**
@@ -1863,6 +1893,15 @@ class ProximityController internal constructor(
                         decisionPolicy.onWalkAwayVerificationFailed()
                     }
                     AutomaticLockGate.Action.LOCK -> {
+                        // 0.3.21 (B, field 20/10): the walk-away is confirmed and only the independent proof is
+                        // missing; its location window takes up to 25 s (field: the offer came 25 s after the walk-away,
+                        // with the user indoors). Offer the Lock at once - silent, with the Lock button on the lock
+                        // screen; the outcome below still sounds the alarm when one is due, and a Lock replaces it.
+                        if (!shadowDepartureWarned && !departurePromptPosted) {
+                            departurePromptPosted = true
+                            val offered = alerts.show(LockAlertPolicy.Event.DEPARTURE_PROOF_PENDING)
+                            Logx.d("prox", "walk-away confirmed, independent proof pending: Lock offered at once (posted=$offered)")
+                        }
                         if (confirmPhysicalDeparture() && armedUnlocked &&
                             _state.value.running && config().proximityEnabled) {
                             Logx.d("prox", "departure corroborated by independent position; sending Lock")
@@ -2825,6 +2864,9 @@ class ProximityController internal constructor(
         private const val ARRIVAL_BEFORE_UNLOCK_MS = 30_000L
         /** Plan K1: fewer steps than this since the car veto an automatic Lock (~9 m of walking). */
         private const val LOCK_MIN_STEPS_SINCE_CAR = 12L
+        /** 0.3.21 (study K2c): this many counted steps and an unbroken walk this long lift that veto. */
+        private const val LOCK_MIN_WALK_STEPS = 9L
+        private const val LOCK_WALK_BOUT_MS = 8_000L
         /** Plan K1: a strong reading this recent vetoes an automatic Lock. */
         private const val LOCK_VETO_RECENT_STRONG_MS = 6_000L
         /** Plan K1: a rise of this much over the readings 4-8 s earlier = walking back to the car. */
