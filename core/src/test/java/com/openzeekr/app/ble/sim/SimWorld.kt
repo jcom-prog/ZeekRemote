@@ -190,6 +190,13 @@ internal data class SimPhysics(
     val afterDriveDropP: Double = 0.5,
     val afterDriveMovingMinMs: Long = 180_000L,
     val afterDriveMovingMaxMs: Long = 450_000L,
+    /** 0.3.21 (field 20/10, phone in a pocket, indoors): the hardware presence scan heard the car down to this true
+     *  RSSI (field: about -100 inside the house). SIM_PRESENCE_EDGE=1 (field 0.2.15) sets -100. */
+    val presenceFloorRssi: Double = if (System.getenv("SIM_PRESENCE_EDGE") == "1") -100.0 else SimWorld.PRESENCE_MIN_RSSI,
+    /** 0.3.21 worst case (field 20/10): every connect attempt below this true RSSI ends in status 133 after 0.3-0.7 s
+     *  (two attempts at an advert of about -90 failed; one a few dB stronger, at the car, connected). null = off.
+     *  SIM_PRESENCE_EDGE=1 sets -94 (field 0.2.15: no link below about -94). */
+    val edge133Rssi: Double? = if (System.getenv("SIM_PRESENCE_EDGE") == "1") -94.0 else null,
 ) {
     fun describe() = "%s phone%+.1fdB slope%.1f fade%.1f gnss%s ttff%.0fs hub%.0fs warm%.0f self%.0fs refuse%.2f cloud%.0fs/fail%.2f/lag%.0fs".format(
         name, phoneOffsetDb, pathSlope, fadeSigmaDb, gnssAccMedianM?.let { "%.1fm".format(it) } ?: "-", gnssTtffMs / 1000.0,
@@ -199,7 +206,9 @@ internal data class SimPhysics(
         (if (spotDb != 0.0) " spot%+.0fdB".format(spotDb) + (if (spotWhileWalking) "-walking" else "") else "") +
         (if (handWobbleDb != 0.0) " hand-wobble%.1fdB".format(handWobbleDb) else "") +
         (if (midStallMaxMs > 0) " steps-stall%.0f-%.0fs".format(midStallMinMs / 1000.0, midStallMaxMs / 1000.0) else "") +
-        (if (afterDriveReleaseMaxMs > 0) " steps-after-drive%.0f-%.0fs".format(afterDriveReleaseMinMs / 1000.0, afterDriveReleaseMaxMs / 1000.0) else "")
+        (if (afterDriveReleaseMaxMs > 0) " steps-after-drive%.0f-%.0fs".format(afterDriveReleaseMinMs / 1000.0, afterDriveReleaseMaxMs / 1000.0) else "") +
+        (if (presenceFloorRssi != SimWorld.PRESENCE_MIN_RSSI) " presence%.0f".format(presenceFloorRssi) else "") +
+        (edge133Rssi?.let { " 133-below%.0f".format(it) } ?: "")
 
     companion object {
         private fun env(name: String, default: Double) = System.getenv(name)?.toDouble() ?: default
@@ -417,7 +426,10 @@ internal class SimWorld(
                       val appBelievesUnlocked: Boolean = false, val cpuAwake: Boolean = false, val gnssOn: Boolean = false,
                       val linkUp: Boolean = false, val appAlive: Boolean = true,
                       /** Diagnostics only: the true RSSI, the motion state and the steps the app sees. */
-                      val trueRssi: Double = 0.0, val motionState: String = "", val steps: Long? = null)
+                      val trueRssi: Double = 0.0, val motionState: String = "", val steps: Long? = null,
+                      /** 0.3.21 diagnostics: the app can find the car now (a link in progress or up, or a hardware
+                       *  presence scan that delivers), and the key is awake. */
+                      val listening: Boolean = false, val keyAsleep: Boolean = false)
     val samples = ArrayList<Sample>()
 
     // ---------------- car ----------------
@@ -680,54 +692,132 @@ internal class SimWorld(
                 return if (_state.value == DkBleManager.State.SESSION_READY || _state.value == DkBleManager.State.CONNECTED) readRssi() else null
             } finally { linkOps-- }
         }
-        override fun reconnectLast(): Boolean { connect(null); return true }
         /**
-         * Direct connect from an offloaded presence result. SIM_PRESENCE_EDGE=1 replays a field
-         * case: the controller hears the car at -100 dBm, but a link cannot be established below
-         * about -94 - each attempt ends in status 133 after ~0.7 s, plus one immediate retry.
+         * 0.3.21 (field 20/10): DkBleManager rations scan starts ([com.openzeekr.app.ble.ScanStartLimiter], four per
+         * 30 s; Android allows five): every foreground scan and every (re)registration of the hardware presence scan
+         * is a start. A direct connect (a presence result, [reconnectLast]) is not. A new process starts a new ration.
          */
-        fun connectFromPresence(advertRssi: Int) {
-            if (!btOn || !appAlive) return
-            if (!PRESENCE_EDGE || advertRssi >= com.openzeekr.app.ble.WeakConnectGate.CONNECT_FLOOR_RSSI) { connect(null); return }
-            if (connectJob?.isActive == true || _state.value != DkBleManager.State.IDLE) return
-            _state.value = DkBleManager.State.CONNECTING
-            connectJob = scope.launch {
-                repeat(2) { attempt ->
-                    delay(if (attempt == 0) 700L else 400L + 700L)
-                    record("STATUS_133", "advert $advertRssi")
-                    if (trueRssi >= com.openzeekr.app.ble.WeakConnectGate.CONNECT_FLOOR_RSSI) {
-                        _state.value = DkBleManager.State.IDLE; connectJob = null; connect(null); return@launch
-                    }
-                }
-                _state.value = DkBleManager.State.IDLE
-            }
+        var scanStarts = com.openzeekr.app.ble.ScanStartLimiter(); private set
+        /** DkBleManager's status-133 recovery (the real policy); a new process starts a new one. */
+        private var status133 = com.openzeekr.app.ble.Status133RecoveryPolicy()
+        /** DkBleManager.lastDevice: the route of a direct reconnect, forgotten when the 133 recovery is exhausted. */
+        private var hasLastDevice = false
+        /** Android's own limit (five starts per 30 s, kept across a new process): a start beyond it is accepted
+         *  but the scan delivers nothing. Every start counts, the refused ones too. */
+        private val androidStarts = ArrayDeque<Long>()
+        fun androidStart(): Boolean {
+            while (androidStarts.isNotEmpty() && now() - androidStarts.first() >= com.openzeekr.app.ble.ScanStartLimiter.WINDOW_MS)
+                androidStarts.removeFirst()
+            androidStarts.addLast(now())
+            if (androidStarts.size > ANDROID_SCAN_STARTS) { record("SCAN_BLIND", "Android: more than $ANDROID_SCAN_STARTS starts in 30 s"); return false }
+            return true
         }
-        override fun connect(deviceMac: String?) {
-            if (!btOn || !appAlive) return
-            if (connectJob?.isActive == true || _state.value == DkBleManager.State.SESSION_READY ||
-                _state.value == DkBleManager.State.CONNECTED) return
-            if (service.keySleeping && now() >= service.sleepGraceUntilMs) return
-            _state.value = DkBleManager.State.SCANNING
+        /** The app process died: DkBleManager starts over. */
+        fun newProcess() {
+            scanStarts = com.openzeekr.app.ble.ScanStartLimiter(); status133 = com.openzeekr.app.ble.Status133RecoveryPolicy()
+            hasLastDevice = false
+        }
+        fun deferWeakPresence(rssi: Int) = status133.shouldDeferWeakPresence(rssi, clock.elapsedMs())
+        private val linkBusy get() = _state.value == DkBleManager.State.CONNECTING ||
+            _state.value == DkBleManager.State.CONNECTED || _state.value == DkBleManager.State.SESSION_READY
+        private val keyAsleep get() = service.keySleeping && now() >= service.sleepGraceUntilMs
+
+        /** DkBleManager.reconnectLast: straight to the last device, no scan; false without one. A direct connect
+         *  waits for the car's advert (here up to 10 s; Android ends it in a 133 later). */
+        override fun reconnectLast(): Boolean {
+            if (!btOn || !appAlive || keyAsleep) return false
+            if (!hasLastDevice || linkBusy || _state.value == DkBleManager.State.SCANNING) return false
+            _state.value = DkBleManager.State.CONNECTING
             val rc = rLinkNow()
             connectJob = scope.launch {
-                // A foreground scan finds the car only in range; give up after 10 s.
                 var waited = 0L
                 while (trueRssi < CONNECT_MIN_RSSI && waited < 10_000L) { delay(200); waited += 200 }
                 if (trueRssi < CONNECT_MIN_RSSI) { _state.value = DkBleManager.State.IDLE; return@launch }
-                _state.value = DkBleManager.State.CONNECTING
-                delay(rc.uniform(250.0, 700.0).toLong())
-                _state.value = DkBleManager.State.CONNECTED
-                lastNonIdleMs = now()
-                delay(rc.uniform(2_600.0, 3_600.0).toLong())   // GATT + DK handshake (field ~3.4 s)
-                if (trueRssi < physics.dropRssi) { _state.value = DkBleManager.State.IDLE; return@launch }
-                generation++
-                _state.value = DkBleManager.State.SESSION_READY
-                record("LINK_READY")
-                delay(rc.uniform(300.0, 5_000.0).toLong())
-                // The car pushes its status early in a new session. SIM_FIRST_STATUS_LOST=1 replays
-                // 0.2.6, which dropped that push (it arrives before "established").
-                if (System.getenv("SIM_FIRST_STATUS_LOST") != "1") pushStatus()
+                gatt(rc)
             }
+            return true
+        }
+        /**
+         * DkBleManager.connectFromPresence: a direct connect from the offloaded scan's result, no scan start. False
+         * for an advert at the edge of range ([com.openzeekr.app.ble.WeakConnectGate]): the caller scans instead.
+         * A foreground scan in progress is stopped for it.
+         */
+        fun connectFromPresence(advertRssi: Int): Boolean {
+            if (!btOn || !appAlive) return false
+            if (linkBusy) return true
+            if (com.openzeekr.app.ble.WeakConnectGate.tooWeak(advertRssi)) return false
+            connectJob?.cancel(); connectJob = null
+            hasLastDevice = true
+            _state.value = DkBleManager.State.CONNECTING
+            val rc = rLinkNow()
+            connectJob = scope.launch { gatt(rc) }
+            return true
+        }
+        /** DkBleManager.connect(null): a foreground scan (a scan start) that connects to the first advert in range,
+         *  or gives up after [SCAN_TIMEOUT_MS]. */
+        override fun connect(deviceMac: String?) {
+            if (!btOn || !appAlive) return
+            if (connectJob?.isActive == true || linkBusy || _state.value == DkBleManager.State.SCANNING) return
+            if (keyAsleep) return
+            if (!scanStarts.tryStart(clock.wallMs())) {
+                log('W', "ble", "scan start deferred: Android allows 5 scan starts per 30 s; the keep-alive retries")
+                record("SCAN_DEFERRED", "foreground")
+                _state.value = DkBleManager.State.IDLE
+                return
+            }
+            val delivers = androidStart()
+            _state.value = DkBleManager.State.SCANNING
+            val rc = rLinkNow()
+            connectJob = scope.launch {
+                var waited = 0L
+                while ((!delivers || trueRssi < CONNECT_MIN_RSSI) && waited < SCAN_TIMEOUT_MS) { delay(200); waited += 200 }
+                if (!delivers || trueRssi < CONNECT_MIN_RSSI) { _state.value = DkBleManager.State.IDLE; return@launch }
+                hasLastDevice = true
+                gatt(rc)
+            }
+        }
+        /**
+         * connectGatt to a car in range: connected after 250-700 ms, the DK handshake (field ~3.4 s) after that. Below
+         * the world's [SimPhysics.edge133Rssi] the attempt ends in status 133 instead, and DkBleManager's recovery runs:
+         * one fast direct retry of the recent route, then a fresh presence scan through the service.
+         */
+        private suspend fun gatt(rc: SimRandom) {
+            _state.value = DkBleManager.State.CONNECTING
+            val edge = physics.edge133Rssi
+            if (edge != null && trueRssi < edge) {
+                delay(rc.uniform(300.0, 700.0).toLong())
+                record("STATUS_133", "%.0f dBm".format(trueRssi))
+                connectJob = null
+                _state.value = DkBleManager.State.IDLE
+                if (status133.onFailure(hasLastDevice, clock.elapsedMs()) == com.openzeekr.app.ble.Status133RecoveryPolicy.Route.RETRY_RECENT_ROUTE) {
+                    log('W', "ble", "status 133 - one fast retry of recent presence route")
+                    scope.launch {
+                        delay(STATUS_133_DIRECT_RETRY_DELAY_MS)
+                        if (_state.value == DkBleManager.State.IDLE && !reconnectLast()) service.onStatus133Recovery()
+                    }
+                } else {
+                    hasLastDevice = false
+                    log('W', "ble", "status 133 - recent route exhausted; immediate fresh scan")
+                    scope.launch {
+                        delay(STATUS_133_RESCAN_DELAY_MS)
+                        if (_state.value == DkBleManager.State.IDLE) service.onStatus133Recovery()
+                    }
+                }
+                return
+            }
+            delay(rc.uniform(250.0, 700.0).toLong())
+            _state.value = DkBleManager.State.CONNECTED
+            lastNonIdleMs = now()
+            delay(rc.uniform(2_600.0, 3_600.0).toLong())   // GATT + DK handshake (field ~3.4 s)
+            if (trueRssi < physics.dropRssi) { _state.value = DkBleManager.State.IDLE; return }
+            generation++
+            status133.onSessionReady()
+            _state.value = DkBleManager.State.SESSION_READY
+            record("LINK_READY")
+            delay(rc.uniform(300.0, 5_000.0).toLong())
+            // The car pushes its status early in a new session. SIM_FIRST_STATUS_LOST=1 replays 0.2.6, which
+            // dropped that push (it arrives before "established").
+            if (System.getenv("SIM_FIRST_STATUS_LOST") != "1") pushStatus()
         }
         override fun disconnect() {
             connectJob?.cancel(); connectJob = null
@@ -773,6 +863,10 @@ internal class SimWorld(
         var sleepGraceUntilMs = 0L; private set
         var presenceArmed = false; private set
         private var presenceMode = 0 // 0 low power, 1 balanced (approach), 2 low latency
+        /** False when Android refused the registration silently (more than five starts in 30 s): armed, but blind. */
+        private var presenceDelivers = true
+        /** Diagnostics: a hardware presence scan is registered and delivers. */
+        val presenceListening get() = presenceArmed && presenceDelivers
         private var presenceSeenSinceMs = -1L
         private var earlyUntilMs = 0L
         private var savedEarlyRssi: Int? = null
@@ -786,17 +880,32 @@ internal class SimWorld(
         private val offload get() = config.presenceOffloadEnabled
         private val moving get() = motion.state.value == MotionMonitor.Motion.MOVING
 
+        /**
+         * DkBleManager.armPresenceScan. A scan already running in this mode keeps running (study C, 18/10: restarting
+         * its latency on every keep-alive re-arm (8 s) let a low-power scan find the car only at the door). Another
+         * mode re-registers the scan: 0.3.20 stops the running scan first, and when the scan-start ration
+         * ([SimLink.scanStarts]) refuses the new one nothing is left (field 20/10: 24 s without a scan).
+         */
         private fun arm(lowLatency: Boolean, approach: Boolean): Boolean {
             if (!btOn) return false
-            val mode = if (lowLatency) 2 else if (approach) 1 else 0
-            // As DkBleManager.armPresenceScan: a scan already running in this mode keeps running. Study C (18/10):
-            // restarting its latency on every keep-alive re-arm (8 s) let a low-power scan find the car only at the door.
+            val mode = if (approach && lowLatency) 2 else if (approach) 1 else 0
             if (presenceArmed && presenceMode == mode) return true
+            if (presenceArmed) disarm()
+            if (!link.scanStarts.tryStart(clock.wallMs())) {
+                log('W', "svc", "presence scan arm deferred (Android allows 5 scan starts per 30 s)")
+                record("SCAN_DEFERRED", "presence")
+                return false
+            }
+            presenceDelivers = link.androidStart()
             presenceArmed = true; presenceSeenSinceMs = -1L
             presenceMode = mode
+            log('D', "ble", "presence scan ARMED (${MODE_NAMES[mode]})")
             return true
         }
-        private fun disarm() { presenceArmed = false; presenceSeenSinceMs = -1L }
+        private fun disarm() {
+            if (presenceArmed) log('D', "ble", "presence scan DISARMED")
+            presenceArmed = false; presenceSeenSinceMs = -1L
+        }
 
         fun tick(appRuns: Boolean) {
             if (appRuns && now() >= nextSleepPollMs) { nextSleepPollMs = now() + KEY_SLEEP_POLL_MS; stationaryKeySecurity() }
@@ -844,7 +953,10 @@ internal class SimWorld(
                         initialProbe = true
                         log('D', "svc", "keep-alive: initial presence probe (already-at-car case)")
                         link.connect(null)
-                    } else arm(lowLatency = moving && now() < fastPresenceUntilMs, approach = moving)
+                    } else if (!arm(lowLatency = moving && now() < fastPresenceUntilMs, approach = moving)) {
+                        log('W', "svc", "keep-alive: hardware presence registration failed; trying foreground fallback")
+                        link.connect(null)
+                    }
                 } else {
                     if (aggressive) log('D', "svc", "keep-alive: bounded approach recovery — aggressive scan-connect")
                     link.connect(null)
@@ -880,7 +992,7 @@ internal class SimWorld(
                         disarm()
                         controller.onPresenceMatch(prepared)
                         log('D', "svc", "confirmed motion: engaging saved early presence (rssi=$prepared)")
-                        link.connectFromPresence(prepared)
+                        if (!link.connectFromPresence(prepared)) recoveryProbe("confirmed motion", confirmedMotionWake = true)
                     } else recoveryProbe("confirmed motion", confirmedMotionWake = true)
                 } else if (!com.openzeekr.app.ble.EarlyPresencePolicy.mayRetain(keySleeping, moving, earlyUntilMs, now())) {
                     disarm()
@@ -908,10 +1020,23 @@ internal class SimWorld(
             }
         }
 
+        /** ProximityService.onStatus133Recovery: re-arm the hardware presence scan in approach mode, else scan. */
+        fun onStatus133Recovery() {
+            if (!appAlive || !btOn) return
+            val armed = offload && arm(lowLatency = false, approach = true)
+            if (armed) {
+                recoveryUntilMs = now() + MOTION_PRESENCE_RECOVERY_MS
+                log('D', "svc", "status 133: hardware presence re-armed; preserving arrival epoch")
+            } else {
+                log('W', "svc", "status 133: offload unavailable; bounded foreground fallback")
+                link.connect(null)
+            }
+        }
+
         /** The offloaded scan runs in the BT controller (no CPU); a match is a PendingIntent wake-up. */
         private fun presenceDelivery() {
-            if (!presenceArmed || !btOn || link.state.value != DkBleManager.State.IDLE) return
-            if (trueRssi < (if (PRESENCE_EDGE) -100.0 else PRESENCE_MIN_RSSI)) { presenceSeenSinceMs = -1L; return }
+            if (!presenceArmed || !presenceDelivers || !btOn || link.state.value != DkBleManager.State.IDLE) return
+            if (trueRssi < physics.presenceFloorRssi) { presenceSeenSinceMs = -1L; return }
             if (presenceSeenSinceMs < 0) presenceSeenSinceMs = now()
             val latency = when (presenceMode) { 2 -> 400L; 1 -> 1_500L; else -> 5_000L }
             if (now() - presenceSeenSinceMs < latency) return
@@ -919,12 +1044,13 @@ internal class SimWorld(
             val r = readRssi()
             wake(10_000L)   // the PendingIntent broadcast holds a wakelock
             if (keySleeping) {
-                if (com.openzeekr.app.ble.EarlyPresencePolicy.mayRetain(keySleeping, moving, earlyUntilMs, now())) {
+                if (com.openzeekr.app.ble.EarlyPresencePolicy.mayRetain(keySleeping, moving, earlyUntilMs, now()) &&
+                    !link.deferWeakPresence(r)) {
                     savedEarlyRssi = r; disarm()
                     log('D', "svc", "early presence saved pending confirmed motion (rssi=$r)")
                 } else {
                     log('D', "svc", "presence ignored: stationary key is sleeping")
-                    disarm()
+                    if (!com.openzeekr.app.ble.EarlyPresencePolicy.mayRetain(keySleeping, moving, earlyUntilMs, now())) disarm()
                 }
                 return
             }
@@ -933,7 +1059,12 @@ internal class SimWorld(
                 else com.openzeekr.app.ble.WeakConnectGate.PresenceAction.CONNECT
             when (action) {
                 com.openzeekr.app.ble.WeakConnectGate.PresenceAction.CONNECT -> {
-                    controller.onPresenceMatch(r); disarm(); link.connectFromPresence(r)
+                    if (link.deferWeakPresence(r)) {
+                        log('D', "svc", "status 133: deferring weak presence at rssi=$r; keeping offloaded scan armed")
+                        return
+                    }
+                    controller.onPresenceMatch(r); disarm()
+                    if (!link.connectFromPresence(r)) link.connect(null)
                 }
                 com.openzeekr.app.ble.WeakConnectGate.PresenceAction.FOREGROUND_SCAN -> {
                     log('D', "svc", "presence at the edge of range while moving - foreground scan")
@@ -1090,6 +1221,7 @@ internal class SimWorld(
         safetyHolds.clear()   // a dead process holds no wakelock
         appAlive = false
         service.reset()
+        link.newProcess()
     }
     private fun startApp() {
         appScope = CoroutineScope(SupervisorJob() + appDispatcher)
@@ -1141,7 +1273,9 @@ internal class SimWorld(
             if (now() % 1_000L < dt) samples += Sample(now(), distanceM, car.locked, walking,
                 appBelievesUnlocked = appAlive && controller.believesCarUnlocked, cpuAwake = awake, gnssOn = gnssActive > 0,
                 linkUp = link.state.value == DkBleManager.State.SESSION_READY, appAlive = appAlive,
-                trueRssi = trueRssi, motionState = motion.state.value.name, steps = motion.observedSteps)
+                trueRssi = trueRssi, motionState = motion.state.value.name, steps = motion.observedSteps,
+                listening = appAlive && (link.state.value != DkBleManager.State.IDLE || service.presenceListening),
+                keyAsleep = service.keySleeping)
             left -= dt
         }
     }
@@ -1269,7 +1403,13 @@ internal class SimWorld(
         /** Time-keyed noise for paired comparisons (default on; SIM_KEYED=0 = the sequential streams). */
         val KEYED = System.getenv("SIM_KEYED") != "0"
         const val CONNECT_MIN_RSSI = -96.0
-        val PRESENCE_EDGE = System.getenv("SIM_PRESENCE_EDGE") == "1"
+        /** DkBleManager: a foreground scan gives up after 20 s; the 133 recovery waits these before its next step. */
+        const val SCAN_TIMEOUT_MS = 20_000L
+        const val STATUS_133_DIRECT_RETRY_DELAY_MS = 350L
+        const val STATUS_133_RESCAN_DELAY_MS = 400L
+        /** Android: an app's sixth BLE scan start within 30 s is accepted but delivers nothing. */
+        const val ANDROID_SCAN_STARTS = 5
+        private val MODE_NAMES = listOf("LOW_POWER idle", "BALANCED approach", "LOW_LATENCY motion wake")
         val WEAK_GATE = System.getenv("SIM_WEAK_GATE") != "0"
         val STEP_COUNTER = System.getenv("SIM_STEP_COUNTER") != "0"
         const val SUPERVISION_MS = 3_000L

@@ -242,6 +242,12 @@ internal object SimScenarios {
             listOf(Mark("-"), PhoneInCar(60_000), CarUnlocksItself, OpenDoor, Stand(3_000), Shuffle(10_000), Mark("expect-lock"),
                 Walk(15.0, 1.4), Stand(15_000, Facing.AWAY, -2.0, indoor = true), Walk(20.0, 1.0),
                 Stand(150_000, Facing.AWAY, -8.0, indoor = true))),
+        // 0.3.21 (field 20/10): the key asleep in the house, then out of the door (15 m) to the car. The phone heard the
+        // car indoors at about -100, two connects at the edge ended in status 133, and the re-armed presence scan was
+        // stopped for a mode change the scan-start ration then refused: 24 s without a scan, opened by hand.
+        Scenario("F53 key asleep in the house, out to the car", "inside 2.5 min (the key sleeps), 8 s to the back door, 15 m to the car", 15.0,
+            listOf(Stand(150_000, Facing.AWAY, -10.0, indoor = true), Mark("expect-unlock"), Fidget(8_000, -10.0),
+                Walk(1.0), Stand(4_000), OpenDoor, Stand(20_000, shadowDb = -6.0))),
     )
 
     /** Every field incident and the families that reproduce it (incident history, 14/10). */
@@ -278,6 +284,8 @@ internal object SimScenarios {
         FieldCase("#30 14/10 0.2.16", "no auto-Lock (step detector silent)", listOf("F29", "F22", "F04")),
         FieldCase("#31 18/10 0.3.13", "quick walk (rain): steps late after a short stop at the car; open just in time", listOf("F46", "F15", "F16")),
         FieldCase("#32 16/10+19/10 0.3.18", "home by car: no steps after the drive; alarm just before the very-deep Lock", listOf("F52", "F50", "F42")),
+        FieldCase("#33 20/10 0.3.20", "no open on approach: 133 at the edge, then 24 s without a scan (scan-start ration)", listOf("F53", "F07", "F17"),
+            "world edge-133"),
     )
 
     /**

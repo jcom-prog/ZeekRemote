@@ -66,9 +66,10 @@ internal object SimRunner {
      *  0.3.12 (user decision 16/10): quick STILL, the hand wobble, and the field of 16/10 in one world.
      *  0.3.13 (user decision 17/10): the strong spot also while walking.
      *  Quick walk 18/10 (user decision): late steps up to 18 s, already after 5 s of standing (steps-late).
-     *  0.3.19 (user decision 18/10): steps that stall in the middle of a walk, and a link that holds deeper indoors. */
+     *  0.3.19 (user decision 18/10): steps that stall in the middle of a walk, and a link that holds deeper indoors.
+     *  0.3.21 (user decision 20/10): connects at the edge of range that end in status 133. */
     val WORST_CASES = listOf("steps-silent", "steps-dead", "gps-poor", "ar-poor", "signal-flat", "steps-late", "strong-spot", "ar-quick-still",
-        "hand-wobble", "field-like", "strong-spot-walk", "steps-stall", "link-holds", "steps-after-drive")
+        "hand-wobble", "field-like", "strong-spot-walk", "steps-stall", "link-holds", "steps-after-drive", "edge-133")
 
     /** The world of a run. A stress world depends on the seed only, so two app versions meet the same world. */
     fun physicsFor(suite: String, seed: Long): SimPhysics = when (suite) {
@@ -96,6 +97,9 @@ internal object SimRunner {
         // Study J (field 16/10-19/10): after a drive the steps came only after 12-25 s of walking, at once, or not at all,
         // and Activity Recognition said MOVING for minutes.
         "steps-after-drive" -> SimPhysics(name = suite, afterDriveReleaseMinMs = 12_000L, afterDriveReleaseMaxMs = 25_000L, dropRssi = -107.0)
+        // Field 20/10 (phone in a pocket): the presence scan heard the car indoors at about -100; two connects at an advert
+        // of about -90 ended in status 133, one a few dB stronger connected. Here every connect below -90 fails.
+        "edge-133" -> SimPhysics(name = suite, presenceFloorRssi = -100.0, edge133Rssi = -90.0)
         // The field of 16/10 together: late steps after standing, quick STILL (profileFor), poor GPS as in
         // "gps-poor", and the hand wobble.
         "field-like" -> SimPhysics(name = suite, lateStepsMinMs = 8_000L, lateStepsMaxMs = 14_000L,
