@@ -108,7 +108,10 @@ object Logx {
     fun clear() { _lines.value = emptyList() }
 
     /** Unit tests only (the whole-app simulator): receives every line, whatever the gates. */
-    @Volatile internal var testSink: ((level: Char, area: String, msg: String) -> Unit)? = null
+    private val testSinkTL = ThreadLocal<((level: Char, area: String, msg: String) -> Unit)?>()
+    internal var testSink: ((level: Char, area: String, msg: String) -> Unit)?
+        get() = testSinkTL.get()
+        set(value) = testSinkTL.set(value)
 
     /** Full log as a single copy-pasteable string. */
     fun dump(): String = _lines.value.joinToString("\n")

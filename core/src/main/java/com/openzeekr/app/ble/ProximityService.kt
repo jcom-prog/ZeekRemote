@@ -115,7 +115,19 @@ class ProximityService : Service() {
         // A wake-up sensor only guarantees CPU time for delivery of its callback. Hold a short,
         // bounded bridge across the 1.5 s motion-confirmation window; scan/connect owns the normal
         // wakelock after recovery begins. This is never a standing idle wakelock.
-        deps.motion.onHardwareWake = { acquireBridgeWakeLock(HARDWARE_WAKE_BRIDGE_MS) }
+        deps.motion.onHardwareWake = {
+            acquireBridgeWakeLock(HARDWARE_WAKE_BRIDGE_MS)
+            // Measurement version (battery plan 20/10): count the first-movement wake, sample the fuel
+            // gauge (the CPU is awake right now), and on a pulse day run the 10 s early-wake pulse -
+            // LOGGING only; nothing decides on it.
+            runCatching {
+                deps.batteryMeter.onSignificantFire()
+                deps.batteryMeter.sample("hardware wake")
+                if (deps.batteryMeter.pulseDayNow()) deps.motion.earlyWakePulse { walking ->
+                    deps.batteryMeter.onPulse(MotionMonitor.EARLY_WAKE_PULSE_MS, 0.0, 0.0, walking, null)
+                }
+            }
+        }
         deps.ble.onStatus133Recovery = {
             scope.launch {
                 val offload = deps.config.config.value.presenceOffloadEnabled
@@ -357,6 +369,9 @@ class ProximityService : Service() {
                 }
             }
             var nextDelayMs = RECONNECT_INTERVAL_MS
+            // Measurement version: one fuel-gauge sample per keep-alive round (CPU already awake);
+            // the meter itself rate-bounds to one per minute.
+            runCatching { deps.batteryMeter.sample("keep-alive") }
             if (deps.ble.hasCredential && deps.ble.bluetoothAvailable) {
                 val offload = deps.config.config.value.presenceOffloadEnabled
                 when (deps.ble.state.value) {

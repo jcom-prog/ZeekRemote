@@ -90,7 +90,7 @@ android {
         unitTests.isReturnDefaultValues = true
         // 0.3.9: the simulation gate now keeps ~9 500 runs (the owner's worst cases added); the
         // default 512 MB test heap spent most of its time collecting garbage.
-        unitTests.all { it.maxHeapSize = "3g" }
+        unitTests.all { it.maxHeapSize = "6g" }
     }
 }
 

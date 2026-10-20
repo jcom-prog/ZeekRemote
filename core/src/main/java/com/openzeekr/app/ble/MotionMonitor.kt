@@ -74,6 +74,11 @@ class MotionMonitor(context: Context) : ProximityMotion {
     // does not deliver screen-off (field test). Read on demand via flush (see [observedSteps]).
     private val stepCounter: Sensor? = sensors?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
     private val tally = StepTally()
+    // Measurement version (doorbraak C): the app's own step counter in the unlock window, logs only.
+    private val power = appCtx.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+    private val ownTracker = OwnMotionTracker(sensors) {
+        "${tally.summary()} ar=${_state.value} screen=${if (power?.isInteractive == true) "on" else "off"}"
+    }
     @Volatile private var stepCounterActive = false
     @Volatile private var lastStepFlushElapsedMs = 0L
 
@@ -116,6 +121,24 @@ class MotionMonitor(context: Context) : ProximityMotion {
 
     /** Invoked once on each STILL→MOVING edge (any source). Lets the caller cancel a long idle sleep. */
     @Volatile override var onMovingEdge: (() -> Unit)? = null
+
+    /** Measurement version (doorbraak C): see [ProximityMotion.ownWindow]. */
+    override fun ownWindow(active: Boolean) {
+        if (active) ownTracker.extend() else ownTracker.stop("unlock window closed")
+    }
+
+    /**
+     * Measurement version (battery plan 20/10): the 10 s early-wake pulse on a pulse day - the own
+     * tracker reads the accelerometer briefly right after the first-movement wake, and [onDone] hears
+     * whether real walking was seen. Skipped while the unlock window already runs the tracker (its
+     * deadline must not shrink); the walk then shows in that window's own lines.
+     */
+    fun earlyWakePulse(onDone: (walking: Boolean) -> Unit) {
+        if (ownTracker.running) return
+        val steps0 = ownTracker.steps
+        ownTracker.extend(EARLY_WAKE_PULSE_MS)
+        stillHandler.postDelayed({ onDone(ownTracker.steps - steps0 >= 2) }, EARLY_WAKE_PULSE_MS + 500L)
+    }
 
     /** Lets the service bridge the 1.5 s security debounce with a short, bounded CPU wake. */
     @Volatile var onHardwareWake: (() -> Unit)? = null
@@ -378,6 +401,8 @@ class MotionMonitor(context: Context) : ProximityMotion {
 
         // Must match the <attribution android:tag> declared in the manifest.
         private const val ATTRIBUTION_TAG = "proximity"
+        /** Measurement version (battery plan 20/10): the early-wake pulse's bound. */
+        const val EARLY_WAKE_PULSE_MS = 10_000L
         private const val STEP_FLUSH_INTERVAL_MS = 1_000L
         /** Measurement log: at most one line per step sensor per this interval while it delivers. */
         private const val MEASURE_LOG_MS = 10_000L

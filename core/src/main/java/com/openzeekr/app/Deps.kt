@@ -107,6 +107,8 @@ class Deps(context: Context) {
     val rpa = RpaController(ble.session, appScope, phoneStatus::stateByte, rssi = ble::pollRemoteRssi, available = false)
     /** Wakelock-free motion state (still vs moving) for proximity cadence gating. */
     val motion = com.openzeekr.app.ble.MotionMonitor(appCtx)
+    /** Measurement version (battery plan 20/10): the fuel-gauge day book; sampled only at awake moments. */
+    val batteryMeter = com.openzeekr.app.util.BatteryMeter(appCtx)
     val proximity: ProximityController = ProximityController(
         appCtx, config, lock, ble, motion, appScope,
         // Cloud lock fallback for the walk-away lock when BLE won't confirm — never leave the car open.

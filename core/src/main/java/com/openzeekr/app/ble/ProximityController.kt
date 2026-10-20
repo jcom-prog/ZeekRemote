@@ -239,6 +239,9 @@ class ProximityController internal constructor(
             if (armedUnlockedState == value) return
             armedUnlockedState = value
             runCatching { stateStore.save(ProximityStateStore.Saved(value, clock.wallMs(), lastUnlockSource)) }
+            // Measurement version (doorbraak C): the own step counter runs exactly while the car is
+            // believed open (the CPU is awake for the departure proof then). Logs only.
+            runCatching { motion.ownWindow(value) }
         }
     /** Read-only view for the simulator's oracles: does the app believe the car is open (armed)? */
     internal val believesCarUnlocked: Boolean get() = armedUnlocked
@@ -282,7 +285,11 @@ class ProximityController internal constructor(
     private var counterAtUnlock: Long? = null
     private var strongestRssiSinceUnlock = Int.MIN_VALUE
     private var lastStrongNearAtMs = 0L
-        set(value) { field = value; stepsAtLastStrongNear = motion.observedSteps; counterAtLastStrongNear = motion.counterSteps }
+        set(value) {
+            field = value; stepsAtLastStrongNear = motion.observedSteps; counterAtLastStrongNear = motion.counterSteps
+            // Measurement version: every strong at-the-car reading re-extends the own counter's window.
+            if (armedUnlockedState) runCatching { motion.ownWindow(true) }
+        }
     // Step count at the latest strong at-the-car reading (null without a step source).
     private var stepsAtLastStrongNear: Long? = null
     // The hub counter's own total at that reading: a baseline per source (0.3.2, simulation audit C).

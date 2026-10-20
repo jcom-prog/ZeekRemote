@@ -116,21 +116,55 @@ internal object SimRunner {
     }
 
     /** [onRun] sees every run with its full log (traces); the log is dropped afterwards to bound memory. */
-    fun run(suites: List<String>, seeds: Int, only: List<String>?, onRun: ((SimResult) -> Unit)? = null): List<SimResult> = suites.flatMap { suite ->
-        SimScenarios.matrix(seeds).filter { r -> only == null || only.any { r.first.family.startsWith(it) } }.map { (sc, carry, mp) ->
-            val (baseProfile, seed) = mp
-            val profile = profileFor(suite, baseProfile)
-            val physics = physicsFor(suite, seed)
-            val w = SimWorld(seed, profile, carry, sc.startM, sc.gnssAccuracyM, carRefusesKeyLock = sc.carRefusesKeyLock,
-                keyEdgeRssi = sc.keyEdgeRssi, physics = physics, cloudDown = sc.cloudDown)
-            // 0.3.1: SIM_LEARN_VISITS ordinary visits in the same world first (self-calibration).
-            val learning = if (LEARN_VISITS > 0) SimScenarios.learningVisits(SimRandom(seed xor 0x1EA2_0F_CA1L), LEARN_VISITS)
-                else emptyList()
-            w.play(sc.legs, learning)
-            SimResult(suite, sc, carry, profile, seed, physics, SimOracle.check(w), w).also { r ->
-                onRun?.invoke(r)
-                w.logLines.clear(); w.logLines.trimToSize()
+    /** Study (doorbraak D): worlds are independent; SIM_PARALLEL workers run them, results stay in order. */
+    private val PARALLEL = (System.getenv("SIM_PARALLEL") ?: "1").toInt()
+
+    private fun runOne(suite: String, sc: Scenario, carry: Carry, mp: Pair<MotionProfile, Long>): SimResult {
+        val (baseProfile, seed) = mp
+        val profile = profileFor(suite, baseProfile)
+        val physics = physicsFor(suite, seed)
+        val w = SimWorld(seed, profile, carry, sc.startM, sc.gnssAccuracyM, carRefusesKeyLock = sc.carRefusesKeyLock,
+            keyEdgeRssi = sc.keyEdgeRssi, physics = physics, cloudDown = sc.cloudDown)
+        // 0.3.1: SIM_LEARN_VISITS ordinary visits in the same world first (self-calibration).
+        val learning = if (LEARN_VISITS > 0) SimScenarios.learningVisits(SimRandom(seed xor 0x1EA2_0F_CA1L), LEARN_VISITS)
+            else emptyList()
+        w.play(sc.legs, learning)
+        return SimResult(suite, sc, carry, profile, seed, physics, SimOracle.check(w), w)
+    }
+
+    fun run(suites: List<String>, seeds: Int, only: List<String>?, onRun: ((SimResult) -> Unit)? = null): List<SimResult> {
+        val jobs = suites.flatMap { suite ->
+            SimScenarios.matrix(seeds).filter { r -> only == null || only.any { r.first.family.startsWith(it) } }
+                .map { suite to it }
+        }
+        fun collect(r: SimResult): SimResult {
+            onRun?.invoke(r)
+            r.world.logLines.clear(); r.world.logLines.trimToSize()
+            return r
+        }
+        if (PARALLEL <= 1) return jobs.map { (suite, j) -> collect(runOne(suite, j.first, j.second, j.third)) }
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(PARALLEL)
+        try {
+            // Bounded look-ahead: at most PARALLEL + 2 finished worlds wait with their logs in memory.
+            val ahead = PARALLEL + 2
+            val futures = arrayOfNulls<java.util.concurrent.Future<SimResult>>(jobs.size)
+            var submitted = 0
+            fun submitUpTo(n: Int) {
+                while (submitted < minOf(n, jobs.size)) {
+                    val (suite, j) = jobs[submitted]
+                    futures[submitted] = pool.submit(java.util.concurrent.Callable { runOne(suite, j.first, j.second, j.third) })
+                    submitted++
+                }
             }
+            submitUpTo(ahead)
+            return jobs.indices.map { i ->
+                val r = futures[i]!!.get()
+                futures[i] = null
+                submitUpTo(i + 1 + ahead)
+                collect(r)
+            }
+        } finally {
+            pool.shutdown()
         }
     }
 }
