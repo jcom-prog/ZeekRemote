@@ -74,6 +74,7 @@ on:
       - zeekremote-0.3.19-near-return
       - zeekremote-0.3.20-home-by-car
       - zeekremote-0.3.21-scan-and-prompt
+      - zeekremote-0.3.22-measure
 
 permissions:
   contents: read
@@ -442,6 +443,15 @@ jobs:
           grep -Fq 'Event.DEPARTURE_PROOF_PENDING -> "Leaving? The car is still unlocked" to' core/src/main/java/com/openzeekr/app/ble/UnverifiedLockNotifier.kt
           test -f core/src/test/java/com/openzeekr/app/ble/PresenceScanArmPolicyTest.kt
           test -f core/src/test/java/com/openzeekr/app/ble/sim/SimWalkBoutTest.kt
+          # 0.3.22 (measurement version, owner approval 20/10): the own step counter and turn detector log in the
+          # unlock window, the battery day book alternates pulse days, and nothing decides on either.
+          grep -Fq 'internal class OwnStepLogic {' core/src/main/java/com/openzeekr/app/ble/OwnStepLogic.kt
+          grep -Fq 'fun ownWindow(active: Boolean) {}' core/src/main/java/com/openzeekr/app/ble/ProximityPorts.kt
+          grep -Fq 'runCatching { motion.ownWindow(value) }' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'fun pulseDay(dayOfYear: Int): Boolean = dayOfYear % 2 == 0' core/src/main/java/com/openzeekr/app/util/BatteryLedger.kt
+          grep -Fq 'if (deps.batteryMeter.pulseDayNow()) deps.motion.earlyWakePulse { walking ->' core/src/main/java/com/openzeekr/app/ble/ProximityService.kt
+          test -f core/src/test/java/com/openzeekr/app/ble/OwnStepLogicTest.kt
+          test -f core/src/test/java/com/openzeekr/app/util/BatteryLedgerTest.kt
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -463,7 +473,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='145' versionName='0.3.21-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='146' versionName='0.3.22-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
