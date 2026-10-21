@@ -64,6 +64,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun ControlsScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
+    val ctx = LocalContext.current
     val bleState by deps.ble.state.collectAsState()
     val bleReady = bleState == DkBleManager.State.SESSION_READY
 
@@ -111,7 +112,8 @@ fun ControlsScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
                 QuickAction("Unlock", Icons.Filled.LockOpen, Modifier.weight(1f),
                     accent = MaterialTheme.colorScheme.primary) { door(lockIt = false) }
                 QuickAction("Lock", Icons.Filled.Lock, Modifier.weight(1f)) { door(lockIt = true) }
-                QuickAction("Climate", Icons.Filled.Thermostat, Modifier.weight(1f)) { fire("Climate On") { deps.control.send(Command.AC_ON) } }
+                // Carries the remembered setpoint + run time (ClimatePrefs), like the climate sheet.
+                QuickAction("Climate", Icons.Filled.Thermostat, Modifier.weight(1f)) { fire("Climate On") { deps.control.send(Command.AC_ON, savedAcExtras(ctx)) } }
                 QuickAction("Locate", Icons.Filled.Campaign, Modifier.weight(1f)) { fire("Flash + Horn") { deps.control.send(Command.FLASH_HORN) } }
             }
         }

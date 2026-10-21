@@ -75,6 +75,7 @@ on:
       - zeekremote-0.3.20-home-by-car
       - zeekremote-0.3.21-scan-and-prompt
       - zeekremote-0.3.22-measure
+      - zeekremote-0.3.23-climate
 
 permissions:
   contents: read
@@ -452,6 +453,14 @@ jobs:
           grep -Fq 'if (deps.batteryMeter.pulseDayNow()) deps.motion.earlyWakePulse { walking ->' core/src/main/java/com/openzeekr/app/ble/ProximityService.kt
           test -f core/src/test/java/com/openzeekr/app/ble/OwnStepLogicTest.kt
           test -f core/src/test/java/com/openzeekr/app/util/BatteryLedgerTest.kt
+          # 0.3.23 (owner approval 21/10): full climate sheet after the stock app — quick cool/heat
+          # presets, remembered run times on A/C + seats + wheel, range Lo..Hi, Parking Comfort greyed.
+          grep -Fq 'internal const val AC_TEMP_MIN = 17.0' app/src/main/java/com/openzeekr/app/ui/ClimatePrefs.kt
+          grep -Fq 'internal val DURATION_CHOICES = listOf(5, 10, 15, 20, 30, 45, 60)' app/src/main/java/com/openzeekr/app/ui/ClimatePrefs.kt
+          grep -Fq 'QuickClimateButton("Quick cool", Icons.Filled.AcUnit, Brand.accent, Modifier.weight(1f)) { quickSet(AC_TEMP_MIN) }' app/src/main/java/com/openzeekr/app/ui/VehicleScreen.kt
+          grep -Fq 'Text("Parking Comfort Mode", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Brand.muted)' app/src/main/java/com/openzeekr/app/ui/VehicleScreen.kt
+          grep -Fq 'ServiceParameter("SH.$pos.duration", durationMin.toString()), ServiceParameter("SV.$pos", "false"),' app/src/main/java/com/openzeekr/app/ui/VehicleScreen.kt
+          grep -Fq 'deps.control.send(Command.AC_ON, savedAcExtras(ctx))' app/src/main/java/com/openzeekr/app/ui/ControlsScreen.kt
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -473,7 +482,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='146' versionName='0.3.22-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='147' versionName='0.3.23-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

@@ -45,6 +45,8 @@ import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material.icons.filled.Window
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -660,19 +662,25 @@ private fun ClimateSheet(
     onCmd: (Command, List<ServiceParameter>) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val ctx = LocalContext.current
     // skipPartiallyExpanded → the sheet opens FULL height, so the whole cabin + the temperature bar
     // are visible at once (no half-height stop that hides the controls behind a swipe).
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     // Target A/C temperature (°C): the car doesn't report the setpoint (only interiorTemp), so seed
     // from the remembered value and persist changes via [onTempChange] (used by the home glyph too).
-    var temp by remember { mutableStateOf(initialTemp) }
+    // Clamped: 0.3.23 widened the range to the stock app's Lo..Hi (17.0–32.0).
+    var temp by remember { mutableStateOf(initialTemp.coerceIn(AC_TEMP_MIN, AC_TEMP_MAX)) }
+    // Remembered run times (the stock app's "Tijdsduur" rows): A/C, seat heat/vent, wheel heat.
+    var acMin by remember { mutableStateOf(readDurationMin(ctx, KEY_AC_DURATION)) }
+    var seatMin by remember { mutableStateOf(readDurationMin(ctx, KEY_SEAT_DURATION)) }
+    var steerMin by remember { mutableStateOf(readDurationMin(ctx, KEY_STEER_DURATION)) }
     // A/C ON + temperature as ONE explicit ZAF command (no reliance on AC_ON's base params + dedup).
     // WIRE value MUST be dot-decimal ("21.6"): the car rejects a locale comma ("21,6") — so format
     // AC.temp with Locale.US (fmt1 stays locale-aware, but only for on-screen display).
-    fun acOnParams() = listOf(
+    fun acOnParams(setTemp: Double = temp) = listOf(
         ServiceParameter("AC", "true"),
-        ServiceParameter("AC.temp", String.format(java.util.Locale.US, "%.1f", temp)),
-        ServiceParameter("AC.duration", "15"),
+        ServiceParameter("AC.temp", formatTempUs(setTemp)),
+        ServiceParameter("AC.duration", acMin.toString()),
     )
     // Debounce the setpoint: −/+ update `temp` instantly for the readout but only send ONE ZAF
     // command ~600 ms after the last tap, so stepping 22→26 doesn't fire five requests at the car.
@@ -684,6 +692,16 @@ private fun ClimateSheet(
         delay(600)
         onCmd(Command.CLIMATE_ZAF, acOnParams())
     }
+    // Quick cool / Quick heat (stock app "Snelle koeling / Snelle verwarming"): ONE proven A/C
+    // command with the setpoint at Lo/Hi and the remembered run time. The car manages its own fan;
+    // the stock app's possible turbo-fan flag isn't captured yet (capture session planned), so no
+    // fan parameter is sent. tempDirty=false first: cancels a pending debounced stepper send.
+    fun quickSet(t: Double) {
+        tempDirty = false
+        temp = t
+        onTempChange(t)
+        onCmd(Command.CLIMATE_ZAF, acOnParams(t))
+    }
     val cabinTemp = climate?.interiorTemp?.takeIf { it.isNotBlank() }
     val outsideTemp = climate?.exteriorTemp?.takeIf { it.isNotBlank() }
     val acOn = climate?.acOn == true
@@ -693,7 +711,30 @@ private fun ClimateSheet(
     var ventOn by remember { mutableStateOf(false) }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet, containerColor = MaterialTheme.colorScheme.surface) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 22.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        // Scrolls: 0.3.23 added the quick presets, Parking Comfort and the run-time rows to the sheet.
+        Column(
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp).padding(bottom = 22.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            // ---- quick presets (stock app row): Quick cool · climate power · Quick heat ----
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                QuickClimateButton("Quick cool", Icons.Filled.AcUnit, Brand.accent, Modifier.weight(1f)) { quickSet(AC_TEMP_MIN) }
+                Box(
+                    Modifier.size(52.dp).clip(CircleShape)
+                        .background(if (acOn) Brand.good.copy(alpha = .18f) else Brand.surface2)
+                        .clickable {
+                            if (acOn) onCmd(Command.CLIMATE_ZAF, listOf(ServiceParameter("AC", "false")))
+                            else onCmd(Command.CLIMATE_ZAF, acOnParams())
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Filled.PowerSettingsNew, "Climate power",
+                        tint = if (acOn) Brand.good else MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(24.dp))
+                }
+                QuickClimateButton("Quick heat", Icons.Filled.Whatshot, Brand.energy, Modifier.weight(1f)) { quickSet(AC_TEMP_MAX) }
+            }
+
             // ---- top-down cabin: wheel + climate readout + defrost, then front & rear seats ----
             Column(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(26.dp))
@@ -704,7 +745,11 @@ private fun ClimateSheet(
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.SpaceBetween) {
                     WheelHeatButton(steerOn) {
                         steerOn = !steerOn
-                        onCmd(if (steerOn) Command.STEER_WHEEL_ON else Command.STEER_WHEEL_OFF, emptyList())
+                        // ON carries the remembered run time (overrides the catalog's SW.duration default).
+                        onCmd(
+                            if (steerOn) Command.STEER_WHEEL_ON else Command.STEER_WHEEL_OFF,
+                            if (steerOn) listOf(ServiceParameter("SW.duration", steerMin.toString())) else emptyList(),
+                        )
                     }
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("Cabin", color = Brand.faint, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
@@ -715,20 +760,20 @@ private fun ClimateSheet(
                 }
                 // front row — copper-trimmed console between the seats
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    SeatCabinTile("Driver", "11", climate?.drvHeatSts, climate?.drvVentDetail, showSeatCool, Modifier.weight(1f), onCmd)
+                    SeatCabinTile("Driver", "11", climate?.drvHeatSts, climate?.drvVentDetail, showSeatCool, seatMin, Modifier.weight(1f), onCmd)
                     Box(Modifier.width(20.dp).height(104.dp).clip(RoundedCornerShape(8.dp))
                         .background(Brush.verticalGradient(listOf(ZCopper.copy(alpha = .5f), ZConsole))))
-                    SeatCabinTile("Passenger", "19", climate?.passHeatingSts, climate?.passVentDetail, showSeatCool, Modifier.weight(1f), onCmd)
+                    SeatCabinTile("Passenger", "19", climate?.passHeatingSts, climate?.passVentDetail, showSeatCool, seatMin, Modifier.weight(1f), onCmd)
                 }
                 // rear row
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SeatCabinTile("Rear L", "21", climate?.rlHeatingSts, climate?.rlVentDetail, showRearSeatCool, Modifier.weight(1f), onCmd)
+                    SeatCabinTile("Rear L", "21", climate?.rlHeatingSts, climate?.rlVentDetail, showRearSeatCool, seatMin, Modifier.weight(1f), onCmd)
                     Spacer(Modifier.width(20.dp))
-                    SeatCabinTile("Rear R", "29", climate?.rrHeatingSts, climate?.rrVentDetail, showRearSeatCool, Modifier.weight(1f), onCmd)
+                    SeatCabinTile("Rear R", "29", climate?.rrHeatingSts, climate?.rrVentDetail, showRearSeatCool, seatMin, Modifier.weight(1f), onCmd)
                 }
             }
 
-            // ---- bottom bar: temperature stepper · Ventilate · Climate power ----
+            // ---- temperature stepper · Ventilate (the climate power moved up to the quick row) ----
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Set the temperature", color = Brand.muted, fontSize = 12.sp)
@@ -736,20 +781,34 @@ private fun ClimateSheet(
                         Modifier.padding(top = 4.dp),
                         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        StepBtn("−") { if (temp > 15.5) { temp -= 0.5; tempDirty = true } }
+                        StepBtn("−") { if (temp > AC_TEMP_MIN) { temp -= 0.5; tempDirty = true } }
                         Text("${fmt1(temp)}°C", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                        StepBtn("+") { if (temp < 28.5) { temp += 0.5; tempDirty = true } }
+                        StepBtn("+") { if (temp < AC_TEMP_MAX) { temp += 0.5; tempDirty = true } }
                     }
                 }
                 CabinActionButton(Icons.Filled.Air, "Ventilate", ventOn, Brand.accent) {
                     ventOn = !ventOn
                     onCmd(if (ventOn) Command.CABIN_ON else Command.CABIN_OFF, emptyList())
                 }
-                Spacer(Modifier.width(12.dp))
-                CabinActionButton(Icons.Filled.PowerSettingsNew, "Climate", acOn, Brand.good) {
-                    if (acOn) onCmd(Command.CLIMATE_ZAF, listOf(ServiceParameter("AC", "false")))
-                    else onCmd(Command.CLIMATE_ZAF, acOnParams())
+            }
+
+            // Parking Comfort Mode: shown like the stock app, but OFF and disabled — its wire command
+            // isn't captured yet (capture session planned); an honest grey beats a dead toggle.
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                    Text("Parking Comfort Mode", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Brand.muted)
+                    Text("Not available yet — its command still has to be captured from the official app",
+                        color = Brand.faint, fontSize = 11.sp)
                 }
+                Switch(checked = false, onCheckedChange = null, enabled = false, colors = brandSwitchColors(Brand.good))
+            }
+
+            // ---- run times (stock app "Tijdsduur"): remembered, sent with every matching command ----
+            Column(Modifier.fillMaxWidth()) {
+                Text("Run time", color = Brand.faint, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                DurationRow("Air conditioning", acMin) { m -> acMin = m; writeDurationMin(ctx, KEY_AC_DURATION, m) }
+                DurationRow("Seat heating & ventilation", seatMin) { m -> seatMin = m; writeDurationMin(ctx, KEY_SEAT_DURATION, m) }
+                DurationRow("Steering wheel heating", steerMin) { m -> steerMin = m; writeDurationMin(ctx, KEY_STEER_DURATION, m) }
             }
         }
     }
@@ -761,6 +820,43 @@ private fun StepBtn(label: String, onClick: () -> Unit) {
         Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(Brand.surface2).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { Text(label, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface) }
+}
+
+/** Quick preset chip (stock app "Snelle koeling"/"Snelle verwarming"). */
+@Composable
+private fun QuickClimateButton(label: String, icon: ImageVector, tint: Color, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Row(
+        modifier.clip(RoundedCornerShape(14.dp)).background(Brand.surface2).clickable(onClick = onClick).padding(vertical = 13.dp),
+        horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, tint = tint, modifier = Modifier.size(17.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(label, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+/** One "Tijdsduur" row: label + the remembered minutes; tapping opens the stock app's choice list. */
+@Composable
+private fun DurationRow(label: String, minutes: Int, onPick: (Int) -> Unit) {
+    var menu by remember { mutableStateOf(false) }
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { menu = true }
+            .padding(horizontal = 4.dp, vertical = 11.dp),
+        horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, fontSize = 13.sp)
+        Box {
+            Text("$minutes min", color = Brand.accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DURATION_CHOICES.forEach { m ->
+                    DropdownMenuItem(
+                        text = { Text("$m min", color = if (m == minutes) Brand.accent else MaterialTheme.colorScheme.onSurface) },
+                        onClick = { menu = false; onPick(m) },
+                    )
+                }
+            }
+        }
+    }
 }
 
 // Zeekr interior palette (from the cabin reference shots): light warm-grey seats, a copper accent
@@ -776,13 +872,13 @@ private val ZConsole = Color(0xFF2C322E)
  * One seat in the cabin view — drawn Zeekr-style (light-grey back + headrest + copper centre
  * stripe) with two controls: heat (SH.<pos>) and vent/cool (SV.<pos>). Heat and cool are mutually
  * exclusive on a seat, so activating one zeroes the other. Each cycles 0→1→2→3→0; every step sends
- * ONE ZAF command. pos: 11=driver, 19=passenger, 21=rear-left, 29=rear-right. Levels seed from
- * climateStatus `*HeatSts` / `*VentDetail`.
+ * ONE ZAF command carrying the remembered run time. pos: 11=driver, 19=passenger, 21=rear-left,
+ * 29=rear-right. Levels seed from climateStatus `*HeatSts` / `*VentDetail`.
  */
 @Composable
 private fun SeatCabinTile(
     label: String, pos: String, seedHeat: String?, seedCool: String?, showCool: Boolean,
-    modifier: Modifier = Modifier, onCmd: (Command, List<ServiceParameter>) -> Unit,
+    durationMin: Int, modifier: Modifier = Modifier, onCmd: (Command, List<ServiceParameter>) -> Unit,
 ) {
     var heat by remember(seedHeat) { mutableStateOf(seedHeat?.toIntOrNull() ?: 0) }
     var cool by remember(seedCool) { mutableStateOf(seedCool?.toIntOrNull() ?: 0) }
@@ -792,7 +888,7 @@ private fun SeatCabinTile(
         if (n == 0) listOf(ServiceParameter("SH.$pos", "false"))
         else listOf(
             ServiceParameter("SH.$pos", "true"), ServiceParameter("SH.$pos.level", n.toString()),
-            ServiceParameter("SH.$pos.duration", "15"), ServiceParameter("SV.$pos", "false"),
+            ServiceParameter("SH.$pos.duration", durationMin.toString()), ServiceParameter("SV.$pos", "false"),
         ),
     )
     fun sendCool(n: Int) = onCmd(
@@ -800,7 +896,7 @@ private fun SeatCabinTile(
         if (n == 0) listOf(ServiceParameter("SV.$pos", "false"))
         else listOf(
             ServiceParameter("SV.$pos", "true"), ServiceParameter("SV.$pos.level", n.toString()),
-            ServiceParameter("SV.$pos.duration", "15"), ServiceParameter("SH.$pos", "false"),
+            ServiceParameter("SV.$pos.duration", durationMin.toString()), ServiceParameter("SH.$pos", "false"),
         ),
     )
 
@@ -965,19 +1061,4 @@ private fun rememberAssetBitmap(path: String): ImageBitmap? {
 private fun fmt(f: Float) = if (f % 1f == 0f) f.toInt().toString() else "%.1f".format(f)
 private fun fmt1(d: Double) = "%.1f".format(d)
 
-// Remembered A/C target temperature (°C). The car doesn't report the climate setpoint, so we keep the
-// last value the user set and use it for the home cool/heat glyph + to seed the climate sheet. Stored
-// in a tiny prefs file (per-viewer convenience); reads/writes are guarded so a locked/blocked store
-// never crashes the UI. Default 22.0.
-private const val CLIMATE_PREFS = "climate_prefs"
-private const val KEY_TARGET_TEMP = "target_temp_c"
-private fun readTargetTemp(ctx: android.content.Context): Double = runCatching {
-    ctx.getSharedPreferences(CLIMATE_PREFS, android.content.Context.MODE_PRIVATE)
-        .getFloat(KEY_TARGET_TEMP, 22f).toDouble()
-}.getOrDefault(22.0)
-private fun writeTargetTemp(ctx: android.content.Context, t: Double) {
-    runCatching {
-        ctx.getSharedPreferences(CLIMATE_PREFS, android.content.Context.MODE_PRIVATE)
-            .edit().putFloat(KEY_TARGET_TEMP, t.toFloat()).apply()
-    }
-}
+// The remembered A/C setpoint + run times moved to ClimatePrefs.kt (shared with ControlsScreen).
