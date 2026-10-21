@@ -205,6 +205,19 @@ class RemoteControlRepository(
         }
     }
 
+    /**
+     * Read-only diagnostic (0.3.24): the car's live control-mode flags (getVehicleState), sorted
+     * and formatted for on-screen inspection. Never actuates, retries or enables anything — it is
+     * the same GET [controlState] the mode toggles already seed from. Used to see which flag a
+     * stock-app toggle (e.g. Parking Comfort) flips, so its command can be wired once known.
+     * Values are mode flags only (no VIN/position/token), shown on the owner's own screen.
+     */
+    suspend fun observeControlState(): String = when (val r = controlState()) {
+        is CallResult.Ok -> if (r.value.isEmpty()) "No control-state fields returned."
+            else r.value.entries.sortedBy { it.key }.joinToString("\n") { "${it.key} = ${it.value}" }
+        is CallResult.Err -> "Read failed: ${r.message}"
+    }
+
     /** Garage lookup: the car's model / colour / render / nickname (best-effort). Also
      *  refreshes the persisted `isOwner` flag so provisioning picks owner vs shared correctly
      *  even on a session that logged in before that flag was captured. */

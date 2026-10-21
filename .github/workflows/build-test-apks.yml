@@ -76,6 +76,7 @@ on:
       - zeekremote-0.3.21-scan-and-prompt
       - zeekremote-0.3.22-measure
       - zeekremote-0.3.23-climate
+      - zeekremote-0.3.24-climate-state
 
 permissions:
   contents: read
@@ -461,6 +462,10 @@ jobs:
           grep -Fq 'Text("Parking Comfort Mode", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = Brand.muted)' app/src/main/java/com/openzeekr/app/ui/VehicleScreen.kt
           grep -Fq 'ServiceParameter("SH.$pos.duration", durationMin.toString()), ServiceParameter("SV.$pos", "false"),' app/src/main/java/com/openzeekr/app/ui/VehicleScreen.kt
           grep -Fq 'deps.control.send(Command.AC_ON, savedAcExtras(ctx))' app/src/main/java/com/openzeekr/app/ui/ControlsScreen.kt
+          # 0.3.24 (owner approval 21/10): read-only control-state dump so a stock-app toggle (Parking
+          # Comfort) can be matched to the flag it flips; never actuates, nothing written to the export.
+          grep -Fq 'suspend fun observeControlState(): String' core/src/main/java/com/openzeekr/app/remote/Repositories.kt
+          grep -Fq 'status = deps.control.observeControlState()' app/src/main/java/com/openzeekr/app/ui/SettingsScreen.kt
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -482,7 +487,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='147' versionName='0.3.23-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='148' versionName='0.3.24-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

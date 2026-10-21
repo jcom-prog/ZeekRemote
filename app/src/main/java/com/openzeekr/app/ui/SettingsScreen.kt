@@ -76,6 +76,7 @@ fun SettingsScreen(deps: Deps, modifier: Modifier = Modifier) {
     var cfg by remember { mutableStateOf(store.current()) }
     var status by remember { mutableStateOf("") }
     var observingCapabilities by remember { mutableStateOf(false) }
+    var readingControlState by remember { mutableStateOf(false) }
     var showHeroLab by remember { mutableStateOf(false) }
     var confirmSignOut by remember { mutableStateOf(false) }
     // Which log category is pending a sensitive-data confirmation: "http", "ble", or null.
@@ -315,6 +316,18 @@ fun SettingsScreen(deps: Deps, modifier: Modifier = Modifier) {
                 }
             }, modifier = Modifier.fillMaxWidth()) {
                 Text(if (observingCapabilities) "Reading vehicle capabilities…" else "Read vehicle capabilities")
+            }
+            // 0.3.24: read-only dump of the car's control-mode flags (getVehicleState). Lets the owner
+            // see which flag a stock-app toggle (e.g. Parking Comfort) flips. Shown on screen only;
+            // never actuates and nothing is written to the shared diagnostic export.
+            OutlinedButton(enabled = !readingControlState, onClick = {
+                readingControlState = true
+                scope.launch {
+                    try { status = deps.control.observeControlState() }
+                    finally { readingControlState = false }
+                }
+            }, modifier = Modifier.fillMaxWidth()) {
+                Text(if (readingControlState) "Reading climate & comfort state…" else "Read climate & comfort state")
             }
             // In-development tool: gated behind developer mode (tap the version 10x in About) so it
             // isn't shown to normal users between releases.
