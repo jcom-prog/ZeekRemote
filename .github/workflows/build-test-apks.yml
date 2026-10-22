@@ -77,6 +77,7 @@ on:
       - zeekremote-0.3.22-measure
       - zeekremote-0.3.23-climate
       - zeekremote-0.3.24-climate-state
+      - zeekremote-0.3.25-gnss-plausibility
 
 permissions:
   contents: read
@@ -466,6 +467,16 @@ jobs:
           # Comfort) can be matched to the flag it flips; never actuates, nothing written to the export.
           grep -Fq 'suspend fun observeControlState(): String' core/src/main/java/com/openzeekr/app/remote/Repositories.kt
           grep -Fq 'status = deps.control.observeControlState()' app/src/main/java/com/openzeekr/app/ui/SettingsScreen.kt
+          # 0.3.25 (owner approval 22/10): a proof window's first fix is held to the position this visit last knew
+          # for certain - no displacement at all for a phone that reported no motion and no step since (simulator
+          # F49: a jump straddling two windows locked the car at 4 m) - and the windows of a visit share that memory.
+          grep -Fq 'internal class DepartureFixMemory(anchor: DepartureFix, stepsAtAnchor: Long?)' core/src/main/java/com/openzeekr/app/ble/DepartureObservationWindow.kt
+          grep -Fq 'outcome = "departure_fix_implausible"' core/src/main/java/com/openzeekr/app/ble/DepartureObservationWindow.kt
+          grep -Fq 'fun implausibleDisplacement(known: DepartureFix, fix: DepartureFix, motionless: Boolean): Boolean' core/src/main/java/com/openzeekr/app/ble/DepartureSafetyEvidence.kt
+          grep -Fq 'internal fun distanceM(a: DepartureFix, b: DepartureFix): Double' core/src/main/java/com/openzeekr/app/ble/DepartureSafetyEvidence.kt
+          grep -Fq 'memory = departureMemory, lastMotionAtMs = ::lastMotionAt' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'departureMemory = DepartureFixMemory(fix, stepsForDepartureProof())' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'fun aJumpAlreadyActiveAtTheFirstFixOfAMotionlessPhoneIsQuarantined()' core/src/test/java/com/openzeekr/app/ble/DepartureObservationWindowTest.kt
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -487,7 +498,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='148' versionName='0.3.24-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='149' versionName='0.3.25-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

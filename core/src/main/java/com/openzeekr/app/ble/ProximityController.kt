@@ -264,6 +264,8 @@ class ProximityController internal constructor(
     private var lockConfirmationJob: Job? = null
     private val autoLockGate = AutomaticLockGate(AutomaticLockGate.Mode.ACTUATE)
     private var departureAnchor: DepartureFix? = null
+    /** 0.3.25: the position this visit last knew for certain ([DepartureFixMemory]); lives and dies with the anchor. */
+    private var departureMemory: DepartureFixMemory? = null
     private var departureAnchorJob: Job? = null
     private var nearDepartureAnchor: NearDepartureAnchor? = null
     private var linkDepartureJob: Job? = null
@@ -287,11 +289,15 @@ class ProximityController internal constructor(
     private var lastStrongNearAtMs = 0L
         set(value) {
             field = value; stepsAtLastStrongNear = motion.observedSteps; counterAtLastStrongNear = motion.counterSteps
+            // 0.3.25: at the car again - the position known for certain is the anchor, with the count just rebased.
+            departureAnchor?.let { departureMemory?.learn(it.copy(elapsedAtMs = clock.elapsedMs()), 0L) }
             // Measurement version: every strong at-the-car reading re-extends the own counter's window.
             if (armedUnlockedState) runCatching { motion.ownWindow(true) }
         }
     // Step count at the latest strong at-the-car reading (null without a step source).
     private var stepsAtLastStrongNear: Long? = null
+    /** 0.3.25: when the motion stack last saw the phone come to rest (fix clock; while moving "now", see [lastMotionAt]). */
+    private var motionEndedElapsedMs = 0L
     // The hub counter's own total at that reading: a baseline per source (0.3.2, simulation audit C).
     private var counterAtLastStrongNear: Long? = null
     // 0.3.19: a return to the car that never read strong ([ReturnToCarWatch]) and the step counts then.
@@ -414,7 +420,7 @@ class ProximityController internal constructor(
         pingInFlight = false; pingFailStreak = 0; lastPingMs = 0L
         linkLostAtMs = 0L; lostRssi = null; lostRssiSteps = null; lostRssiCounter = null; lostRssiAtMs = 0L
         relockRecoveryPending = false; relockProbeJob?.cancel(); relockProbeJob = null
-        departureAnchorJob?.cancel(); departureAnchorJob = null; departureAnchor = null
+        departureAnchorJob?.cancel(); departureAnchorJob = null; departureAnchor = null; departureMemory = null
         linkDepartureJob?.cancel(); linkDepartureJob = null
         departureProofAtMs = 0L
         departurePositionProofAtMs = 0L
@@ -436,7 +442,12 @@ class ProximityController internal constructor(
         _state.value = State(running = true, phase = Phase.PASSIVE, zone = Zone.UNKNOWN)
         ble.onInboundActivity = { activityWake?.complete(Unit) } // wake the unlocked idle-wait instantly
         walkBoutJob?.cancel()
-        walkBoutJob = scope.launch { motion.state.collect { onWalkMotion(it == MotionMonitor.Motion.MOVING && !motion.vehicleMotion) } }
+        walkBoutJob = scope.launch {
+            motion.state.collect {
+                onWalkMotion(it == MotionMonitor.Motion.MOVING && !motion.vehicleMotion)
+                if (it == MotionMonitor.Motion.STILL) motionEndedElapsedMs = clock.elapsedMs()
+            }
+        }
         motion.onMovingEdge = {
             stepStall.onMovingEdge(clock.wallMs())
             motionWake?.complete(Unit)   // wake the FAR-still approach sleep
@@ -560,7 +571,7 @@ class ProximityController internal constructor(
         lockStateCheckJob?.cancel(); lockStateCheckJob = null
         manualCloudLockCheck?.cancel(); manualCloudLockCheck = null
         measureUntilElapsedMs = 0L; _measuring.value = false
-        departureAnchorJob?.cancel(); departureAnchorJob = null; departureAnchor = null
+        departureAnchorJob?.cancel(); departureAnchorJob = null; departureAnchor = null; departureMemory = null
         linkDepartureJob?.cancel(); linkDepartureJob = null
         departureProofAtMs = 0L
         clearBleDeparture()
@@ -634,7 +645,7 @@ class ProximityController internal constructor(
 
     private fun onManualLockAcknowledged(source: String, bleConfirmed: Boolean, away: Boolean = false) {
         scope.launch {
-            departureAnchorJob?.cancel(); departureAnchorJob = null; departureAnchor = null
+            departureAnchorJob?.cancel(); departureAnchorJob = null; departureAnchor = null; departureMemory = null
             linkDepartureJob?.cancel(); linkDepartureJob = null
             farNoMotionCheck?.cancel(); farNoMotionCheck = null
             departureProofAtMs = 0L
@@ -687,7 +698,7 @@ class ProximityController internal constructor(
         val unlockElapsed = clock.elapsedMs()
         lockConfirmationJob?.cancel(); lockConfirmationJob = null
         lockJob?.cancel(); lockJob = null
-        departureAnchorJob?.cancel(); departureAnchor = null
+        departureAnchorJob?.cancel(); departureAnchor = null; departureMemory = null
         linkDepartureJob?.cancel(); linkDepartureJob = null
         farNoMotionCheck?.cancel(); farNoMotionCheck = null; farNoMotionCheckAtMs = 0L
         farNoMotionAttempts = 0; departureAlarmHolds = 0; departureAlarmDeepHolds = 0; driveMotionLogged = false
@@ -724,6 +735,7 @@ class ProximityController internal constructor(
                 if (!armedUnlocked || unlockObservedAtMs != now || !_state.value.running ||
                     !config().proximityEnabled) return@launch
                 departureAnchor = fix
+                departureMemory = DepartureFixMemory(fix, stepsForDepartureProof())
                 Logx.d("prox", "usable departure location anchor available")
                 if (linkLostAtMs != 0L)
                     scheduleLinkDepartureCheck()
@@ -1709,6 +1721,22 @@ class ProximityController internal constructor(
         if (armedUnlocked) observeReturnAtCar(smoothed)
     }
 
+    /**
+     * 0.3.25: when the phone was last known to be moving (fix clock): now while the motion stack does not say STILL,
+     * else the moment it last came to rest. The departure proof holds a motionless phone to its last known position.
+     */
+    private fun lastMotionAt(): Long =
+        if (motion.state.value == MotionMonitor.Motion.STILL) motionEndedElapsedMs else clock.elapsedMs()
+
+    /**
+     * Steps for the GNSS departure proof. 0.3.2 (simulation audit C): counted from the car (the latest strong
+     * reading), not from the unlock - approach steps after an unlock at 9 m, or steps before a long stay, are no
+     * evidence of leaving (calibrated F05: a location jump "proved" a departure at 1 m).
+     */
+    private fun stepsForDepartureProof(): Long? =
+        if (stepsAtLastStrongNear != null) stepsSince(stepsAtLastStrongNear, counterAtLastStrongNear)?.coerceAtLeast(0L)
+        else stepsAtUnlock?.let { baseline -> motion.observedSteps?.let { (it - baseline).coerceAtLeast(0L) } }
+
     private fun stepsSinceUnlock(): Long? = stepsAtUnlock?.let { baseline ->
         motion.observedSteps?.let { (it - baseline).coerceAtLeast(0L) }
     }
@@ -1848,15 +1876,9 @@ class ProximityController internal constructor(
         val observedUnlockAt = unlockObservedAtMs
         fun sameSession(): Boolean = armedUnlocked && unlockObservedAtMs == observedUnlockAt &&
             _state.value.running && config().proximityEnabled && departureAnchor === anchor
-        val confirmed = departureLocationSource.confirmsDeparture(anchor, steps = {
-            // 0.3.2 (simulation audit C): counted from the car (the latest strong reading), not from
-            // the unlock - approach steps after an unlock at 9 m, or steps before a long stay, are no
-            // evidence of leaving (calibrated F05: a location jump "proved" a departure at 1 m).
-            if (stepsAtLastStrongNear != null) stepsSince(stepsAtLastStrongNear, counterAtLastStrongNear)?.coerceAtLeast(0L)
-            else stepsAtUnlock?.let { baseline ->
-                motion.observedSteps?.let { (it - baseline).coerceAtLeast(0L) }
-            }
-        }, enabled = ::sameSession, bleCorroborated = ::departureBleCorroborated) && sameSession()
+        val confirmed = departureLocationSource.confirmsDeparture(anchor, steps = ::stepsForDepartureProof,
+            enabled = ::sameSession, bleCorroborated = ::departureBleCorroborated,
+            memory = departureMemory, lastMotionAtMs = ::lastMotionAt) && sameSession()
         if (confirmed) departureProofAtMs = clock.wallMs()
         else Logx.d("prox", "independent departure unverified: bounded live location proof unavailable " +
             "(stepsSinceUnlock=${stepsSinceUnlock() ?: "unavailable"} ${motion.stepSummary})")

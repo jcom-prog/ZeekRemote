@@ -3,6 +3,7 @@ package com.openzeekr.app.ble.sim
 import com.openzeekr.app.ble.ControlResult
 import com.openzeekr.app.ble.DepartureFix
 import com.openzeekr.app.ble.DepartureLocator
+import com.openzeekr.app.ble.DepartureFixMemory
 import com.openzeekr.app.ble.DepartureObservationWindow
 import com.openzeekr.app.ble.DkBleManager
 import com.openzeekr.app.ble.DkProtocol
@@ -1167,6 +1168,8 @@ internal class SimWorld(
                 val rg = keyed(3)
                 val acc = physics.gnssAccMedianM?.let { (it * kotlin.math.exp(physics.gnssAccSpread * rg.gaussian())).toFloat() } ?: base
                 val noise = acc / 2.0 * rg.gaussian() + worldGnssBias + if (worldGnssJumpLeft > 0) worldGnssJump else 0.0
+                log('D', "sim", "gnss d=%.1f read=%.1f acc=%.1f%s".format(distanceM, distanceM + noise, acc,
+                    if (worldGnssJumpLeft > 0) " jump=%.0f".format(worldGnssJump) else ""))
                 return DepartureFix(52.0 + (distanceM + noise) / 111_000.0, 5.0, acc, clock.elapsedMs())
             }
             val acc = physics.gnssAccMedianM?.let { (it * kotlin.math.exp(physics.gnssAccSpread * rGnss.gaussian())).toFloat() } ?: base
@@ -1174,6 +1177,8 @@ internal class SimWorld(
             if (jumpLeft > 0) jumpLeft-- else if (rGnss.chance(0.01)) { jumpLeft = 3 + (rGnss.nextDouble() * 5).toInt(); jump = rGnss.uniform(10.0, 25.0) }
             val noise = acc / 2.0 * rGnss.gaussian() + bias + if (jumpLeft > 0) jump else 0.0
             val metres = distanceM + noise
+            log('D', "sim", "gnss d=%.1f read=%.1f acc=%.1f%s".format(distanceM, metres, acc,
+                if (jumpLeft > 0) " jump=%.0f".format(jump) else ""))
             // 1 degree latitude ~ 111 km; the car sits at (52.0, 5.0), the walker moves north.
             return DepartureFix(52.0 + metres / 111_000.0, 5.0, acc, clock.elapsedMs())
         }
@@ -1192,16 +1197,17 @@ internal class SimWorld(
             } finally { gnssActive-- }
         }
         override suspend fun confirmsDeparture(anchor: DepartureFix, steps: () -> Long?, enabled: () -> Boolean,
-                                               bleCorroborated: () -> Boolean): Boolean {
+                                               bleCorroborated: () -> Boolean, memory: DepartureFixMemory?,
+                                               lastMotionAtMs: () -> Long): Boolean {
             if (!enabled()) return false
-            val window = DepartureObservationWindow(anchor, clock.elapsedMs())
+            val window = DepartureObservationWindow(anchor, clock.elapsedMs(), memory)
             val until = now() + DepartureObservationWindow.WINDOW_MS
             requestStartMs = now(); gnssActive++
             try {
                 while (now() < until) {
                     delay(1_000L)
                     if (!enabled()) return false
-                    if (window.observe(fix(), steps(), clock.elapsedMs(), bleCorroborated()) && enabled()) return true
+                    if (window.observe(fix(), steps(), clock.elapsedMs(), bleCorroborated(), lastMotionAtMs()) && enabled()) return true
                 }
                 return false
             } finally { gnssActive-- }

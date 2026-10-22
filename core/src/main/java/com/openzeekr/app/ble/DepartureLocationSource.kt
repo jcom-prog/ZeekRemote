@@ -90,6 +90,8 @@ internal class DepartureLocationSource(context: Context) : DepartureLocator {
         steps: () -> Long?,
         enabled: () -> Boolean,
         bleCorroborated: () -> Boolean,
+        memory: DepartureFixMemory?,
+        lastMotionAtMs: () -> Long,
     ): Boolean {
         if (!enabled()) return false
         if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION) !=
@@ -97,7 +99,7 @@ internal class DepartureLocationSource(context: Context) : DepartureLocator {
             Logx.d("prox", "departure location outcome=fine_permission_missing")
             return false
         }
-        val window = DepartureObservationWindow(anchor, android.os.SystemClock.elapsedRealtime())
+        val window = DepartureObservationWindow(anchor, android.os.SystemClock.elapsedRealtime(), memory)
         var callback: LocationCallback? = null
         try {
             val result = withTimeoutOrNull(DepartureObservationWindow.WINDOW_MS) {
@@ -118,7 +120,7 @@ internal class DepartureLocationSource(context: Context) : DepartureLocator {
                                     location.latitude, location.longitude, location.accuracy,
                                     location.elapsedRealtimeNanos / 1_000_000L) else null
                                 val confirmed = window.observe(fix, steps(), android.os.SystemClock.elapsedRealtime(),
-                                    bleCorroborated())
+                                    bleCorroborated(), lastMotionAtMs())
                                 val outcome = when {
                                     mock -> "mock_rejected"
                                     !location.hasAccuracy() -> "accuracy_missing"

@@ -88,7 +88,14 @@ internal object DepartureSafetyEvidence {
 
     private const val MAX_WALK_SPEED_MPS = 2.5
 
-    private fun distanceM(a: DepartureFix, b: DepartureFix): Double {
+    /**
+     * 0.3.25: [implausibleJump] from the position last known for certain; a phone that has reported no motion and no
+     * step since then has not moved at all, so only the two accuracy radii may separate the fixes.
+     */
+    fun implausibleDisplacement(known: DepartureFix, fix: DepartureFix, motionless: Boolean): Boolean =
+        if (motionless) distanceM(known, fix) > known.accuracyM + fix.accuracyM else implausibleJump(known, fix)
+
+    internal fun distanceM(a: DepartureFix, b: DepartureFix): Double {
         val latDiff = Math.toRadians(b.latitude - a.latitude)
         val lonDiff = Math.toRadians(b.longitude - a.longitude)
         val h = sin(latDiff / 2).pow(2) +

@@ -83,7 +83,10 @@ internal class AndroidProximityAlerts(private val context: android.content.Conte
 internal interface DepartureLocator {
     suspend fun nearAnchor(policy: NearDepartureAnchor, enabled: () -> Boolean): DepartureFix?
     suspend fun confirmsDeparture(anchor: DepartureFix, steps: () -> Long?, enabled: () -> Boolean,
-                                  bleCorroborated: () -> Boolean = { false }): Boolean
+                                  bleCorroborated: () -> Boolean = { false },
+                                  /** 0.3.25: what this visit's earlier windows learnt, and when the phone last moved (fix clock). */
+                                  memory: DepartureFixMemory? = null,
+                                  lastMotionAtMs: () -> Long = { Long.MAX_VALUE }): Boolean
 }
 
 /**
