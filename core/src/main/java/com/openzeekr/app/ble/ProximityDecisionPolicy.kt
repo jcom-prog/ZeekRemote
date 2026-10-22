@@ -114,6 +114,13 @@ internal class ProximityDecisionPolicy(
     private var manualStepsAtFloor: Long? = null
     private var manualStandingHeld = false
     private var manualStandingSteps: Long? = null
+    // 0.3.28: the latest walking evidence a reading carried - a MOVING reading, or the raw step total advancing at a
+    // live cadence (twice within [DEEP_RETURN_STEP_CADENCE_MS]; one late batch is an old walk, not this one).
+    private var lastWalkEvidenceAtMs = UNSET_MS
+    private var previousStepsTotal: Long? = null
+    private var lastStepAdvanceAtMs = UNSET_MS
+    /** Diagnostics: a signal return at the return level waited for walking evidence (read by the controller). */
+    private var deepReturnHeldForWalk = false
     /** Which signal return qualified (deep_return or walk_back). */
     private var signalReturnRoute = "deep_return"
     /** The current arrival epoch replaced a Lock's departure latch (see [onPresenceMatch]). */
@@ -213,6 +220,17 @@ internal class ProximityDecisionPolicy(
     ): Boolean {
         readingSteps = steps; readingStepsRising = stepsRising
         readingWalkingConfirmed = walkingConfirmed; readingStallAgeMs = stepStallAgeMs; readingStepsTotal = stepsTotal
+        // 0.3.28: walking evidence per reading, for the signal-only return after a Lock ([tryRearmManualDeepFarReturn]).
+        // A count advance is a walk now only at a live cadence: the hub hands a whole walk over in one late batch
+        // (field: the walk away 1665 s late; simulator stress F54: the walk back 47 s late, right before the return level).
+        val total = stepsTotal ?: steps
+        val stepped = total != null && previousStepsTotal?.let { total > it } == true
+        previousStepsTotal = total
+        if (stepped) {
+            if (lastStepAdvanceAtMs != UNSET_MS && nowMs - lastStepAdvanceAtMs <= DEEP_RETURN_STEP_CADENCE_MS) lastWalkEvidenceAtMs = nowMs
+            lastStepAdvanceAtMs = nowMs
+        }
+        if (moving) lastWalkEvidenceAtMs = nowMs
         if (departureLatched &&
             !tryRearmSameLinkReturn(nowMs, rssi, moving, unlockThreshold) &&
             !(awayRoundTripPending && tryRearmAwayReturn(nowMs, rssi, moving, unlockThreshold, steps))) {
@@ -755,6 +773,22 @@ internal class ProximityDecisionPolicy(
             return false
         }
         val returnMargin = if (deepReturnNeedsRecession) AUTO_LOCK_NEAR_RETURN_MARGIN_DB else MANUAL_DEEP_RETURN_MARGIN_DB
+        // 0.3.28 (field 22/10, 0.3.24): after an automatic Lock the user stood 8-10 m from the car for over a minute
+        // while the signal crept from -101 to -82, and two readings at -82 reopened the car behind a motionless phone
+        // (Activity Recognition STILL for 84 s, no counted step for 88 s; the hub had handed over the walk away in one
+        // late batch, so the stall gate above never armed). The signal-only return is a walk: it needs walking
+        // evidence from the last [DEEP_RETURN_WALK_EVIDENCE_MS] - a MOVING reading, or the raw step total advancing
+        // at a live cadence (see [shouldUnlock]). No level is exempt: in a world of deep fades a spot 10 m out reads
+        // like the door for a second (simulator stress F54); the at-car route keeps its own four still readings at
+        // the strong-near level. The cost is honest: a walk back that neither sensor reports (the 0.1.60 field shape)
+        // stays locked until the door; the app's own step counter (0.4.0) is to close that gap.
+        val walkEvidence = lastWalkEvidenceAtMs != UNSET_MS && nowMs - lastWalkEvidenceAtMs <= DEEP_RETURN_WALK_EVIDENCE_MS
+        if (!walkEvidence) {
+            if (rssi >= unlockThreshold + returnMargin) deepReturnHeldForWalk = true
+            manualDeepReturnSinceMs = UNSET_MS
+            manualDeepReturnReadings = 0
+            return false
+        }
         if (rssi < unlockThreshold + returnMargin) {
             manualDeepReturnSinceMs = UNSET_MS
             manualDeepReturnReadings = 0
@@ -905,6 +939,9 @@ internal class ProximityDecisionPolicy(
 
     /** Reads and clears [deepFarReturnRearmed]. */
     fun consumeDeepFarReturnRearm(): Boolean = deepFarReturnRearmed.also { deepFarReturnRearmed = false }
+
+    /** 0.3.28: reads and clears "a signal return at the return level waited for walking evidence". */
+    fun consumeDeepReturnHeldForWalk(): Boolean = deepReturnHeldForWalk.also { deepReturnHeldForWalk = false }
 
     /** Starts a bounded departure guard for an unlock command that is already in flight. */
     fun onPendingUnlockStarted() {
@@ -1187,6 +1224,10 @@ internal class ProximityDecisionPolicy(
         const val DEEP_FAR_STANDING_HOLD_MS = 120_000L
         const val DEEP_RETURN_UNLOCK_WINDOW_MS = 30_000L
         const val DEEP_RETURN_GUARD_MS = 3_000L
+        /** 0.3.28: the signal-only return after a Lock needs walking evidence this fresh (the hub's packet interval is 5-9 s). */
+        const val DEEP_RETURN_WALK_EVIDENCE_MS = 10_000L
+        /** 0.3.28: two count advances this close are a walk now; one batch after a longer silence is an old walk. */
+        const val DEEP_RETURN_STEP_CADENCE_MS = 15_000L
         const val STILL_APPROACH_MARGIN_DB = 4
         const val STILL_APPROACH_RISE_DB = 10
         const val STILL_APPROACH_CONFIRM_MS = 3_000L

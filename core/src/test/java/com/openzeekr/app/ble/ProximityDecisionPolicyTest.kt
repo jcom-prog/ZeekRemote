@@ -630,19 +630,28 @@ class ProximityDecisionPolicyTest {
 class ManualLockDeepFarReturnTest {
     private fun locked() = ProximityDecisionPolicy().apply { onManualLockConfirmed() }
 
-    @Test fun walkToFifteenMetresAndBackUnlocksWhileTheMotionSensorSaysStill() {
-        // Field shape 0.1.60 (car self-lock): away to ~15 m and back, Activity
-        // Recognition STILL nearly the whole way; the motion-edge route voided itself at ~10 m.
-        val p = locked()
-        var t = 0L
-        listOf(-70, -70, -71, -81, -84, -84, -85, -89, -90, -90, -91, -92, -93, -94, -95, -95)
-            .forEach { assertFalse(p.shouldUnlock(t, it, false, -86)); t += 1_000L }
-        t += 5_000L // far-sleep gap
-        listOf(-97, -95, -93, -94, -90, -88, -84, -84).forEach { assertFalse(p.shouldUnlock(t, it, false, -86)); t += 1_000L }
-        assertFalse(p.shouldUnlock(t, -81, false, -86)); t += 500L
-        assertFalse(p.shouldUnlock(t, -82, false, -86)); t += 500L
-        assertTrue(p.shouldUnlock(t, -81, false, -86))
-        assertTrue(p.consumeDeepFarReturnRearm())
+    @Test fun walkToFifteenMetresAndBackWithoutAnySensorEvidenceStaysLockedUntilAStepIsCounted() {
+        // Field shape 0.1.60 (car self-lock): away to ~15 m and back, Activity Recognition STILL nearly
+        // the whole way; the motion-edge route voided itself at ~10 m. Until 0.3.28 the signal alone
+        // reopened at ~6 m; since the field reopen of 22/10 (standing 8-10 m away, 0.3.24) the signal-only
+        // return needs walking evidence - here the counted total advancing on the way back. Without any
+        // evidence the car stays locked (the app's own step counter, 0.4.0, is to see such a walk).
+        fun opensAt(countedBack: Boolean): Int? {
+            val p = locked()
+            var t = 0L
+            listOf(-70, -70, -71, -81, -84, -84, -85, -89, -90, -90, -91, -92, -93, -94, -95, -95)
+                .forEach { assertFalse(p.shouldUnlock(t, it, false, -86)); t += 1_000L }
+            t += 5_000L // far-sleep gap
+            var total = 500L
+            listOf(-97, -95, -93, -94, -90, -88, -84, -84, -81, -82, -81, -80).forEachIndexed { i, rssi ->
+                if (countedBack && i >= 2) total += 2L
+                if (p.shouldUnlock(t, rssi, false, -86, stepsTotal = total)) return rssi
+                t += if (i < 8) 1_000L else 500L
+            }
+            return null
+        }
+        assertEquals(-81, opensAt(countedBack = true))
+        assertNull(opensAt(countedBack = false))
     }
 
     @Test fun twoStrongReadingsAboutOneSecondApartAreAReturnDespiteSamplingJitter() {
@@ -653,9 +662,12 @@ class ManualLockDeepFarReturnTest {
         var t = 0L
         listOf(-95, -96, -95, -95, -93, -94, -95, -96, -96, -95, -93)
             .forEach { assertFalse(p.shouldUnlock(t, it, false, -86)); t += 1_000L }
-        listOf(-89, -94, -91, -88, -85).forEach { assertFalse(p.shouldUnlock(t, it, false, -86)); t += 1_000L }
-        assertFalse(p.shouldUnlock(t, -81, false, -86)); t += 995L
-        assertTrue(p.shouldUnlock(t, -82, false, -86))
+        // 0.3.28: the signal-only return needs walking evidence - here the counted total advancing on the way back
+        // (a MOVING reading would also feed the motion-gated manual route, which is not under test here).
+        var steps = 100L
+        listOf(-89, -94, -91, -88, -85).forEach { steps += 2L; assertFalse(p.shouldUnlock(t, it, false, -86, stepsTotal = steps)); t += 1_000L }
+        steps += 2L; assertFalse(p.shouldUnlock(t, -81, false, -86, stepsTotal = steps)); t += 995L
+        steps += 2L; assertTrue(p.shouldUnlock(t, -82, false, -86, stepsTotal = steps))
         assertTrue(p.consumeDeepFarReturnRearm())
     }
 
@@ -663,10 +675,10 @@ class ManualLockDeepFarReturnTest {
         val p = locked()
         var t = 0L
         repeat(8) { assertFalse(p.shouldUnlock(t, -96, false, -86)); t += 1_000L }
-        // Activity Recognition still says STILL (the motion-gated route has its own rules).
-        assertFalse(p.shouldUnlock(t, -80, false, -86)); t += 200L
-        assertFalse(p.shouldUnlock(t, -82, false, -86)); t += 200L
-        assertFalse(p.shouldUnlock(t, -84, false, -86))
+        // Walking (0.3.28: the signal-only return needs walking evidence); the span, not the count, is short.
+        assertFalse(p.shouldUnlock(t, -80, true, -86)); t += 200L
+        assertFalse(p.shouldUnlock(t, -82, true, -86)); t += 200L
+        assertFalse(p.shouldUnlock(t, -84, true, -86))
     }
 
     @Test fun keyWakingWhileWalkingAwayStillAllowsTheReturn() {
@@ -949,13 +961,15 @@ class ManualLockDeepFarReturnTest {
         var t = 0L
         repeat(6) { assertFalse(p.shouldUnlock(t, -96, false, -86)); t += 1_000L }
         // 0.3.12: the walk back rises out of the deep-far level for 3 s (a jump straight to -80 is a peak).
-        assertFalse(p.shouldUnlock(t, -88, false, -86)); t += 1_000L
-        assertFalse(p.shouldUnlock(t, -84, false, -86)); t += 1_000L
-        assertFalse(p.shouldUnlock(t, -80, false, -86)); t += 500L
-        assertFalse(p.shouldUnlock(t, -80, false, -86)); t += 500L
-        assertTrue(p.shouldUnlock(t, -80, false, -86)); t += 1_000L
-        assertFalse(p.shouldUnlock(t, -90, false, -86)); t += 6_000L // evidence gone (FAR + TTL)
-        assertTrue(p.shouldUnlock(t, -79, false, -86))
+        // (0.3.28: the walk back shows as the counted total advancing; the re-qualification below still needs none.)
+        var steps = 100L
+        assertFalse(p.shouldUnlock(t, -88, false, -86, stepsTotal = steps)); t += 1_000L
+        steps += 2L; assertFalse(p.shouldUnlock(t, -84, false, -86, stepsTotal = steps)); t += 1_000L
+        steps += 2L; assertFalse(p.shouldUnlock(t, -80, false, -86, stepsTotal = steps)); t += 500L
+        steps += 2L; assertFalse(p.shouldUnlock(t, -80, false, -86, stepsTotal = steps)); t += 500L
+        steps += 2L; assertTrue(p.shouldUnlock(t, -80, false, -86, stepsTotal = steps)); t += 1_000L
+        assertFalse(p.shouldUnlock(t, -90, false, -86, stepsTotal = steps)); t += 6_000L // evidence gone (FAR + TTL)
+        assertTrue(p.shouldUnlock(t, -79, false, -86, stepsTotal = steps))
     }
 
     /**
@@ -1178,5 +1192,80 @@ class ManualLockDeepFarReturnTest {
 
     @Test fun withoutCountedStepsOnlyTheDeepReturnOpens() {
         assertEquals("7 deep_return", walkBackOpensAt(-80.0, withSteps = false))
+    }
+}
+
+/**
+ * 0.3.28 (field 22/10, 0.3.24): after an automatic Lock the user stood 8-10 m from the car for over a minute
+ * while the signal crept from -101 to -82; two readings at -82 reopened the car behind a motionless phone.
+ * The signal-only return after a Lock needs walking evidence from the last ten seconds.
+ */
+class DeepReturnNeedsWalkingEvidenceTest {
+    /** An automatic Lock on a proven departure, then the creep of the field incident (1 s readings). */
+    private fun lockedThenCreep(moving: (Int) -> Boolean = { false }, total: (Int) -> Long = { 2_517L }): Pair<ProximityDecisionPolicy, Long> {
+        val p = ProximityDecisionPolicy()
+        p.onUnlockConfirmed(0L)
+        p.onDepartureLockStarted(stepsAtCar = 2_500L); p.onAutomaticLockProvenDeparture(10_000L)
+        var t = 14_000L
+        listOf(-101, -97, -95, -93, -91, -89, -87, -86, -85, -84, -84, -83, -85, -84, -87, -85).forEachIndexed { i, rssi ->
+            assertFalse("reopened at $rssi", p.shouldUnlock(t, rssi, moving(i), -86, stepsTotal = total(i))); t += 1_000L
+        }
+        return p to t
+    }
+
+    @Test fun aMotionlessPhoneCreepingToTheReturnLevelAfterAnAutomaticLockStaysLocked() {
+        val (p, t0) = lockedThenCreep()
+        var t = t0
+        // The field's readings at the return level, then a minute more of the same: never.
+        repeat(60) { assertFalse(p.shouldUnlock(t, listOf(-82, -81, -81, -82)[it % 4], false, -86, stepsTotal = 2_517L)); t += 1_000L }
+        assertFalse(p.consumeDeepFarReturnRearm())
+        assertTrue(p.consumeDeepReturnHeldForWalk())
+    }
+
+    @Test fun theSameCreepWithTheMotionSensorReportingWalkingOpens() {
+        val (p, t0) = lockedThenCreep(moving = { it >= 8 })
+        var t = t0
+        var opened = false
+        listOf(-82, -81, -81).forEach { if (p.shouldUnlock(t, it, true, -86, stepsTotal = 2_517L)) opened = true; t += 1_000L }
+        assertTrue(opened)
+        assertEquals("deep_return", p.unlockRoute)
+    }
+
+    @Test fun countedStepsAtALiveCadenceAreWalkingEvidence() {
+        // Still per the motion sensor; the hub total advanced every second up to 1 s before the return level.
+        val (p, t0) = lockedThenCreep(total = { 2_517L + 2L * maxOf(0, it - 6) })
+        var t = t0
+        var opened = false
+        listOf(-82, -81, -81).forEach { if (p.shouldUnlock(t, it, false, -86, stepsTotal = 2_535L)) opened = true; t += 1_000L }
+        assertTrue(opened)
+    }
+
+    @Test fun walkingEvidenceOlderThanTenSecondsDoesNotCount() {
+        // Three advances a second apart, the last 11 s before the first reading at the return level.
+        val (p, t0) = lockedThenCreep(total = { 2_517L + 2L * it.coerceIn(2, 5) - 4L })
+        var t = t0
+        repeat(6) { assertFalse(p.shouldUnlock(t, listOf(-82, -81, -81)[it % 3], false, -86, stepsTotal = 2_523L)); t += 1_000L }
+    }
+
+    @Test fun aSingleLateBatchOfStepsIsNotWalkingEvidenceButALiveCadenceIs() {
+        // Simulator stress F54 (and the field's 1665 s batch): the hub hands the whole walk over at once, 47 s later,
+        // right before the signal reaches the return level - an old walk, not this one.
+        val (p, t0) = lockedThenCreep()
+        var t = t0
+        assertFalse(p.shouldUnlock(t, -84, false, -86, stepsTotal = 2_529L)); t += 1_000L   // +12 at once
+        repeat(6) { assertFalse(p.shouldUnlock(t, listOf(-82, -81, -81)[it % 3], false, -86, stepsTotal = 2_529L)); t += 1_000L }
+        // Two advances a second apart: a walk now.
+        assertFalse(p.shouldUnlock(t, -84, false, -86, stepsTotal = 2_531L)); t += 1_000L
+        assertFalse(p.shouldUnlock(t, -82, false, -86, stepsTotal = 2_533L)); t += 1_000L
+        assertTrue(p.shouldUnlock(t, -81, false, -86, stepsTotal = 2_533L))
+    }
+
+    @Test fun evenTheAtCarLevelNeedsWalkingEvidenceFromTheSignalReturn() {
+        // Simulator stress F54, deep fades: a spot 10 m out read -72..-74 for a second while standing. The signal
+        // return exempts no level; the at-car route keeps its own four still readings at the strong-near level.
+        val (p, t0) = lockedThenCreep()
+        var t = t0
+        repeat(3) { assertFalse(p.shouldUnlock(t, -77, false, -86, stepsTotal = 2_517L)); t += 1_000L }
+        assertFalse(p.consumeDeepFarReturnRearm())
     }
 }

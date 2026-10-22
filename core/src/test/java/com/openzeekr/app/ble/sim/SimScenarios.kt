@@ -248,6 +248,13 @@ internal object SimScenarios {
         Scenario("F53 key asleep in the house, out to the car", "inside 2.5 min (the key sleeps), 8 s to the back door, 15 m to the car", 15.0,
             listOf(Stand(150_000, Facing.AWAY, -10.0, indoor = true), Mark("expect-unlock"), Fidget(8_000, -10.0),
                 Walk(1.0), Stand(4_000), OpenDoor, Stand(20_000, shadowDb = -6.0))),
+        // 0.3.28 (field 22/10, 0.3.24): the walk away locked the car; the user turned back a few metres and stood
+        // facing it for two minutes while the signal crept up to the return level; two readings at -82 reopened
+        // the car behind a motionless phone (Activity Recognition STILL, no counted step). Then the user leaves.
+        Scenario("F54 auto-Lock, then standing in the return band", "open; away 22 m (auto-Lock), 15 s there; back to 10 m; 20 s turned away, 130 s facing the car at a favourable spot; leave", 30.0,
+            approachAndOpen() + listOf(Mark("expect-lock"), Walk(22.0), Stand(15_000, Facing.AWAY), Mark("-"), Walk(10.0, 1.0),
+                Mark("expect-stay-locked"), Stand(20_000, Facing.AWAY, -4.0), Stand(130_000, Facing.TOWARD, 5.0),
+                Mark("expect-locked-by-end"), Walk(40.0), Stand(60_000, Facing.AWAY))),
     )
 
     /** Every field incident and the families that reproduce it (incident history, 14/10). */
@@ -286,6 +293,7 @@ internal object SimScenarios {
         FieldCase("#32 16/10+19/10 0.3.18", "home by car: no steps after the drive; alarm just before the very-deep Lock", listOf("F52", "F50", "F42")),
         FieldCase("#33 20/10 0.3.20", "no open on approach: 133 at the edge, then 24 s without a scan (scan-start ration)", listOf("F53", "F07", "F17"),
             "world edge-133"),
+        FieldCase("#34 22/10 0.3.24", "auto-Lock, then standing 8-10 m away: the signal return reopened the car behind a motionless phone", listOf("F54", "F14", "F03")),
     )
 
     /**

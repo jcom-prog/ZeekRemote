@@ -245,4 +245,12 @@ class ProximityDiagnosticJournalTest {
         assertEquals("LOCATION departure_fix_implausible",
             ProximityDiagnosticJournal.event("prox", "departure location outcome=departure_fix_implausible"))
     }
+
+    @Test fun aReturnHeldForWalkingEvidenceIsJournaledAsCategoriesOnly() {
+        // 0.3.28: the signal return after a Lock reached the return level without walking evidence.
+        assertEquals("RETURN_HELD -82 STILL steps=same", ProximityDiagnosticJournal.event("prox",
+            "return after Lock held (rssi=-82 motion=STILL steps=same): no walking evidence -> stays locked"))
+        assertNull(ProximityDiagnosticJournal.event("prox",
+            "return after Lock held (rssi=-82 motion=STILL steps=same): no walking evidence -> stays locked at home"))
+    }
 }

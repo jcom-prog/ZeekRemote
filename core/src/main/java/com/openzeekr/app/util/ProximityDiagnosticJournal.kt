@@ -37,6 +37,9 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
             "(?:cloud )?Lock vetoed - (fresh reading|signal back in the lock range|only [0-9]{1,5} steps since the return to the car|" +
             "only [0-9]{1,5} steps since the car|strong reading|walking back)\\b.*")
         private val returnToCar = Regex("return to the car without a strong reading \\(rssi=(-[0-9]{2,3})\\) .*")
+        // 0.3.28: a signal return after a Lock held for lack of walking evidence - the level, the motion state, a category.
+        private val returnHeld = Regex("return after Lock held \\(rssi=(-[0-9]{2,3}) motion=([A-Z_]{1,12}) steps=(none|same)\\): " +
+            "no walking evidence -> stays locked")
         private val bleDepartureRevoked = Regex(
             "ble departure revoked \\((strong_near|signal_recovered|time_not_advancing)\\)")
         private val vehicleStatus = Regex("vehicle status observed session=([1-9][0-9]{0,18}) approach=([01]) walkAway=([01]) pe=([01]) ps=([01]) central=([0-3])")
@@ -136,6 +139,8 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                             m.groupValues[3].let { if (it.isEmpty()) "" else " screen=$it" } } ?: "UNLOCK_STARTED"
                     message.startsWith("car locked itself (") -> "CAR_SELF_LOCK"
                     returnToCar.matches(message) -> returnToCar.matchEntire(message)?.let { "RETURN_TO_CAR ${it.groupValues[1]}" }
+                    returnHeld.matches(message) -> returnHeld.matchEntire(message)?.let {
+                        "RETURN_HELD ${it.groupValues[1]} ${it.groupValues[2]} steps=${it.groupValues[3]}" }
                     lockVetoed.matches(message) -> lockVetoed.matchEntire(message)?.let { m ->
                         val why = m.groupValues[2].let {
                             when {

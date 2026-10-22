@@ -80,6 +80,7 @@ on:
       - zeekremote-0.3.25-gnss-plausibility
       - zeekremote-0.3.26-measure-journal
       - zeekremote-0.3.27-measure-window
+      - zeekremote-0.3.28-deep-return-walk
 
 permissions:
   contents: read
@@ -496,6 +497,15 @@ jobs:
           grep -Fq 'if (active) ownTracker.extend() else ownTracker.stop("measurement over")' core/src/main/java/com/openzeekr/app/ble/MotionMonitor.kt
           grep -Fq 'if (!armedUnlocked) runCatching { motion.ownMeasurementWindow(false) }' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'reason=measurement_over' core/src/test/java/com/openzeekr/app/util/ProximityDiagnosticJournalTest.kt
+          # 0.3.28 (owner approval 22/10): the signal-only return after a Lock needs walking evidence (field 22/10: reopened behind a motionless phone).
+          grep -Fq 'const val DEEP_RETURN_WALK_EVIDENCE_MS = 10_000L' core/src/main/java/com/openzeekr/app/ble/ProximityDecisionPolicy.kt
+          grep -Fq 'const val DEEP_RETURN_STEP_CADENCE_MS = 15_000L' core/src/main/java/com/openzeekr/app/ble/ProximityDecisionPolicy.kt
+          grep -Fq 'val walkEvidence = lastWalkEvidenceAtMs != UNSET_MS && nowMs - lastWalkEvidenceAtMs <= DEEP_RETURN_WALK_EVIDENCE_MS' core/src/main/java/com/openzeekr/app/ble/ProximityDecisionPolicy.kt
+          grep -Fq 'if (lastStepAdvanceAtMs != UNSET_MS && nowMs - lastStepAdvanceAtMs <= DEEP_RETURN_STEP_CADENCE_MS) lastWalkEvidenceAtMs = nowMs' core/src/main/java/com/openzeekr/app/ble/ProximityDecisionPolicy.kt
+          grep -Fq 'if (decisionPolicy.consumeDeepReturnHeldForWalk() && now - deepReturnHeldLoggedAtMs >= 30_000L) {' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'Scenario("F54 auto-Lock, then standing in the return band"' core/src/test/java/com/openzeekr/app/ble/sim/SimScenarios.kt
+          grep -Fq 'fun aMotionlessPhoneCreepingToTheReturnLevelAfterAnAutomaticLockStaysLocked()' core/src/test/java/com/openzeekr/app/ble/ProximityDecisionPolicyTest.kt
+          grep -Fq 'RETURN_HELD -82 STILL steps=same' core/src/test/java/com/openzeekr/app/util/ProximityDiagnosticJournalTest.kt
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -517,7 +527,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='151' versionName='0.3.27-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='152' versionName='0.3.28-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

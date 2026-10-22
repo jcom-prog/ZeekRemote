@@ -163,6 +163,7 @@ class ProximityController internal constructor(
     /** "The walk has stopped" from the step counter, for the walking approach route (0.3.2). */
     private val stepStall = StepStallGate()
     private var stepStallLogged = false
+    private var deepReturnHeldLoggedAtMs = 0L
     private val ble: ProximityLink = calibratedLink(ble)
 
     private fun calibratedLink(link: ProximityLink): ProximityLink = object : ProximityLink by link {
@@ -2081,6 +2082,12 @@ class ProximityController internal constructor(
         if (decisionPolicy.consumeDeepFarReturnRearm()) {
             Logx.d("prox", "return after Lock recognised from signal (clearly far, now near rssi=$smoothed) " +
                 "-> approach unlock rearmed")
+        }
+        // 0.3.28: the signal return reached the return level without walking evidence (logged at most every 30 s).
+        if (decisionPolicy.consumeDeepReturnHeldForWalk() && now - deepReturnHeldLoggedAtMs >= 30_000L) {
+            deepReturnHeldLoggedAtMs = now
+            Logx.d("prox", "return after Lock held (rssi=$smoothed motion=${motion.state.value} " +
+                "steps=${if (stepsNow == null) "none" else "same"}): no walking evidence -> stays locked")
         }
         if (armedDecision == ProximityDecisionPolicy.ArmedDecision.ARRIVAL_CONFIRMED) {
             Logx.d("prox", "arrival confirmed (rssi=$smoothed) — sustained-near guard passed")

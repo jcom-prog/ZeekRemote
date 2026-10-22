@@ -23,10 +23,10 @@ class FarReturnGuardTest {
         val p = locked()
         var t = p.provenFar() + 4_000L
         // Standing where the signal reads -80 (the return level), the step count stopped.
-        repeat(30) { assertFalse(p.shouldUnlock(t, -80, false, -86, walkingConfirmed = false)); t += 1_000L }
-        // The count advances again: the same level is the walk back.
+        repeat(30) { assertFalse(p.shouldUnlock(t, -80, false, -86, walkingConfirmed = false, stepsTotal = 100L)); t += 1_000L }
+        // The count advances again, at a live cadence (0.3.28): the same level is the walk back.
         var opened = false
-        repeat(4) { if (p.shouldUnlock(t, -80, false, -86, walkingConfirmed = true)) opened = true; t += 500L }
+        repeat(4) { if (p.shouldUnlock(t, -80, false, -86, walkingConfirmed = true, stepsTotal = 103L + 3L * it)) opened = true; t += 500L }
         assertTrue(opened)
     }
 
@@ -34,9 +34,9 @@ class FarReturnGuardTest {
         // Ninety seconds standing out there (the proof alone lapses after a minute), then the walk back.
         val p = locked()
         var t = p.provenFar()
-        repeat(90) { assertFalse(p.shouldUnlock(t, -88, false, -86, walkingConfirmed = false)); t += 1_000L }
+        repeat(90) { assertFalse(p.shouldUnlock(t, -88, false, -86, walkingConfirmed = false, stepsTotal = 100L)); t += 1_000L }
         var opened = false
-        repeat(4) { if (p.shouldUnlock(t, -80, false, -86, walkingConfirmed = true)) opened = true; t += 500L }
+        repeat(4) { if (p.shouldUnlock(t, -80, false, -86, walkingConfirmed = true, stepsTotal = 103L + 3L * it)) opened = true; t += 500L }
         assertTrue(opened)
     }
 
@@ -45,8 +45,13 @@ class FarReturnGuardTest {
         // stall longer than 4.5 s already means standing (simulator F29: the user stood 1 s after STILL).
         fun opens(stallAgeMs: Long): Boolean {
             val p = locked()
-            val t = p.provenFar() + 4_000L
-            return (0 until 10).any { p.shouldUnlock(t + 500L * it, -80, false, -86, stepStallAgeMs = stallAgeMs) }
+            val t = p.provenFar() + 8_000L
+            // The count advanced at a live cadence until stallAgeMs ago (0.3.28: that is the walking evidence; the
+            // motion sensor says nothing).
+            p.shouldUnlock(t - stallAgeMs - 400L, -88, false, -86, stepsTotal = 100L)
+            p.shouldUnlock(t - stallAgeMs - 200L, -88, false, -86, stepsTotal = 103L)
+            p.shouldUnlock(t - stallAgeMs, -88, false, -86, stepsTotal = 106L)
+            return (0 until 10).any { p.shouldUnlock(t + 500L * it, -80, false, -86, stepStallAgeMs = stallAgeMs, stepsTotal = 106L) }
         }
         assertTrue("3 s between step packets still opens", opens(3_000L))
         assertFalse("6 s without a step does not", opens(6_000L))
@@ -58,20 +63,22 @@ class FarReturnGuardTest {
         var t = p.provenFar() - 600L                       // 400 ms after the last deep-far reading
         listOf(-80, -80, -81, -80, -80).forEach { assertFalse(p.shouldUnlock(t, it, false, -86)); t += 500L }
         assertFalse(p.shouldUnlock(t, -95, false, -86)); t += 1_000L
-        // A real walk back rises for seconds out of the deep-far level and opens.
-        listOf(-91, -88, -85).forEach { assertFalse(p.shouldUnlock(t, it, false, -86)); t += 1_000L }
+        // A real walk back (the counted total advancing, 0.3.28) rises for seconds out of the deep-far level and opens.
+        var steps = 100L
+        listOf(-91, -88, -85).forEach { steps += 2L; assertFalse(p.shouldUnlock(t, it, false, -86, stepsTotal = steps)); t += 1_000L }
         var opened = false
-        listOf(-81, -80, -79, -78).forEach { if (p.shouldUnlock(t, it, false, -86)) opened = true; t += 500L }
+        listOf(-81, -80, -79, -78).forEach { steps += 1L; if (p.shouldUnlock(t, it, false, -86, stepsTotal = steps)) opened = true; t += 500L }
         assertTrue(opened)
     }
 
     @Test fun aBackPocketJumpingToTheAtCarLevelIsTheArrival() {
-        // A back pocket stays deep behind the body all the way and jumps at the car itself (-73..-77).
+        // A back pocket stays deep behind the body all the way and jumps at the car itself (-73..-77); the counted
+        // total shows the walk (0.3.28: no level is exempt from walking evidence).
         val p = locked()
         var t = p.provenFar() - 500L
-        assertFalse(p.shouldUnlock(t, -76, false, -86)); t += 500L
-        assertFalse(p.shouldUnlock(t, -76, false, -86)); t += 500L
-        assertTrue(p.shouldUnlock(t, -75, false, -86))
+        var steps = 100L
+        listOf(-76, -76, -75, -75).forEach { steps += 3L; assertFalse(p.shouldUnlock(t, it, false, -86, stepsTotal = steps)); t += 500L }
+        assertTrue(p.shouldUnlock(t, -75, false, -86, stepsTotal = steps))
     }
 
     @Test fun aManualReturnWhileTheStepCountShowsStandingNeedsEightStepsSinceTheMotionBegan() {
@@ -97,8 +104,8 @@ class FarReturnGuardTest {
         fun opensAfterStanding(seconds: Int): Boolean {
             val p = locked()
             var t = p.provenFar()
-            repeat(seconds) { assertFalse(p.shouldUnlock(t, -88, false, -86, walkingConfirmed = false)); t += 1_000L }
-            return (0 until 4).any { p.shouldUnlock(t + 500L * it, -80, false, -86, walkingConfirmed = true) }
+            repeat(seconds) { assertFalse(p.shouldUnlock(t, -88, false, -86, walkingConfirmed = false, stepsTotal = 100L)); t += 1_000L }
+            return (0 until 4).any { p.shouldUnlock(t + 500L * it, -80, false, -86, walkingConfirmed = true, stepsTotal = 103L + 3L * it) }
         }
         assertTrue("2.5 min standing, then the walk back", opensAfterStanding(150))
         assertFalse("4 min standing", opensAfterStanding(240))
