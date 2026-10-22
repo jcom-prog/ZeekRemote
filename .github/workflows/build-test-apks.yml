@@ -81,6 +81,7 @@ on:
       - zeekremote-0.3.26-measure-journal
       - zeekremote-0.3.27-measure-window
       - zeekremote-0.3.28-deep-return-walk
+      - zeekremote-0.3.29-alarm-walk
 
 permissions:
   contents: read
@@ -338,7 +339,7 @@ jobs:
           grep -Fq 'const val BUMP_TOLERANCE_MS = 2_000L' core/src/main/java/com/openzeekr/app/ble/BleDepartureEvidence.kt
           grep -Fq 'smoothedRssi <= config().sensitivityLockRssi - WALK_AWAY_ALARM_MARGIN_DB) {' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'val need = if (weak) WALKED_AWAY_WEAK_STEPS else WALKED_AWAY_STEPS' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
-          grep -Fq 'val silence = returnPending && alarmOn && (walking || now - strongStreakStartMs >= RETURN_STRONG_SUSTAIN_MS)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'if (returnPending && alarmOn && !walking && now - strongStreakStartMs >= RETURN_STRONG_SUSTAIN_MS) noteAlarmKept()' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq '"hand-wobble" -> SimPhysics(name = suite, handWobbleDb = 3.0)' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
           grep -Fq 'Target("front pocket: locks by itself at 10-25 m"' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
           # Owner's decision (20/10, confirmed 22/10): the simulator and the gate carry the phone in the front pocket only.
@@ -506,6 +507,12 @@ jobs:
           grep -Fq 'Scenario("F54 auto-Lock, then standing in the return band"' core/src/test/java/com/openzeekr/app/ble/sim/SimScenarios.kt
           grep -Fq 'fun aMotionlessPhoneCreepingToTheReturnLevelAfterAnAutomaticLockStaysLocked()' core/src/test/java/com/openzeekr/app/ble/ProximityDecisionPolicyTest.kt
           grep -Fq 'RETURN_HELD -82 STILL steps=same' core/src/test/java/com/openzeekr/app/util/ProximityDiagnosticJournalTest.kt
+          # 0.3.29 (owner approval 22/10): an alarm is silenced on the signal only with walking evidence (simulator F54: silenced 10 m out with the car open).
+          grep -Fq 'private const val STEP_CADENCE_MS = 15_000L' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'val silence = returnPending && alarmOn && walking' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'if (!walkedRecently(now)) { noteAlarmKept(); return }' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'ALARM_KEPT -82 STILL steps=same' core/src/test/java/com/openzeekr/app/util/ProximityDiagnosticJournalTest.kt
+          grep -Fq 'class SimAlarmKeptTest' core/src/test/java/com/openzeekr/app/ble/sim/SimAlarmKeptTest.kt
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -527,7 +534,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='152' versionName='0.3.28-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='153' versionName='0.3.29-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

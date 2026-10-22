@@ -253,4 +253,12 @@ class ProximityDiagnosticJournalTest {
         assertNull(ProximityDiagnosticJournal.event("prox",
             "return after Lock held (rssi=-82 motion=STILL steps=same): no walking evidence -> stays locked at home"))
     }
+
+    @Test fun anAlarmKeptForWalkingEvidenceIsJournaledAsCategoriesOnly() {
+        // 0.3.29: the signal alone said "at the car"; the alarm kept sounding.
+        assertEquals("ALARM_KEPT -82 STILL steps=same", ProximityDiagnosticJournal.event("prox",
+            "alarm kept: signal at the car (rssi=-82 motion=STILL steps=same) without walking evidence"))
+        assertNull(ProximityDiagnosticJournal.event("prox",
+            "alarm kept: signal at the car (rssi=-82 motion=STILL steps=same) without walking evidence at home"))
+    }
 }

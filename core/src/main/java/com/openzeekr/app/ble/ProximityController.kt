@@ -399,6 +399,10 @@ class ProximityController internal constructor(
     private var lastStepsSeen: Long? = null
     private var lastStepAdvanceAtMs = 0L
     private var lastMovingSeenAtMs = 0L
+    // 0.3.29: a step advance at a live cadence (the previous one within [STEP_CADENCE_MS]); one late batch is an old walk.
+    private var lastLiveStepAtMs = 0L
+    private var alarmKeptLoggedAtMs = 0L
+    private var lastSmoothedRssi = 0
     /** 0.3.9: when this unlock's departure was corroborated by position (0 = not). Steps never hold its alarm. */
     private var departurePositionProofAtMs = 0L
 
@@ -1025,6 +1029,11 @@ class ProximityController internal constructor(
      * the strong signal lasts [RETURN_STRONG_SUSTAIN_MS] - simulator stress: a 1-2 s strong fade at 30 m,
      * the user standing, silenced the alarm with the car open. Only two weak readings in a row break that
      * streak; sparse reads do not (armed idle reads come every ~3 s). See also [observeReturnAtCar].
+     * 0.3.29: the sustained signal alone no longer silences - simulator F54: a favourable spot 10 m out read
+     * like the car for minutes while the user stood there with the car open (the walk-away Lock had failed)
+     * and the alarm fell silent 87-96 s early; the same class as the 22/10 field reopen. Now the return needs
+     * walking evidence ([walkedRecently]); without it the alarm keeps sounding until the Lock, the user's tap
+     * or its own timeout, and the hold is logged ([noteAlarmKept]).
      */
     private fun markStrongNear() {
         val now = clock.wallMs()
@@ -1035,9 +1044,9 @@ class ProximityController internal constructor(
             streakBrokenAtMs > lastStrongStreakMs) strongStreakStartMs = now
         lastStrongStreakMs = now
         if (returning) returnPending = true
-        val walking = (lastMovingSeenAtMs != 0L && now - lastMovingSeenAtMs <= RETURN_MOVING_MS) ||
-            (lastStepAdvanceAtMs != 0L && now - lastStepAdvanceAtMs <= RETURN_MOVING_MS)
-        val silence = returnPending && alarmOn && (walking || now - strongStreakStartMs >= RETURN_STRONG_SUSTAIN_MS)
+        val walking = walkedRecently(now)
+        val silence = returnPending && alarmOn && walking
+        if (returnPending && alarmOn && !walking && now - strongStreakStartMs >= RETURN_STRONG_SUSTAIN_MS) noteAlarmKept()
         if (silence || !alarmOn) returnPending = false
         if (silence) {
             alerts.silenceAlarm()
@@ -1066,7 +1075,8 @@ class ProximityController internal constructor(
     /**
      * 0.3.12: a pending return ([markStrongNear]) is also confirmed by the smoothed signal at the car
      * ([RETURN_AT_CAR_MARGIN_DB] above the unlock level) for [RETURN_STRONG_SUSTAIN_MS] - the user back
-     * without counted steps or motion (simulator stress: the alarm went on at the car).
+     * without counted steps or motion (simulator stress: the alarm went on at the car). 0.3.29: with walking
+     * evidence as well ([walkedRecently]); the level alone is a spot 10 m out as often as the car (simulator F54).
      */
     private var atCarSinceMs = 0L
     private fun observeReturnAtCar(smoothed: Int) {
@@ -1075,6 +1085,7 @@ class ProximityController internal constructor(
         else atCarSinceMs = 0L
         val alarmOn = armedUnlocked && (unverifiedLockAlertRaised || now < alarmMaySoundUntilMs)
         if (returnPending && alarmOn && atCarSinceMs != 0L && now - atCarSinceMs >= RETURN_STRONG_SUSTAIN_MS) {
+            if (!walkedRecently(now)) { noteAlarmKept(); return }
             returnPending = false
             alerts.silenceAlarm()
             unverifiedLockAlertRaised = false
@@ -1087,8 +1098,30 @@ class ProximityController internal constructor(
         val now = clock.wallMs()
         val steps = motion.observedSteps
         val last = lastStepsSeen
-        if (steps != null && (last == null || steps > last)) { if (last != null) lastStepAdvanceAtMs = now; lastStepsSeen = steps }
+        if (steps != null && (last == null || steps > last)) {
+            // 0.3.29: an advance at a live cadence (the previous one within [STEP_CADENCE_MS]) is a walk now; one batch
+            // after a longer silence is an old walk (field 22/10: the walk away handed over 1665 s late).
+            if (last != null) {
+                if (lastStepAdvanceAtMs != 0L && now - lastStepAdvanceAtMs <= STEP_CADENCE_MS) lastLiveStepAtMs = now
+                lastStepAdvanceAtMs = now
+            }
+            lastStepsSeen = steps
+        }
         if (motion.state.value == MotionMonitor.Motion.MOVING) lastMovingSeenAtMs = now
+    }
+
+    /** 0.3.29: walking now - MOVING, or a live-cadence step, within [RETURN_MOVING_MS] (see [markStrongNear]). */
+    private fun walkedRecently(now: Long): Boolean =
+        (lastMovingSeenAtMs != 0L && now - lastMovingSeenAtMs <= RETURN_MOVING_MS) ||
+            (lastLiveStepAtMs != 0L && now - lastLiveStepAtMs <= RETURN_MOVING_MS)
+
+    /** 0.3.29: the signal says "at the car" but nothing says the user walked there; the alarm keeps sounding (logged per 30 s). */
+    private fun noteAlarmKept() {
+        val now = clock.wallMs()
+        if (now - alarmKeptLoggedAtMs < 30_000L) return
+        alarmKeptLoggedAtMs = now
+        Logx.d("prox", "alarm kept: signal at the car (rssi=$lastSmoothedRssi motion=${motion.state.value} " +
+            "steps=${if (motion.observedSteps == null) "none" else "same"}) without walking evidence")
     }
 
     /**
@@ -2067,6 +2100,7 @@ class ProximityController internal constructor(
         // Observe locked RSSI even while CONNECTED is still handshaking. The deep-sleep field trace
         // reached the door at -61 dBm, but SESSION_READY arrived ~3.4 s later after the signal had
         // weakened; gating observation on READY discarded the only reliable arrival evidence.
+        lastSmoothedRssi = smoothed
         val stepsNow = motion.observedSteps
         val walkingBySteps = stepStall.walking(now, stepsNow)
         val unlockQualified = !armedUnlocked && !needToUnlock && decisionPolicy.shouldUnlock(
@@ -2870,6 +2904,8 @@ class ProximityController internal constructor(
         private const val NEW_EPISODE_LINK_UP_MS = 10_000L
         /** 0.3.10: weak evidence silences an alarm only like a return - walking now or this recently, ... */
         private const val RETURN_MOVING_MS = 10_000L
+        /** 0.3.29: two step advances this close are a walk now (the hub's packet interval is 5-9 s). */
+        private const val STEP_CADENCE_MS = 15_000L
         /** ... and the signal this much above its best reading in this window before (or none then). */
         private const val RETURN_RISE_DB = 6
         private const val RETURN_EARLIER_FROM_MS = 8_000L

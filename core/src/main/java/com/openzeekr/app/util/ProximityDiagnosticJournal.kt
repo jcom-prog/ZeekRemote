@@ -37,6 +37,9 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
             "(?:cloud )?Lock vetoed - (fresh reading|signal back in the lock range|only [0-9]{1,5} steps since the return to the car|" +
             "only [0-9]{1,5} steps since the car|strong reading|walking back)\\b.*")
         private val returnToCar = Regex("return to the car without a strong reading \\(rssi=(-[0-9]{2,3})\\) .*")
+        // 0.3.29: an alarm kept sounding because the signal alone said "at the car" - the level, the motion state, a category.
+        private val alarmKept = Regex("alarm kept: signal at the car \\(rssi=(-[0-9]{2,3}) motion=([A-Z_]{1,12}) steps=(none|same)\\) " +
+            "without walking evidence")
         // 0.3.28: a signal return after a Lock held for lack of walking evidence - the level, the motion state, a category.
         private val returnHeld = Regex("return after Lock held \\(rssi=(-[0-9]{2,3}) motion=([A-Z_]{1,12}) steps=(none|same)\\): " +
             "no walking evidence -> stays locked")
@@ -162,6 +165,8 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                     // 0.3.9: why an alarm episode ended (the user back at the car, or a new departure);
                     // 0.3.10: "kept" when weak evidence left a sounding alarm sounding.
                     message == "strong signal at the car after an alarm -> user back; alarm silenced" -> "ALARM_EPISODE_CLOSED strong"
+                    alarmKept.matches(message) -> alarmKept.matchEntire(message)?.let {
+                        "ALARM_KEPT ${it.groupValues[1]} ${it.groupValues[2]} steps=${it.groupValues[3]}" }
                     alarmEpisodeClosed.matches(message) -> alarmEpisodeClosed.matchEntire(message)?.let { m ->
                         val why = m.groupValues[1].let {
                             when { it.startsWith("presence") -> "presence"; it.startsWith("sustained") -> "signal"; else -> "link" }
