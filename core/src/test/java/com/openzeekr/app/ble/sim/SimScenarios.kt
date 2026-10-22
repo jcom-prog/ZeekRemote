@@ -294,9 +294,21 @@ internal object SimScenarios {
      * way (hand, front or back pocket at random), in the same world as the run. The scenario then
      * starts with what the app learned.
      */
-    fun learningVisits(r: SimRandom, visits: Int): List<Leg> = buildList {
+    /**
+     * Owner's decision (20/10, confirmed 22/10): the phone rides in the front trouser pocket. The matrix and the
+     * learning visits simulate that carry only. SIM_CARRY (FRONT_POCKET, BACK_POCKET, HAND, a list, or ALL) and
+     * SIM_LEARN_CARRY exist for an explicitly requested diagnostic run and nothing else; the pinned tests of rules
+     * built earlier pass their own carry to [matrix].
+     */
+    val CARRIES: List<Carry> = System.getenv("SIM_CARRY")?.let { v ->
+        if (v.trim().equals("ALL", ignoreCase = true)) Carry.values().toList() else v.split(',').map { Carry.valueOf(it.trim()) }
+    } ?: listOf(Carry.FRONT_POCKET)
+    private val LEARN_CARRY: Carry = System.getenv("SIM_LEARN_CARRY")?.let { Carry.valueOf(it.trim()) } ?: Carry.FRONT_POCKET
+    /** [carry] null = a random carry per visit, as the worlds of the pinned tests of earlier rules were built. */
+    fun learningVisits(r: SimRandom, visits: Int, carry: Carry? = LEARN_CARRY): List<Leg> = buildList {
         repeat(visits) {
-            add(Leg.Carrying(Carry.values()[(r.nextDouble() * 3).toInt().coerceAtMost(2)]))
+            val drawn = Carry.values()[(r.nextDouble() * 3).toInt().coerceAtMost(2)]   // the draw stays: same streams as the studies
+            add(Leg.Carrying(carry ?: drawn))
             add(Walk(1.0, r.uniform(1.1, 1.5)))
             add(Stand(r.uniform(4_000.0, 10_000.0).toLong()))
             add(OpenDoor)
@@ -308,9 +320,9 @@ internal object SimScenarios {
         add(Leg.Carrying(null))
     }
 
-    /** families x carry x motion profile x seeds. */
-    fun matrix(seeds: Int = 3): List<Triple<Scenario, Carry, Pair<MotionProfile, Long>>> = buildList {
-        for (f in families) for (c in Carry.values()) for (m in MotionProfile.ALL) for (s in 1..seeds)
+    /** families x carry x motion profile x seeds; [carries] is the front pocket unless a pinned test asks otherwise. */
+    fun matrix(seeds: Int = 3, carries: List<Carry> = CARRIES): List<Triple<Scenario, Carry, Pair<MotionProfile, Long>>> = buildList {
+        for (f in families) for (c in carries) for (m in MotionProfile.ALL) for (s in 1..seeds)
             add(Triple(f, c, m to (s * 7919L + f.family.hashCode() * 31L + c.ordinal * 101L + m.name.hashCode())))
     }
 }

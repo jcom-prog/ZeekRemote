@@ -11,12 +11,12 @@ import org.junit.Test
  */
 class SimReturnToCarTest {
     @Test fun aBackPocketReturnToTheCarDoesNotLockFourMetresAway() {
-        val (scenario, carry, profileAndSeed) = SimScenarios.matrix(3).first { (sc, c, mp) ->
+        val (scenario, carry, profileAndSeed) = SimScenarios.matrix(3, Carry.values().toList()).first { (sc, c, mp) ->
             sc.family.startsWith("F49") && c == Carry.BACK_POCKET && mp.first.name == "s24-steps" && mp.second == SEED
         }
         val world = SimWorld(SEED, profileAndSeed.first, carry, scenario.startM, scenario.gnssAccuracyM,
             physics = SimPhysics(name = "hand-wobble", handWobbleDb = 3.0, approachPlateauP = 0.15))
-        world.play(scenario.legs, SimScenarios.learningVisits(SimRandom(SEED xor 0x1EA2_0F_CA1L), 20))
+        world.play(scenario.legs, SimScenarios.learningVisits(SimRandom(SEED xor 0x1EA2_0F_CA1L), 20, carry = null))
         val log = world.logLines.joinToString("\n")
         assertTrue("the return to the car is seen", "return to the car without a strong reading" in log)
         assertTrue("a Lock is vetoed by the steps since the return", Regex("Lock vetoed - only [0-9]+ steps since the return to the car").containsMatchIn(log))

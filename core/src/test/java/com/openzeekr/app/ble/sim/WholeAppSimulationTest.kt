@@ -227,33 +227,24 @@ internal object SimReport {
         fun expects(r: SimResult, what: String) = r.world.events.any { it.kind == "MARK" && it.detail == what }
         fun share(n: Int, d: Int) = if (d == 0) "-" else "%d/%d (%.1f%%)".format(n, d, 100.0 * n / d)
         fun pctOk(n: Int, d: Int, goal: Double) = d == 0 || 100.0 * n / d >= goal
-        val pocket = rs.filter { it.carry != Carry.HAND }
-        val hand = rs.filter { it.carry == Carry.HAND }
+        // Owner's targets are front-pocket targets (decision 20/10, confirmed 22/10): no other carry is reported.
         val front = rs.filter { it.carry == Carry.FRONT_POCKET }
         val approaches = front.filter { expects(it, "expect-unlock") }
         val onTime = approaches.count { !has(it, "APPROACH_UNLOCK_LATE", "APPROACH_UNLOCK_AFTER_DOOR", "APPROACH_NO_UNLOCK") }
         val departures = front.filter { expects(it, "expect-lock") }
         val lockedInBand = departures.count { lockedBetween(it, 10.0, 25.0) }
-        // 0.3.12: the same lock target for the phone in the hand.
-        val handDepartures = hand.filter { expects(it, "expect-lock") }
-        val handLockedInBand = handDepartures.count { lockedBetween(it, 10.0, 25.0) }
-        fun farUnlocks(set: List<SimResult>) = set.count { r -> r.findings.any { it.code == "UNLOCK_WHILE_FAR" && it.distanceM > 20.0 } }
-        val farPocket = farUnlocks(pocket)
-        val farHand = farUnlocks(hand)
+        val farFront = front.count { r -> r.findings.any { it.code == "UNLOCK_WHILE_FAR" && it.distanceM > 20.0 } }
         val unwanted = rs.count { has(it, "UNWANTED_UNLOCK", "UNLOCK_WHILE_LOITERING") }
         val lockNear = rs.count { has(it, "LOCK_WHILE_NEAR", "LOCK_WHILE_RETURNING", "UNWANTED_LOCK_NEAR") }
         // 0.3.10: an alarm silenced too early while the car is open and the user away is silent too.
         val silent = rs.count { has(it, "DEPARTURE_NO_LOCK_SILENT", "OPEN_FAR_NO_ALARM", "GONE_BUT_UNLOCKED", "ALARM_SILENCED_AWAY") }
         return listOf(
-            Target("never opens from > 20 m, phone in a pocket", share(farPocket, pocket.size), "0", farPocket == 0),
-            Target("never opens from > 20 m, phone in the hand", share(farHand, hand.size), "0", farHand == 0),
+            Target("never opens from > 20 m (front pocket)", share(farFront, front.size), "0", farFront == 0),
             Target("never opens where the car should stay locked", share(unwanted, rs.size), "0", unwanted == 0),
             Target("never locks near or while walking back", share(lockNear, rs.size), "0", lockNear == 0),
             Target("never silent while open and away", share(silent, rs.size), "0", silent == 0),
             Target("front pocket: approach opens before the door", share(onTime, approaches.size), ">= 98%", pctOk(onTime, approaches.size, 98.0)),
             Target("front pocket: locks by itself at 10-25 m", share(lockedInBand, departures.size), ">= 98%", pctOk(lockedInBand, departures.size, 98.0)),
-            Target("hand: locks by itself at 10-25 m", share(handLockedInBand, handDepartures.size), ">= 98%",
-                pctOk(handLockedInBand, handDepartures.size, 98.0)),
         )
     }
 

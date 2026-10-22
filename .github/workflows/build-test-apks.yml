@@ -338,7 +338,11 @@ jobs:
           grep -Fq 'val need = if (weak) WALKED_AWAY_WEAK_STEPS else WALKED_AWAY_STEPS' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'val silence = returnPending && alarmOn && (walking || now - strongStreakStartMs >= RETURN_STRONG_SUSTAIN_MS)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq '"hand-wobble" -> SimPhysics(name = suite, handWobbleDb = 3.0)' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
-          grep -Fq 'Target("hand: locks by itself at 10-25 m"' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
+          grep -Fq 'Target("front pocket: locks by itself at 10-25 m"' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt
+          # Owner's decision (20/10, confirmed 22/10): the simulator and the gate carry the phone in the front pocket only.
+          grep -Fq '} ?: listOf(Carry.FRONT_POCKET)' core/src/test/java/com/openzeekr/app/ble/sim/SimScenarios.kt
+          grep -Fq 'for (f in families) for (c in carries) for (m in MotionProfile.ALL) for (s in 1..seeds)' core/src/test/java/com/openzeekr/app/ble/sim/SimScenarios.kt
+          grep -Fq 'Simulation gate (seeds=$seeds, front pocket)' core/src/test/java/com/openzeekr/app/ble/sim/SimGateTest.kt
           # 0.3.13: the strong spot also while walking is a fixed worst case, and F45 (to and fro after the Lock, then
           # back) is in the matrix. App code as 0.3.12: the E-B return margin was not adopted (walk C).
           grep -Fq '"strong-spot-walk" -> SimPhysics(name = suite, spotDb = 7.0, spotWhileWalking = true)' core/src/test/java/com/openzeekr/app/ble/sim/WholeAppSimulationTest.kt

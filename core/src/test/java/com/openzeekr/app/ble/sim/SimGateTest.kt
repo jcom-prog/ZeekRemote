@@ -20,6 +20,8 @@ import java.io.File
  * on the phone, and 15 % of the walks to the car end flat as in the field)
  *   0.3.13 (user decision 17/10): the walk back of the owner's own field walks ([SimBaseline.RETURN_FAMILIES]) over
  *   all suites together - a suite-wide allowance hid it (study E-B opened F45 later in 12 of 13 worlds and passed).
+ *   Owner's decision (20/10, confirmed 22/10): the gate simulates the front trouser pocket only ([SimScenarios.CARRIES]),
+ *   in the learning visits too; the baseline of 22/10 is the first front-pocket baseline.
  */
 class SimGateTest {
     private val baselineFile = File("src/test/resources/sim-baseline.json")
@@ -34,7 +36,7 @@ class SimGateTest {
         File(outDir, "summary.json").writeText(SimReport.summaryJson(results))
         val base = SimBaseline.read(baselineFile)
         val regressions = mutableListOf<String>()
-        val table = StringBuilder("Simulation gate (seeds=$seeds): code  baseline -> now\n")
+        val table = StringBuilder("Simulation gate (seeds=$seeds, front pocket): code  baseline -> now\n")
         for (suite in MAIN_SUITES + SimRunner.WORST_CASES) {
             val b = base[suite].orEmpty(); val n = now[suite].orEmpty()
             for (code in (b.keys + n.keys).filter { it != "runs" }.toSortedSet()) {

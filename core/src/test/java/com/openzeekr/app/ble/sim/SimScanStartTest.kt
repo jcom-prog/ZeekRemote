@@ -12,14 +12,14 @@ import org.junit.Test
  */
 class SimScanStartTest {
     private fun play(family: String, carry: Carry, motion: String, seed: Long, scan0320: Boolean): SimWorld {
-        val (scenario, c, mp) = SimScenarios.matrix(5).first { (sc, c, mp) ->
+        val (scenario, c, mp) = SimScenarios.matrix(5, Carry.values().toList()).first { (sc, c, mp) ->
             sc.family.startsWith(family) && c == carry && mp.first.name == motion && mp.second == seed
         }
         val world = SimWorld(seed, SimRunner.profileFor(SUITE, mp.first), c, scenario.startM, scenario.gnssAccuracyM,
             carRefusesKeyLock = scenario.carRefusesKeyLock, keyEdgeRssi = scenario.keyEdgeRssi,
             physics = SimRunner.physicsFor(SUITE, seed).copy(approachPlateauP = 0.15, scan0320 = scan0320),
             cloudDown = scenario.cloudDown)
-        world.play(scenario.legs, SimScenarios.learningVisits(SimRandom(seed xor 0x1EA2_0F_CA1L), 20))
+        world.play(scenario.legs, SimScenarios.learningVisits(SimRandom(seed xor 0x1EA2_0F_CA1L), 20, carry = null))
         return world
     }
 

@@ -11,12 +11,12 @@ import org.junit.Test
  */
 class SimWalkBoutTest {
     @Test fun anUnbrokenWalkLiftsTheStepVetoOfALaggingCounter() {
-        val (scenario, carry, mp) = SimScenarios.matrix(5).first { (sc, c, mp) ->
+        val (scenario, carry, mp) = SimScenarios.matrix(5, Carry.values().toList()).first { (sc, c, mp) ->
             sc.family.startsWith("F47") && c == Carry.HAND && mp.first.name == "s24-off" && mp.second == SEED
         }
         val world = SimWorld(SEED, mp.first, carry, scenario.startM, scenario.gnssAccuracyM,
             physics = SimPhysics.calibrated().copy(approachPlateauP = 0.15))
-        world.play(scenario.legs, SimScenarios.learningVisits(SimRandom(SEED xor 0x1EA2_0F_CA1L), 20))
+        world.play(scenario.legs, SimScenarios.learningVisits(SimRandom(SEED xor 0x1EA2_0F_CA1L), 20, carry = null))
         val log = world.logLines.joinToString("\n")
         assertTrue("the step veto was lifted by the walk", Regex("[0-9]+ steps since the car, walking without a break for").containsMatchIn(log))
         val codes = SimOracle.check(world).map { it.code }
