@@ -44,6 +44,13 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
         private const val STEP_TRACE = "steps \\+([0-9]{1,5}) in ([0-9]{1,5}[.,][0-9]) s \\(([0-9]{1,4}) updates?, " +
             "longest wait ([0-9]{1,5}[.,][0-9]) s\\)"
         private val stepSensor = Regex("step (counter|detector): $STEP_TRACE")
+        // 0.3.26: the own tracker's window line and the battery day line - counts, seconds and milliamp-hours only.
+        private val ownWindow = Regex("own tracker OFF \\(([a-z ]{1,32})\\): own steps=([0-9]{1,6}) samples=[0-9]{1,9} " +
+            "turn=(none|[0-9]{1,6}s ago) secs=([0-9]{1,6}) detector=([0-9]{1,9}) counter=([0-9]{1,9}|none) " +
+            "ar=([A-Z_]{1,12}) screen=(on|off)")
+        private val batteryDay = Regex("battery day: (mode=(?:pulse|off) fires=[0-9]{1,6} pulses=[0-9]{1,6} pulseS=[0-9]{1,8} " +
+            "pulseMah=[0-9]{1,6}[.,][0-9]{2} walking=[0-9]{1,6} headStartS=(?:-|[0-9]{1,6}[.,][0-9]) usedMah=[0-9]{1,7} " +
+            "screenOffH=[0-9]{1,5}[.,][0-9] unpluggedH=[0-9]{1,5}[.,][0-9] perScreenOffH=(?:-|[0-9]{1,7}[.,][0-9]))")
         private val stepSummary = Regex("steps \\+([0-9]{1,5}) in ([0-9]{1,5}[.,][0-9]) s \\(([0-9]{1,4}) updates?, " +
             "longest wait ([0-9]{1,5}[.,][0-9]) s\\); detector=([0-9]{1,7}) counter=([0-9]{1,7}|none)")
         // Activity Recognition (Google Play) transitions: the activity type and enter/exit only.
@@ -84,7 +91,7 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
             "near_stale", "near_fix_stale", "waiting_for_pair", "observation_expired",
             "departure_fix_stale", "departure_time_not_advancing", "departure_confirmed",
             "departure_steps_insufficient", "departure_returning", "departure_timing_invalid",
-            "departure_accuracy_invalid", "departure_clearance_insufficient")
+            "departure_accuracy_invalid", "departure_clearance_insufficient", "departure_fix_implausible")
 
         internal fun event(area: String, message: String): String? {
             if (area == "dk") {
@@ -114,6 +121,7 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                 anchor.matchEntire(message)?.let {
                     if (it.groupValues[2] in outcomes) return "ANCHOR ${it.groupValues[1]} ${it.groupValues[2]}"
                 }
+                batteryDay.matchEntire(message)?.let { return "BATTERY_DAY ${it.groupValues[1]}" }
                 return when {
                     message.startsWith("unlock confirmed (") -> "UNLOCK_CONFIRMED"
                     message.startsWith("lock confirmed (") -> "LOCK_CONFIRMED"
@@ -180,6 +188,11 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                     else -> bleDepartureRevoked.matchEntire(message)
                         ?.let { "BLE_DEPARTURE_REVOKED ${it.groupValues[1]}" }
                 }
+            }
+            if (area == "motion") ownWindow.matchEntire(message)?.let { m ->
+                return "OWN_WINDOW reason=${m.groupValues[1].replace(' ', '_')} own=${m.groupValues[2]} " +
+                    "turn=${if (m.groupValues[3] == "none") "none" else "yes"} secs=${m.groupValues[4]} " +
+                    "detector=${m.groupValues[5]} counter=${m.groupValues[6]} ar=${m.groupValues[7]} screen=${m.groupValues[8]}"
             }
             if (area == "motion") return when (message) {
                 "-> MOVING" -> "MOTION_MOVING"

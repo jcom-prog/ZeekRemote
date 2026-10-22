@@ -60,7 +60,7 @@ object DiagnosticExport {
     }
 
     /** The shared text: a short header, the journal, then the filtered app log. */
-    fun build(appVersion: String, createdAt: String, journal: String?, appLog: List<String>): String = buildString {
+    fun build(appVersion: String, createdAt: String, journal: String?, appLog: List<String>, sources: String? = null): String = buildString {
         append("ZeekRemote diagnose ").append(appVersion).append(" · ").append(createdAt).append('\n')
         append("Geen VIN, tokens, sleutels, ruwe BLE-data of locatie.\n\n")
         append("== Dagboek ==\n")
@@ -68,6 +68,8 @@ object DiagnosticExport {
             ?.ifBlank { null } ?: "(leeg)").append("\n\n")
         val log = filterAppLog(appLog)
         append("== App-log (gefilterd, ").append(log.size).append(" regels) ==\n")
+        // 0.3.26: where the app log came from, so an empty section explains itself (counts and switches only).
+        sources?.let { append("Bronnen: ").append(it).append('\n') }
         append(if (log.isEmpty()) "(leeg - staat BLE-logging aan?)" else log.joinToString("\n")).append('\n')
     }
 }

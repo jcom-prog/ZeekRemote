@@ -222,4 +222,23 @@ class ProximityDiagnosticJournalTest {
         assertEquals("CAR_REOPENED", ProximityDiagnosticJournal.event("prox",
             "car reported unlocked without our Unlock (key status central=2) -> departure watch re-armed"))
     }
+
+    @Test fun measurementLinesOfTheOwnTrackerAndTheBatteryDayAreCountsOnly() {
+        assertEquals("OWN_WINDOW reason=window_over own=12 turn=none secs=118 detector=97 counter=192 ar=MOVING screen=off",
+            ProximityDiagnosticJournal.event("motion",
+                "own tracker OFF (window over): own steps=12 samples=5900 turn=none secs=118 detector=97 counter=192 ar=MOVING screen=off"))
+        assertEquals("OWN_WINDOW reason=service_stop own=3 turn=yes secs=20 detector=5 counter=none ar=STILL screen=on",
+            ProximityDiagnosticJournal.event("motion",
+                "own tracker OFF (service stop): own steps=3 samples=1000 turn=4s ago secs=20 detector=5 counter=none ar=STILL screen=on"))
+        assertNull(ProximityDiagnosticJournal.event("motion",
+            "own tracker OFF (window over): own steps=12 samples=5900 turn=none secs=118 detector=97 counter=192 ar=MOVING screen=off at home"))
+        val day = "mode=pulse fires=3 pulses=2 pulseS=20 pulseMah=0,12 walking=1 headStartS=2,5 usedMah=310 screenOffH=14,2 unpluggedH=15,0 perScreenOffH=21,8"
+        assertEquals("BATTERY_DAY $day", ProximityDiagnosticJournal.event("prox", "battery day: $day"))
+        val empty = "mode=off fires=0 pulses=0 pulseS=0 pulseMah=0.00 walking=0 headStartS=- usedMah=0 screenOffH=0.0 unpluggedH=0.0 perScreenOffH=-"
+        assertEquals("BATTERY_DAY $empty", ProximityDiagnosticJournal.event("prox", "battery day: $empty"))
+        assertNull(ProximityDiagnosticJournal.event("prox", "battery day: mode=pulse fires=3 lat=52.0"))
+        // 0.3.25: the quarantined implausible fix is a journaled location outcome.
+        assertEquals("LOCATION departure_fix_implausible",
+            ProximityDiagnosticJournal.event("prox", "departure location outcome=departure_fix_implausible"))
+    }
 }

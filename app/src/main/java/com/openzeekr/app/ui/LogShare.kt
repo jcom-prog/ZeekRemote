@@ -38,15 +38,25 @@ suspend fun shareDiagnostics(ctx: Context): String = runCatching {
         val journalFile = File(ctx.filesDir, "proximity-diagnostics.log")
         val journal = listOf(File(journalFile.path + ".previous"), journalFile)
             .filter { it.exists() }.joinToString("") { it.readText() }
-        val fromLogcat = runCatching {
+        val logcatRaw = runCatching {
             val p = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-v", "threadtime", "-s", "openzeekr:V"))
             p.inputStream.bufferedReader().readLines().also { p.waitFor() }
-        }.getOrDefault(emptyList()).let { com.openzeekr.app.util.DiagnosticExport.fromLogcat(it) }
-        val appLog = fromLogcat.ifEmpty { Logx.lines.value }
+        }.getOrDefault(emptyList())
+        val fromLogcat = com.openzeekr.app.util.DiagnosticExport.fromLogcat(logcatRaw)
+        // 0.3.26: logcat (hours, but shared with every app and rolled over within minutes on some phones) AND the
+        // in-memory buffer (500 lines, cleared by a process restart) - not one or the other; the export says what
+        // each delivered, so an empty section explains itself.
+        val buffer = Logx.lines.value
+        val seen = fromLogcat.toSet()
+        val appLog = fromLogcat + buffer.filterNot { it in seen }
+        val processMin = (android.os.SystemClock.elapsedRealtime() - android.os.Process.getStartElapsedRealtime()) / 60_000L
+        val sources = "logcat gelezen=${logcatRaw.size} herkend=${fromLogcat.size}, buffer=${buffer.size}, " +
+            "BLE-logging=${if (Logx.isBleEnabled) "aan" else "uit"}, HTTP-logging=${if (Logx.isHttpEnabled) "aan" else "uit"}, " +
+            "proces=$processMin min"
         val version = runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "?"
         val now = java.util.Date()
         val text = com.openzeekr.app.util.DiagnosticExport.build(version,
-            java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(now), journal, appLog)
+            java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).format(now), journal, appLog, sources)
         val dir = File(ctx.cacheDir, "exports").apply { mkdirs() }
         val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmm", java.util.Locale.US).format(now)
         File(dir, "zeekremote-diagnose-$stamp.txt").apply { writeText(text) }

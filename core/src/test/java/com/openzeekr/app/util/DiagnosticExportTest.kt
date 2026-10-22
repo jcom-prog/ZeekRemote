@@ -67,6 +67,13 @@ class DiagnosticExportTest {
         assertFalse(text.contains("token=abc"))
     }
 
+    @Test fun reportNamesItsLogSourcesWhenGiven() {
+        val sources = "logcat gelezen=0 herkend=0, buffer=0, BLE-logging=aan, HTTP-logging=uit, proces=3 min"
+        val text = DiagnosticExport.build("0.3.26-work", "2026-01-01 12:00", null, emptyList(), sources)
+        assertTrue(text.contains("== App-log (gefilterd, 0 regels) ==\nBronnen: $sources\n(leeg"))
+        assertFalse(DiagnosticExport.build("0.3.26-work", "2026-01-01 12:00", null, emptyList()).contains("Bronnen:"))
+    }
+
     @Test fun readsTheAppsOwnLogcatAndDropsOtherLines() {
         val out = DiagnosticExport.fromLogcat(listOf(
             "01-01 12:00:02.143  1234  1234 D openzeekr: [svc] security sleep: stationary for 2 min",

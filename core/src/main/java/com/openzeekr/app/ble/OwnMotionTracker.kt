@@ -34,6 +34,7 @@ internal class OwnMotionTracker(
     private val rotation: Sensor? = sensors?.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
     @Volatile private var active = false
     @Volatile private var deadlineElapsedMs = 0L
+    private var startedElapsedMs = 0L
     private var lastSamples = 0L
     private val rotM = FloatArray(9)
     private val orient = FloatArray(3)
@@ -62,6 +63,7 @@ internal class OwnMotionTracker(
         deadlineElapsedMs = SystemClock.elapsedRealtime() + windowMs
         if (active || accel == null) return
         active = true
+        startedElapsedMs = SystemClock.elapsedRealtime()
         logic.reset()
         lastSamples = 0L
         runCatching {
@@ -79,7 +81,9 @@ internal class OwnMotionTracker(
         active = false
         runCatching { sensors?.unregisterListener(this) }
         handler.removeCallbacks(secondTick)
-        Logx.d("motion", "own tracker OFF ($reason): ${logic.summary(SystemClock.elapsedRealtime())}")
+        // 0.3.26: the window's totals next to the hub tally, in the form the private journal keeps (OWN_WINDOW).
+        val now = SystemClock.elapsedRealtime()
+        Logx.d("motion", "own tracker OFF ($reason): ${logic.summary(now)} secs=${(now - startedElapsedMs) / 1000} ${context()}")
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
