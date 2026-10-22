@@ -262,8 +262,9 @@ fun SettingsScreen(deps: Deps, modifier: Modifier = Modifier) {
         SettingsCard {
             CardTitle("Measurement mode")
             val measuring by deps.proximity.measuring.collectAsState()
-            Text("For a calibration walk: the key signal is read every 0.2 s and logged for 5 minutes. " +
-                "Needs BLE logging on. Uses more battery while active.", color = Brand.muted, fontSize = 12.sp)
+            Text("For a calibration walk: the key signal is read every 0.2 s and logged for 5 minutes, and the app's " +
+                "own step counter runs for the same 5 minutes - also without the car; its window line reaches the " +
+                "journal. Needs BLE logging on. Uses more battery while active.", color = Brand.muted, fontSize = 12.sp)
             PrimaryButton(if (measuring) "Measuring… (5 min)" else "Start measurement (5 min)",
                 Modifier.fillMaxWidth(), enabled = !measuring && liveCfg.logBle) {
                 deps.proximity.startMeasurement()

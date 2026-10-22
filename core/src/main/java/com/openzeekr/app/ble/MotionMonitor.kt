@@ -127,6 +127,11 @@ class MotionMonitor(context: Context) : ProximityMotion {
         if (active) ownTracker.extend() else ownTracker.stop("unlock window closed")
     }
 
+    /** 0.3.27: Measurement mode runs the same tracker without the car; its window closes with its own reason. */
+    override fun ownMeasurementWindow(active: Boolean) {
+        if (active) ownTracker.extend() else ownTracker.stop("measurement over")
+    }
+
     /**
      * Measurement version (battery plan 20/10): the 10 s early-wake pulse on a pulse day - the own
      * tracker reads the accelerometer briefly right after the first-movement wake, and [onDone] hears

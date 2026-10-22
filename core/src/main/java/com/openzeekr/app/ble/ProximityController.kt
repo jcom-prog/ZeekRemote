@@ -353,13 +353,20 @@ class ProximityController internal constructor(
     fun startMeasurement() {
         measureUntilElapsedMs = clock.elapsedMs() + MeasurementMode.DURATION_MS
         _measuring.value = true
-        Logx.d("prox", "measurement mode on (${MeasurementMode.DURATION_MS / 60_000} min)")
+        // 0.3.27: the own step counter runs for the same minutes, so a walk without the car (garage week) still
+        // measures the counter, the turn and the battery per window; re-extended per sample in the monitor loop.
+        runCatching { motion.ownMeasurementWindow(true) }
+        Logx.d("prox", "measurement mode on (${MeasurementMode.DURATION_MS / 60_000} min); own step counter window open")
         activityWake?.complete(Unit); motionWake?.complete(Unit)
     }
 
     private fun measuringNow(): Boolean {
         val on = MeasurementMode.active(measureUntilElapsedMs, clock.elapsedMs())
-        if (!on && _measuring.value) { _measuring.value = false; Logx.d("prox", "measurement mode off") }
+        if (!on && _measuring.value) {
+            _measuring.value = false; Logx.d("prox", "measurement mode off")
+            // 0.3.27: close the own counter's measurement window unless the car's own window is running.
+            if (!armedUnlocked) runCatching { motion.ownMeasurementWindow(false) }
+        }
         return on
     }
     private var shadowRecoveryLogged = false
@@ -538,7 +545,10 @@ class ProximityController internal constructor(
                     }
                     else -> onSessionDown()
                 }
-                if (measuringNow()) { farAsleep = false; nextIntervalMs = MONITOR_FAST_MS; _wakeLockNeeded.value = true }
+                if (measuringNow()) {
+                    farAsleep = false; nextIntervalMs = MONITOR_FAST_MS; _wakeLockNeeded.value = true
+                    runCatching { motion.ownMeasurementWindow(true) }   // 0.3.27: keeps the own counter's window open
+                }
                 if (farAsleep) sleepUntilMotion() else delay(
                     (nextIntervalMs - (clock.elapsedMs() - pollCycleAtMs))
                         .coerceAtLeast(0L))

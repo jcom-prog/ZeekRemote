@@ -230,6 +230,10 @@ class ProximityDiagnosticJournalTest {
         assertEquals("OWN_WINDOW reason=service_stop own=3 turn=yes secs=20 detector=5 counter=none ar=STILL screen=on",
             ProximityDiagnosticJournal.event("motion",
                 "own tracker OFF (service stop): own steps=3 samples=1000 turn=4s ago secs=20 detector=5 counter=none ar=STILL screen=on"))
+        // 0.3.27: a Measurement-mode window (no car) closes with its own reason.
+        assertEquals("OWN_WINDOW reason=measurement_over own=40 turn=yes secs=300 detector=38 counter=41 ar=MOVING screen=off",
+            ProximityDiagnosticJournal.event("motion",
+                "own tracker OFF (measurement over): own steps=40 samples=15000 turn=12s ago secs=300 detector=38 counter=41 ar=MOVING screen=off"))
         assertNull(ProximityDiagnosticJournal.event("motion",
             "own tracker OFF (window over): own steps=12 samples=5900 turn=none secs=118 detector=97 counter=192 ar=MOVING screen=off at home"))
         val day = "mode=pulse fires=3 pulses=2 pulseS=20 pulseMah=0,12 walking=1 headStartS=2,5 usedMah=310 screenOffH=14,2 unpluggedH=15,0 perScreenOffH=21,8"

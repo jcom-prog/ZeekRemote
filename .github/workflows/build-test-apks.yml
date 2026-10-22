@@ -79,6 +79,7 @@ on:
       - zeekremote-0.3.24-climate-state
       - zeekremote-0.3.25-gnss-plausibility
       - zeekremote-0.3.26-measure-journal
+      - zeekremote-0.3.27-measure-window
 
 permissions:
   contents: read
@@ -490,6 +491,11 @@ jobs:
           grep -Fq 'append("Bronnen: ")' core/src/main/java/com/openzeekr/app/util/DiagnosticExport.kt
           grep -Fq 'val appLog = fromLogcat + buffer.filterNot { it in seen }' app/src/main/java/com/openzeekr/app/ui/LogShare.kt
           grep -Fq 'fun measurementLinesOfTheOwnTrackerAndTheBatteryDayAreCountsOnly()' core/src/test/java/com/openzeekr/app/util/ProximityDiagnosticJournalTest.kt
+          # 0.3.27 (owner approval 22/10): Measurement mode runs the own step counter for its 5 minutes, car or no car.
+          grep -Fq 'fun ownMeasurementWindow(active: Boolean) {}' core/src/main/java/com/openzeekr/app/ble/ProximityPorts.kt
+          grep -Fq 'if (active) ownTracker.extend() else ownTracker.stop("measurement over")' core/src/main/java/com/openzeekr/app/ble/MotionMonitor.kt
+          grep -Fq 'if (!armedUnlocked) runCatching { motion.ownMeasurementWindow(false) }' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'reason=measurement_over' core/src/test/java/com/openzeekr/app/util/ProximityDiagnosticJournalTest.kt
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -511,7 +517,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='150' versionName='0.3.26-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='151' versionName='0.3.27-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

@@ -49,6 +49,9 @@ interface ProximityMotion {
     /** Measurement version (doorbraak C): the app's own step counter window - opened while the car is
      *  believed unlocked, re-extended by every strong at-the-car reading, logs only. Default: nothing. */
     fun ownWindow(active: Boolean) {}
+    /** 0.3.27: Measurement mode opens the same window without the car (a walk during the garage week measures the
+     *  own counter, the turn and the battery per window); the controller closes it unless the car's window runs. */
+    fun ownMeasurementWindow(active: Boolean) {}
     /** 0.3.20: MOVING only because Activity Recognition reported a drive (IN_VEHICLE) and nothing has shown walking
      *  since - no walking transition, no step, no STILL (field 16/10 and 19/10: MOVING for minutes after the drive). */
     val vehicleMotion: Boolean get() = false
