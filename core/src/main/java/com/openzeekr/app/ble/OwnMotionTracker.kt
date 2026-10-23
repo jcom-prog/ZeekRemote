@@ -27,6 +27,9 @@ internal class OwnMotionTracker(
     private val sensors: SensorManager?,
     /** Extra fields for the per-second line: hub tally, motion state, screen - for the comparison. */
     private val context: () -> String,
+    /** 0.4.0b: held (bounded to the window) while a window is open, so the 50 Hz accelerometer keeps counting with the
+     *  screen off; null in tests. Not reference counted: every extension re-arms the timeout. */
+    private val wakeLock: android.os.PowerManager.WakeLock? = null,
 ) : SensorEventListener {
     private val logic = OwnStepLogic()
     private val handler = Handler(Looper.getMainLooper())
@@ -43,6 +46,18 @@ internal class OwnMotionTracker(
     val running: Boolean get() = active
     /** Steps counted in the open window (diagnostic; the shadow journal reads it). */
     val steps: Long get() = logic.steps
+    // ---- 0.4.0b: the controller's view (OwnRules) ----
+    /** The running total over all windows (the controller keeps deltas of it; a window change must not reset them). */
+    @Volatile private var closedTotal = 0L
+    val totalSteps: Long get() = closedTotal + logic.steps
+    /** The latest step (elapsed ms) in the open window; null before the first or while closed. */
+    val lastStepElapsedMs: Long? get() = if (active) logic.lastStepElapsedMs else null
+    fun stepsSince(elapsedMs: Long): Long = if (active) logic.stepsSince(elapsedMs) else 0L
+    /** Extends the window to at least [windowMs] from now; never shortens a longer one. */
+    @Synchronized fun extendAtLeast(windowMs: Long) {
+        if (active && deadlineElapsedMs >= SystemClock.elapsedRealtime() + windowMs) return
+        extend(windowMs)
+    }
     /** The latest observed turn (elapsed ms) in the open window; null: none. */
     val lastTurnAtMs: Long? get() = logic.lastTurnAtMs
 
@@ -61,6 +76,7 @@ internal class OwnMotionTracker(
      *  strong reading at the car). Without an accelerometer this does nothing. */
     @Synchronized fun extend(windowMs: Long = WINDOW_MS) {
         deadlineElapsedMs = SystemClock.elapsedRealtime() + windowMs
+        if (accel != null) runCatching { wakeLock?.acquire(windowMs + WAKE_SLACK_MS) }
         if (active || accel == null) return
         active = true
         startedElapsedMs = SystemClock.elapsedRealtime()
@@ -79,8 +95,10 @@ internal class OwnMotionTracker(
     private fun stopNow(reason: String) {
         if (!active) return
         active = false
+        closedTotal += logic.steps
         runCatching { sensors?.unregisterListener(this) }
         handler.removeCallbacks(secondTick)
+        runCatching { if (wakeLock?.isHeld == true) wakeLock.release() }
         // 0.3.26: the window's totals next to the hub tally, in the form the private journal keeps (OWN_WINDOW).
         val now = SystemClock.elapsedRealtime()
         Logx.d("motion", "own tracker OFF ($reason): ${logic.summary(now)} secs=${(now - startedElapsedMs) / 1000} ${context()}")
@@ -111,5 +129,7 @@ internal class OwnMotionTracker(
     companion object {
         /** The design's bound per extension; every strong at-the-car reading re-extends. */
         const val WINDOW_MS = 120_000L
+        /** 0.4.0b: the wake lock outlives the window by this much (the stop releases it earlier). */
+        const val WAKE_SLACK_MS = 5_000L
     }
 }

@@ -55,6 +55,15 @@ interface ProximityMotion {
     /** 0.3.20: MOVING only because Activity Recognition reported a drive (IN_VEHICLE) and nothing has shown walking
      *  since - no walking transition, no step, no STILL (field 16/10 and 19/10: MOVING for minutes after the drive). */
     val vehicleMotion: Boolean get() = false
+    /** 0.4.0 study: the app's own step counter (accelerometer). Its running total, the wall time of its latest step,
+     *  the steps it saw since a wall time, and whether it counts right now; null/false/0 without one. */
+    val ownSteps: Long? get() = null
+    val ownLastStepAtMs: Long? get() = null
+    fun ownStepsSince(wallMs: Long): Long = 0L
+    val ownCounting: Boolean get() = false
+    /** 0.4.0 study: the locked-side window (the approach, the return band after a Lock): the controller opens or extends
+     *  it on a presence hit and on every reading in the band; the implementation closes it some time after the last. */
+    fun ownApproachWindow(active: Boolean, hit: Boolean = false) {}
     fun start()
     fun stop()
 }

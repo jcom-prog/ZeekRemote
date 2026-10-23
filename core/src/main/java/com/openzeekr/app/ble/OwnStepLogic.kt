@@ -29,6 +29,11 @@ internal class OwnStepLogic {
     private var lastAccelAtMs = Long.MIN_VALUE
     private var rising = false
     private var lastStepAtMs = Long.MIN_VALUE
+    /** 0.4.0b: the latest step (elapsed ms; null before the first) and the recent steps' times - the controller's own
+     *  walk evidence ([OwnRules]). Read from another thread than the sensor callback, hence synchronized. */
+    val lastStepElapsedMs: Long? get() = synchronized(this) { if (lastStepAtMs == Long.MIN_VALUE) null else lastStepAtMs }
+    private val stepTimes = ArrayDeque<Long>()
+    fun stepsSince(elapsedMs: Long): Long = synchronized(this) { stepTimes.count { it >= elapsedMs }.toLong() }
 
     /** Steps counted since [reset]. */
     var steps = 0L
@@ -47,16 +52,16 @@ internal class OwnStepLogic {
         private set
     private var turnQuietUntilMs = Long.MIN_VALUE
 
-    fun reset() {
+    fun reset() = synchronized(this) {
         gravitySeeded = false; gravityEst = 9.81; dyn = 0.0; rising = false
         lastAccelAtMs = Long.MIN_VALUE; lastStepAtMs = Long.MIN_VALUE
-        steps = 0L; samples = 0L
+        steps = 0L; samples = 0L; stepTimes.clear()
         yaw.clear(); yawUnwrapped = 0.0; lastRawYaw = null
         lastTurnAtMs = null; turnQuietUntilMs = Long.MIN_VALUE
     }
 
     /** One accelerometer sample: [magnitude] = |a| in m/s² (gravity included). */
-    fun onAccel(atMs: Long, magnitude: Double) {
+    fun onAccel(atMs: Long, magnitude: Double) = synchronized(this) {
         samples++
         if (!gravitySeeded) { gravityEst = magnitude; gravitySeeded = true }
         // The gravity estimate follows slowly (tilt, pocket shifts); the step band stays in `dyn`.
@@ -71,6 +76,7 @@ internal class OwnStepLogic {
                 if (lastStepAtMs == Long.MIN_VALUE || atMs - lastStepAtMs >= STEP_GAP_MS) {
                     steps++
                     lastStepAtMs = atMs
+                    stepTimes.addLast(atMs); while (stepTimes.size > STEP_TIMES_KEPT) stepTimes.removeFirst()
                 }
             }
         } else if (dyn <= STEP_THRESHOLD * 0.5) {
@@ -120,6 +126,8 @@ internal class OwnStepLogic {
         const val STEP_THRESHOLD = 1.1
         /** Two steps are never closer than this (a 3 steps/s sprint stays countable). */
         const val STEP_GAP_MS = 320L
+        /** 0.4.0b: recent step times kept for [stepsSince]. */
+        const val STEP_TIMES_KEPT = 200
         /** Heading change that counts as a turn... */
         val TURN_RAD = Math.toRadians(110.0)
         /** ...within this window, and not slower than this (a bend in a path is no turn). */

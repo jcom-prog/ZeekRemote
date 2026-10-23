@@ -5,6 +5,7 @@ import com.openzeekr.app.ble.DepartureFix
 import com.openzeekr.app.ble.DepartureLocator
 import com.openzeekr.app.ble.DepartureFixMemory
 import com.openzeekr.app.ble.DepartureObservationWindow
+import com.openzeekr.app.ble.OwnRules
 import com.openzeekr.app.ble.DkBleManager
 import com.openzeekr.app.ble.DkProtocol
 import com.openzeekr.app.ble.DkSession
@@ -202,6 +203,10 @@ internal data class SimPhysics(
      *  before the ration is asked, the status-133 recovery arms BALANCED, a presence hit stops the scan before its
      *  direct connect, every foreground scan next to it starts. SIM_SCAN_0320=1. */
     val scan0320: Boolean = System.getenv("SIM_SCAN_0320") == "1",
+    /** 0.4.0 study worst case (field 22/10): the hub counter and the detector deliver nothing while the user walks and
+     *  hand the walk over in ONE batch this long after it ended (field: 1665 s). 0 = off. */
+    val hubBatchMinMs: Long = 0L,
+    val hubBatchMaxMs: Long = 0L,
 ) {
     fun describe() = "%s phone%+.1fdB slope%.1f fade%.1f gnss%s ttff%.0fs hub%.0fs warm%.0f self%.0fs refuse%.2f cloud%.0fs/fail%.2f/lag%.0fs".format(
         name, phoneOffsetDb, pathSlope, fadeSigmaDb, gnssAccMedianM?.let { "%.1fm".format(it) } ?: "-", gnssTtffMs / 1000.0,
@@ -213,7 +218,8 @@ internal data class SimPhysics(
         (if (midStallMaxMs > 0) " steps-stall%.0f-%.0fs".format(midStallMinMs / 1000.0, midStallMaxMs / 1000.0) else "") +
         (if (afterDriveReleaseMaxMs > 0) " steps-after-drive%.0f-%.0fs".format(afterDriveReleaseMinMs / 1000.0, afterDriveReleaseMaxMs / 1000.0) else "") +
         (if (presenceFloorRssi != SimWorld.PRESENCE_MIN_RSSI) " presence%.0f".format(presenceFloorRssi) else "") +
-        (edge133Rssi?.let { " 133-below%.0f".format(it) } ?: "")
+        (edge133Rssi?.let { " 133-below%.0f".format(it) } ?: "") +
+        (if (hubBatchMaxMs > 0) " steps-batch%.0f-%.0fs".format(hubBatchMinMs / 1000.0, hubBatchMaxMs / 1000.0) else "")
 
     companion object {
         private fun env(name: String, default: Double) = System.getenv(name)?.toDouble() ?: default
@@ -390,6 +396,9 @@ internal class SimWorld(
     private val screenOnWhileWalking = SimRandom(seed * 7 + 0x5C2EE7L).chance(physics.screenOnWhileWalkingP)
     val screenOn get() = screenOnWhileWalking && walking
     var label = ""; private set
+    /** 0.4.0 study: the walker turns or shuffles at one spot (a Shuffle leg): the own counter may count a false step. */
+    private var shuffling = false
+    private val rOwn = stream(12)
 
     // ---------------- radio ----------------
     private var fade = 0.0
@@ -428,6 +437,7 @@ internal class SimWorld(
     fun record(kind: String, detail: String = "") { events += Event(now(), kind, distanceM, detail) }
     val logLines = ArrayList<String>()
     data class Sample(val atMs: Long, val distanceM: Double, val carLocked: Boolean, val moving: Boolean,
+                      val own: Long? = null, val ownOn: Boolean = false,
                       val appBelievesUnlocked: Boolean = false, val cpuAwake: Boolean = false, val gnssOn: Boolean = false,
                       val linkUp: Boolean = false, val appAlive: Boolean = true,
                       /** Diagnostics only: the true RSSI, the motion state and the steps the app sees. */
@@ -485,6 +495,65 @@ internal class SimWorld(
         private var hubSteps = 0.0; private var hubBoutSteps = 0.0
         private var hubSeen = 0L; private var hubSnapMs = 0L
         private var freezeFromMs = Long.MAX_VALUE; private var freezeUntilMs = Long.MIN_VALUE
+        /** 0.4.0 study worst case: the batch world holds every step until this moment (MAX while walking). */
+        private var batchHoldUntilMs = Long.MIN_VALUE
+        // ---- 0.4.0 study: the app's own step counter (accelerometer) ----
+        // Field 23/10 (three measurement walks, front pocket, screen off): counts per second from the first step,
+        // 516 for 500 counted steps (+3 %), 0 false steps in stops of 14-20 s; the hub counter 5-14 s late, in batches.
+        private var ownAcc = 0.0; private var ownTotal = 0L; private var ownStepAtMs = Long.MIN_VALUE
+        private var ownSeen = 0L; private var ownSeenAtMs = Long.MIN_VALUE; private var ownSeenStepWallMs: Long? = null
+        private val ownStepWalls = ArrayDeque<Long>()
+        private var ownEpochOpen = false; private var ownApproachUntilMs = Long.MIN_VALUE
+        private var ownWasCounting = false
+        /** Every own step the model counted (study dump). */
+        var ownCounted = 0L; private set
+        private fun ownWindowOpen() = ownEpochOpen || now() < ownApproachUntilMs
+        override val ownCounting: Boolean get() = OWN && appAlive && ownWindowOpen()
+        override val ownSteps: Long? get() = if (OWN) ownSeen else null
+        override val ownLastStepAtMs: Long? get() = if (OWN) ownSeenStepWallMs else null
+        override fun ownStepsSince(wallMs: Long): Long = if (!OWN) 0L else ownStepWalls.count { it >= wallMs }.toLong()
+        /** The app's window while it believes the car open (opened at the unlock, closed at the Lock). */
+        override fun ownWindow(active: Boolean) {
+            if (!OWN) return
+            if (active != ownEpochOpen) log('D', "sim", "own window ${if (active) "open" else "closed"} (car open)")
+            ownEpochOpen = active
+        }
+        /** The locked-side window: extended by the controller per presence hit / reading in the band. */
+        override fun ownApproachWindow(active: Boolean, hit: Boolean) {
+            if (!OWN) return
+            if (active) {
+                if (now() >= ownApproachUntilMs && !ownEpochOpen) log('D', "sim", "own window open (locked side)")
+                ownApproachUntilMs = now() + OWN_APPROACH_WINDOW_MS
+            } else ownApproachUntilMs = Long.MIN_VALUE
+        }
+        /** The process died: the tracker's windows die with it. */
+        fun ownReset() { ownEpochOpen = false; ownApproachUntilMs = Long.MIN_VALUE }
+        /** Called by the world every tick. The counter runs only in an open window ([ownCounting]); the app holds the CPU then. */
+        fun ownTick(dtMs: Long, shufflingNow: Boolean) {
+            if (!OWN) return
+            val counting = ownCounting
+            if (counting != ownWasCounting) {
+                ownWasCounting = counting
+                if (!counting) log('D', "sim", "own window closed (counted $ownTotal)")
+            }
+            if (!counting) { ownAcc = 0.0; return }
+            if (walking) ownAcc += dtMs / 550.0 * OWN_OVERCOUNT
+            else {
+                val rate = if (shufflingNow) OWN_FALSE_SHUFFLE else OWN_FALSE_STAND
+                if (rate > 0.0 && rOwn.chance(rate * dtMs / 1000.0)) ownAcc += 1.0
+            }
+            while (ownAcc >= 1.0) { ownAcc -= 1.0; ownTotal++; ownCounted++; ownStepAtMs = now() }
+            if (ownSeenAtMs == Long.MIN_VALUE || now() - ownSeenAtMs >= OWN_LAG_MS) {
+                ownSeenAtMs = now()
+                if (ownTotal > ownSeen) {
+                    val wall = clock.wallMs() - (now() - ownStepAtMs)
+                    repeat((ownTotal - ownSeen).toInt().coerceAtMost(50)) { ownStepWalls.addLast(wall) }
+                    while (ownStepWalls.size > 200) ownStepWalls.removeFirst()
+                    ownSeen = ownTotal; ownSeenStepWallMs = wall
+                    if (OWN_MOTION) { vehicleMotion = false; lastStepMs = now(); setMoving() }
+                }
+            }
+        }
         override val observedSteps: Long? get() =
             if (!motionProfile.hasStepDetector) null
             else if (STEP_COUNTER) maxOf(steps, hubSeen) else steps
@@ -556,7 +625,13 @@ internal class SimWorld(
                 }
             }
             wasWalking = walking
-            val late = now() < lateUntilMs
+            // 0.4.0 study worst case (field 22/10): nothing while walking, one batch 30-300 s after the walk ends.
+            if (physics.hubBatchMaxMs > 0) {
+                if (walking) batchHoldUntilMs = Long.MAX_VALUE
+                else if (batchHoldUntilMs == Long.MAX_VALUE)
+                    batchHoldUntilMs = now() + rHub.uniform(physics.hubBatchMinMs.toDouble(), physics.hubBatchMaxMs.toDouble()).toLong()
+            }
+            val late = now() < lateUntilMs || (physics.hubBatchMaxMs > 0 && (walking || now() < batchHoldUntilMs))
             if (walking) {
                 hubBoutSteps += dtMs / 550.0
                 if (hubBoutSteps >= physics.stepWarmup) { if (driveHold) heldHub += 0.9 * dtMs / 550.0 else hubSteps += 0.9 * dtMs / 550.0 }
@@ -1277,6 +1352,7 @@ internal class SimWorld(
         safetyHolds.clear()   // a dead process holds no wakelock
         appAlive = false
         service.reset()
+        motion.ownReset()
         link.newProcess()
     }
     private fun startApp() {
@@ -1293,7 +1369,9 @@ internal class SimWorld(
 
     /** The app holds the CPU (its wakelocks, or a connection in progress). */
     private fun cpuAwake() = appAlive && (controller.wakeLockNeeded.value || link.state.value == DkBleManager.State.CONNECTING ||
-        link.state.value == DkBleManager.State.CONNECTED || safetyHeld())
+        link.state.value == DkBleManager.State.CONNECTED || safetyHeld() ||
+        // 0.4.0 study: the app holds the CPU while its own step counter runs (the design's battery cost).
+        (OWN_HOLD && motion.ownCounting))
     /** Do the app's timers run? Always in the calibrated world; with [SimPhysics.cpuSleep] only while awake. */
     private fun appRuns(): Boolean {
         if (!appAlive) return false
@@ -1317,6 +1395,7 @@ internal class SimWorld(
             val awake = cpuAwake()
             val runs = appRuns()
             car.tick(); link.tick(); motion.tick(dt, awake); if (appAlive) service.tick(runs)
+            motion.ownTick(dt, shuffling)
             val t0 = scheduler.currentTime
             scheduler.advanceTimeBy(dt); scheduler.runCurrent()
             appAdvancing = true
@@ -1331,7 +1410,7 @@ internal class SimWorld(
                 linkUp = link.state.value == DkBleManager.State.SESSION_READY, appAlive = appAlive,
                 trueRssi = trueRssi, motionState = motion.state.value.name, steps = motion.observedSteps,
                 listening = appAlive && (link.state.value != DkBleManager.State.IDLE || service.presenceListening),
-                keyAsleep = service.keySleeping)
+                keyAsleep = service.keySleeping, own = motion.ownSteps, ownOn = motion.ownCounting)
             left -= dt
         }
     }
@@ -1385,13 +1464,13 @@ internal class SimWorld(
                     run(leg.ms); indoor = false
                 }
                 is Leg.Shuffle -> {
-                    walking = false; var left = leg.ms
+                    walking = false; shuffling = true; var left = leg.ms
                     while (left > 0) {
                         facing = Facing.values()[(rnd.nextDouble() * 3).toInt().coerceAtMost(2)]
                         extraShadowDb = if (rnd.chance(0.3)) leg.shadowDb else 0.0
                         val d = minOf(left, rnd.uniform(2_000.0, 6_000.0).toLong()); run(d); left -= d
                     }
-                    extraShadowDb = 0.0
+                    extraShadowDb = 0.0; shuffling = false
                 }
                 is Leg.Walk -> {
                     walking = true; walkSpeed = leg.speedMps; walkTarget = leg.toM; extraShadowDb = 0.0
@@ -1470,6 +1549,19 @@ internal class SimWorld(
         private val MODE_NAMES = listOf("LOW_POWER idle", "BALANCED approach", "LOW_LATENCY motion wake")
         val WEAK_GATE = System.getenv("SIM_WEAK_GATE") != "0"
         val STEP_COUNTER = System.getenv("SIM_STEP_COUNTER") != "0"
+        /** 0.4.0 study: the app's own step counter exists (SIM_OWN=1), with its field-calibrated parameters (23/10). */
+        val OWN = OwnRules.enabled
+        /** Own steps feed the motion state (step assist -> MOVING), as the hub detector's steps do. */
+        val OWN_MOTION = (System.getenv("SIM_OWN_MOTION") ?: (if (OwnRules.live) "1" else "0")) == "1"
+        /** The app holds the CPU while the counter runs. */
+        val OWN_HOLD = System.getenv("SIM_OWN_HOLD") != "0"
+        val OWN_LAG_MS = (System.getenv("SIM_OWN_LAG_MS") ?: "1000").toLong()
+        val OWN_OVERCOUNT = (System.getenv("SIM_OWN_OVERCOUNT") ?: "1.03").toDouble()
+        /** False own steps per second while turning/shuffling on the spot, and while standing still (field: 0). */
+        val OWN_FALSE_SHUFFLE = (System.getenv("SIM_OWN_FALSE_SHUFFLE") ?: "0.1").toDouble()
+        val OWN_FALSE_STAND = (System.getenv("SIM_OWN_FALSE_STAND") ?: "0").toDouble()
+        /** The locked-side window closes this long after the last presence hit / reading in the band. */
+        val OWN_APPROACH_WINDOW_MS = (System.getenv("SIM_OWN_WINDOW_MS") ?: "90000").toLong()
         const val SUPERVISION_MS = 3_000L
         const val PRESENCE_MIN_RSSI = -95.0
         // ProximityService constants (14/10).

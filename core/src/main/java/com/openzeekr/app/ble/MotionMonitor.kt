@@ -76,9 +76,9 @@ class MotionMonitor(context: Context) : ProximityMotion {
     private val tally = StepTally()
     // Measurement version (doorbraak C): the app's own step counter in the unlock window, logs only.
     private val power = appCtx.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
-    private val ownTracker = OwnMotionTracker(sensors) {
+    private val ownTracker = OwnMotionTracker(sensors, {
         "${tally.summary()} ar=${_state.value} screen=${if (power?.isInteractive == true) "on" else "off"}"
-    }
+    }, runCatching { power?.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "zeekremote:own")?.apply { setReferenceCounted(false) } }.getOrNull())
     @Volatile private var stepCounterActive = false
     @Volatile private var lastStepFlushElapsedMs = 0L
 
@@ -131,6 +131,24 @@ class MotionMonitor(context: Context) : ProximityMotion {
     override fun ownMeasurementWindow(active: Boolean) {
         if (active) ownTracker.extend() else ownTracker.stop("measurement over")
     }
+
+    // ---- 0.4.0b: the own counter as walking evidence ([OwnRules]; off = the fields of 0.3.30) ----
+    override val ownSteps: Long? get() = if (OwnRules.enabled) ownTracker.totalSteps else null
+    override val ownLastStepAtMs: Long? get() = if (!OwnRules.enabled) null else ownTracker.lastStepElapsedMs?.let { elapsedToWall(it) }
+    override fun ownStepsSince(wallMs: Long): Long = if (!OwnRules.enabled) 0L else ownTracker.stepsSince(wallToElapsed(wallMs))
+    override val ownCounting: Boolean get() = OwnRules.enabled && ownTracker.running
+    /** The locked-side window: a presence hit opens it; a reading in the band extends it only while the phone walks
+     *  (Activity Recognition MOVING, or an own step in the last [APPROACH_SELF_SUSTAIN_MS]) - a phone lying at home
+     *  within the band must not keep the accelerometer and the CPU on. */
+    override fun ownApproachWindow(active: Boolean, hit: Boolean) {
+        if (!OwnRules.enabled) return
+        if (!active) { ownTracker.stop("approach window closed"); return }
+        val walking = _state.value == Motion.MOVING ||
+            ownTracker.lastStepElapsedMs?.let { SystemClock.elapsedRealtime() - it <= APPROACH_SELF_SUSTAIN_MS } == true
+        if (hit || walking) ownTracker.extendAtLeast(OwnRules.approachWindowMs)
+    }
+    private fun elapsedToWall(elapsedMs: Long): Long = com.openzeekr.app.util.SteadyClock.wallMs() - (SystemClock.elapsedRealtime() - elapsedMs)
+    private fun wallToElapsed(wallMs: Long): Long = SystemClock.elapsedRealtime() - (com.openzeekr.app.util.SteadyClock.wallMs() - wallMs)
 
     /**
      * Measurement version (battery plan 20/10): the 10 s early-wake pulse on a pulse day - the own
@@ -399,6 +417,8 @@ class MotionMonitor(context: Context) : ProximityMotion {
     }
 
     companion object {
+        /** 0.4.0b: an own step this recent keeps the approach window alive without Activity Recognition. */
+        const val APPROACH_SELF_SUSTAIN_MS = 10_000L
         /** Regression policy: an ordinary step detector cannot wake a sleeping application processor. */
         internal fun isWakeCapableStepDetector(isWakeUpSensor: Boolean): Boolean = isWakeUpSensor
 

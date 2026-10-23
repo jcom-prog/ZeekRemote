@@ -83,6 +83,7 @@ on:
       - zeekremote-0.3.28-deep-return-walk
       - zeekremote-0.3.29-alarm-walk
       - zeekremote-0.3.30-upstream-ports
+      - zeekremote-0.4.0b-own-rules-measurement
 
 permissions:
   contents: read
@@ -520,6 +521,16 @@ jobs:
           grep -Fq 'private const val MAX = 5000' core/src/main/java/com/openzeekr/app/util/Logx.kt
           grep -Fq 'fun dcFastChargePowerIsReadFromTheStatusAndSigned()' core/src/test/java/com/openzeekr/app/net/model/UpstreamPortsTest.kt
           grep -Fq '## 0.3.30' CHANGELOG.md
+          # 0.4.0b (owner decision 23/10): the own step counter's rules (walk evidence, 2 dB rise hold, walk credit) as fixed code in SHADOW mode - the live decisions stay 0.3.30, a second policy logs what the rules would do.
+          grep -Fq 'val mode: Mode = when (System.getenv("SIM_OWN_MODE")) { "off" -> Mode.OFF; "live" -> Mode.LIVE; else -> Mode.SHADOW }' core/src/main/java/com/openzeekr/app/ble/OwnRules.kt
+          grep -Fq 'val creditSteps: Long = envLong("SIM_OWN_RISE_WALK", 12L)' core/src/main/java/com/openzeekr/app/ble/OwnRules.kt
+          grep -Fq 'val creditFarDb: Int = envInt("SIM_OWN_RISE_FAR_DB", 8)' core/src/main/java/com/openzeekr/app/ble/OwnRules.kt
+          grep -Fq 'private val riseHoldOn = ownRules && OwnRules.riseHold' core/src/main/java/com/openzeekr/app/ble/ProximityDecisionPolicy.kt
+          grep -Fq 'if (OwnRules.shadow) ProximityDecisionPolicy(approachConfirm, walkBackReturn, ownRules = true) else null' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'shadow: own walk would prove the departure now' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'if (hit || walking) ownTracker.extendAtLeast(OwnRules.approachWindowMs)' core/src/main/java/com/openzeekr/app/ble/MotionMonitor.kt
+          grep -Fq 'class OwnRulesPolicyTest' core/src/test/java/com/openzeekr/app/ble/OwnRulesPolicyTest.kt
+          grep -Fq '## 0.4.0b' CHANGELOG.md
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -541,7 +552,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='154' versionName='0.3.30-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='155' versionName='0.4.0b-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

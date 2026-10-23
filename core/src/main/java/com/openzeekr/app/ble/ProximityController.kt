@@ -3,6 +3,9 @@ package com.openzeekr.app.ble
 import com.openzeekr.app.config.ConfigStore
 import com.openzeekr.app.util.Logx
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -194,7 +197,7 @@ class ProximityController internal constructor(
         route.arrivalObserved(normalized(arrival.carLevelDb.roundToInt()))
         val strongAfterArrival = lastStrongNearAtMs != 0L &&
             clock.wallMs() - lastStrongNearAtMs < clock.elapsedMs() - arrival.atMs
-        if (!strongAfterArrival) { stepsAtLastStrongNear = arrival.stepsAtCar; counterAtLastStrongNear = null }
+        if (!strongAfterArrival) { stepsAtLastStrongNear = arrival.stepsAtCar; counterAtLastStrongNear = null; ownAtLastStrongNear = null }
         Logx.d("prox", "proven arrival at the car (steps + rise) -> departure anchor")
     }
 
@@ -252,7 +255,27 @@ class ProximityController internal constructor(
     private var postUnlockFastUntilElapsedMs = 0L
     // Time-based evidence gate. This owns arrival/departure confirmation so neither the fast RSSI
     // path nor the periodic idle check can actuate from one noisy threshold crossing.
-    private val decisionPolicy = ProximityDecisionPolicy(approachConfirm, walkBackReturn)
+    private val decisionPolicy = ProximityDecisionPolicy(approachConfirm, walkBackReturn, ownRules = OwnRules.live)
+    /** 0.4.0b shadow: the policy that may use the own counter, fed with every reading and event the live one gets; a
+     *  different answer is logged ("shadow:"). Null unless the mode is SHADOW. */
+    private val shadowPolicy: ProximityDecisionPolicy? =
+        if (OwnRules.shadow) ProximityDecisionPolicy(approachConfirm, walkBackReturn, ownRules = true) else null
+    private var shadowNoteAtMs = 0L
+    private fun shadowNote(what: String, msg: String) {
+        val now = clock.wallMs()
+        if (now - shadowNoteAtMs < SHADOW_NOTE_MIN_GAP_MS) return
+        shadowNoteAtMs = now
+        Logx.d("prox", "shadow: $what: $msg")
+    }
+    /** Runs a policy call on the live policy and mirrors it on the shadow policy; returns the live answer and logs a
+     *  shadow answer that differs. */
+    private inline fun <T> policies(label: String, block: (ProximityDecisionPolicy) -> T): T {
+        val live = block(decisionPolicy)
+        val sp = shadowPolicy ?: return live
+        val sh = block(sp)
+        if (sh != live && (live is Boolean || live is ProximityDecisionPolicy.ArmedDecision)) shadowNote(label, "0.4.0 $sh, live $live")
+        return live
+    }
     // Step totals of the last [STEPS_RISING_WINDOW_MS] (wall ms, steps): "counted steps rising now".
     private val recentSteps = ArrayDeque<Pair<Long, Long>>()
     private val relockApproachEvidence = RelockApproachEvidence()
@@ -286,10 +309,13 @@ class ProximityController internal constructor(
     private var unlockObservedAtMs = 0L
     private var stepsAtUnlock: Long? = null
     private var counterAtUnlock: Long? = null
+    private var ownAtUnlock: Long? = null
     private var strongestRssiSinceUnlock = Int.MIN_VALUE
     private var lastStrongNearAtMs = 0L
         set(value) {
             field = value; stepsAtLastStrongNear = motion.observedSteps; counterAtLastStrongNear = motion.counterSteps
+            // 0.4.0 study: the own count since the car starts here too; an earlier pause or turn is history.
+            ownAtLastStrongNear = motion.ownSteps; ownAtPause = null; ownAtTurn = null
             // 0.3.25: at the car again - the position known for certain is the anchor, with the count just rebased.
             departureAnchor?.let { departureMemory?.learn(it.copy(elapsedAtMs = clock.elapsedMs()), 0L) }
             // Measurement version: every strong at-the-car reading re-extends the own counter's window.
@@ -301,10 +327,22 @@ class ProximityController internal constructor(
     private var motionEndedElapsedMs = 0L
     // The hub counter's own total at that reading: a baseline per source (0.3.2, simulation audit C).
     private var counterAtLastStrongNear: Long? = null
+    private var ownAtLastStrongNear: Long? = null
     // 0.3.19: a return to the car that never read strong ([ReturnToCarWatch]) and the step counts then.
     private val returnToCar = ReturnToCarWatch()
     private var stepsAtReturn: Long? = null
     private var counterAtReturn: Long? = null
+    private var ownAtReturn: Long? = null
+    // 0.4.0 study: the own total when a pause (no own step for [OWN_PAUSE_MS]) or a signal turn last restarted the own-walk
+    // count; the own counter's own stall gate and walk watch; when the own counter last showed a live walk.
+    private var ownAtPause: Long? = null
+    private var ownAtTurn: Long? = null
+    private var ownTurnLoggedAtMs = 0L
+    private val ownStall = StepStallGate()
+    private val ownDepartureSteps = DepartureStepWatch()
+    private var lastOwnLiveAtMs = 0L
+    private var lastOwnSeen: Long? = null
+    private var lastOwnAdvanceAtMs = 0L
     // Walking and stopping from the step total, for the BLE departure proof (0.3.2).
     private val departureSteps = DepartureStepWatch()
     // A walk-away verification ended because the signal came back above the lock threshold.
@@ -446,7 +484,7 @@ class ProximityController internal constructor(
         armedUnlockedState = false
         resetLinkedWatch()
         postUnlockFastUntilElapsedMs = 0L
-        decisionPolicy.resetLocked()
+        policies("resetLocked") { it.resetLocked() }
         needToUnlock = false; unlockJob?.cancel(); unlockJob = null
         farAsleep = false; nearRefDist = null; nearStillSinceMs = 0L
         farApproachDeadline = 0L; farApproachRefDist = Double.MAX_VALUE
@@ -601,7 +639,7 @@ class ProximityController internal constructor(
         motion.stop()
         gattEma = null; linkLostAtMs = 0L
         pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
-        decisionPolicy.resetLocked()
+        policies("resetLocked") { it.resetLocked() }
         inCarSinceMs = 0L; steadyRef = null; steadySinceMs = 0L; lastCadence = ""
         rssiNullStreak = 0; pingJob?.cancel(); pingJob = null
         pingInFlight = false; pingFailStreak = 0; lastPingMs = 0L
@@ -615,13 +653,16 @@ class ProximityController internal constructor(
         // A PendingIntent can recreate the service/process. Start before recording evidence so the
         // normal runApproach loop cannot subsequently reset the just-created arrival epoch.
         if (!_state.value.running) start()
+        // 0.4.0b: a presence hit inside the band opens the own counter's approach window (an edge hit while the phone
+        // lies far away must not keep the accelerometer and the CPU on).
+        if (OWN_WINDOWS && rssi >= config().sensitivityUnlockRssi - OWN_BAND_DB) motion.ownApproachWindow(true, hit = true)
         val cfg = config()
-        decisionPolicy.onPresenceMatch(
+        policies("onPresenceMatch") { it.onPresenceMatch(
             nowMs = clock.wallMs(),
             rssi = rssi,
             moving = motion.state.value == MotionMonitor.Motion.MOVING,
             unlockThreshold = cfg.sensitivityUnlockRssi,
-        )
+        ) }
         Logx.d("prox", "arrival epoch: presence rssi=$rssi motion=${motion.state.value}")
         // 0.3.9: a presence hit at the unlock level after an alarm is the user back at the car, also
         // with a weak pocket (no reading reaches the strong level there): the alarm episode ends, so a
@@ -688,10 +729,10 @@ class ProximityController internal constructor(
                 unlockJob = null
                 armedUnlocked = false
                 resetLinkedWatch()
-                decisionPolicy.onManualLockConfirmed(stepsAtLastStrongNear ?: motion.observedSteps)
-                if (away) decisionPolicy.onLockedWhileAway()
+                policies("onManualLockConfirmed") { it.onManualLockConfirmed(stepsAtLastStrongNear ?: motion.observedSteps) }
+                if (away) policies("onLockedWhileAway") { it.onLockedWhileAway() }
                 if (selfLockReopenPending && source == "car self-lock") {
-                    decisionPolicy.armSelfLockReopen(clock.wallMs(), (gattEma ?: -100.0).toInt())
+                    policies("armSelfLockReopen") { it.armSelfLockReopen(clock.wallMs(), (gattEma ?: -100.0).toInt()) }
                     Logx.d("prox", "car relocked soon after our unlock -> walking up to the door reopens once")
                 }
                 selfLockReopenPending = false
@@ -737,7 +778,7 @@ class ProximityController internal constructor(
         idleFarStreak = 0; idleFastWindows = 0; deepFarAtLinkLossMs = 0L
         armedUnlocked = true
         postUnlockFastUntilElapsedMs = clock.elapsedMs() + POST_UNLOCK_FAST_MONITOR_MS
-        decisionPolicy.onUnlockConfirmed(now)
+        policies("onUnlockConfirmed") { it.onUnlockConfirmed(now) }
         unlockObservedAtMs = now
         val nearAnchor = NearDepartureAnchor(unlockElapsed)
         nearDepartureAnchor = nearAnchor
@@ -769,6 +810,7 @@ class ProximityController internal constructor(
         strongestRssiSinceUnlock = Int.MIN_VALUE
         lastStrongNearAtMs = 0L
         returnToCar.reset(); stepsAtReturn = null; counterAtReturn = null
+        ownAtUnlock = motion.ownSteps; ownAtReturn = null; ownAtPause = null; ownAtTurn = null
         lastShadowDepartureAtMs = 0L
         shadowDepartureWarned = false
         departurePromptPosted = false
@@ -796,7 +838,7 @@ class ProximityController internal constructor(
     private fun onSessionDown() {
         if (linkLostAtMs == 0L) {
             calibration.onLinkLost(clock.elapsedMs())
-            decisionPolicy.onLinkEnded()
+            policies("onLinkEnded") { it.onLinkEnded() }
             carSelfLock.onLinkLost()
             linkLostAtMs = clock.wallMs()
             // Near the car only if the last reading was taken here: steps since it mean the phone
@@ -821,8 +863,10 @@ class ProximityController internal constructor(
             // departure-ended latch otherwise kept it shut). Needs a real far reading, so a wedged
             // link beside the car or a phone left inside it never arms it.
             val lostFar = lostRssi?.let { it < config().sensitivityLockRssi } ?: false
-            if (!armedUnlocked && lostFar)
+            if (!armedUnlocked && lostFar) {
                 decisionPolicy.onFarLinkLossWhileLocked(motion.observedSteps)
+                shadowPolicy?.onFarLinkLossWhileLocked(motion.observedSteps)
+            }
             stationaryFar.onReadingsStopped()
             // RSSI/body shielding and a real departure can both tear down the link. Neither a timer
             // nor the last (possibly stale) RSSI can tell them apart; position must corroborate.
@@ -852,7 +896,7 @@ class ProximityController internal constructor(
     }
 
     private fun scheduleLinkDepartureCheck() {
-        if (!armedUnlocked || departureAnchor == null || linkDepartureJob?.isActive == true ||
+        if (!armedUnlocked || (departureAnchor == null && !ownDepartureProofAvailable()) || linkDepartureJob?.isActive == true ||
             farNoMotionCheck?.isActive == true ||
             lockJob?.isActive == true) return
         linkDepartureJob = scope.launch {
@@ -1111,9 +1155,82 @@ class ProximityController internal constructor(
     }
 
     /** 0.3.29: walking now - MOVING, or a live-cadence step, within [RETURN_MOVING_MS] (see [markStrongNear]). */
-    private fun walkedRecently(now: Long): Boolean =
-        (lastMovingSeenAtMs != 0L && now - lastMovingSeenAtMs <= RETURN_MOVING_MS) ||
+    private fun walkedRecently(now: Long): Boolean {
+        // 0.4.0: while the own counter counts, it is the evidence (the hub hands a walk over minutes late).
+        if (OWN_RULES && ownActive()) { refreshOwnEvidence(now); return ownWalkedRecently(now) }
+        val hub = (lastMovingSeenAtMs != 0L && now - lastMovingSeenAtMs <= RETURN_MOVING_MS) ||
             (lastLiveStepAtMs != 0L && now - lastLiveStepAtMs <= RETURN_MOVING_MS)
+        if (OwnRules.shadow && ownActive()) {
+            refreshOwnEvidence(now)
+            val own = ownWalkedRecently(now)
+            if (own != hub) shadowNote("walkedRecently", "0.4.0 $own, live $hub (own steps ${motion.ownSteps})")
+        }
+        return hub
+    }
+
+    // ---- 0.4.0 study: the app's own step counter as walking evidence (design 23/10, sections 3.3 and 4) ----
+    /** The own counter counts right now (one of its windows is open). */
+    private fun ownActive(): Boolean = motion.ownCounting && motion.ownSteps != null
+    /** A live own walk = at least 2 own steps within [OWN_LIVE_MS]; remembered for the evidence rules. A pause (no own
+     *  step for [OWN_PAUSE_MS]) restarts the own-walk count of the departure proof. */
+    private fun refreshOwnEvidence(now: Long) {
+        if (!ownActive()) return
+        if (motion.ownStepsSince(now - OWN_LIVE_MS) >= 2L) lastOwnLiveAtMs = now
+        motion.ownSteps?.let { s -> if (lastOwnSeen?.let { s > it } != false) lastOwnAdvanceAtMs = now; lastOwnSeen = s }
+        val last = motion.ownLastStepAtMs
+        if (last != null && now - last > OWN_PAUSE_MS) ownAtPause = motion.ownSteps
+    }
+    private fun ownWalkedRecently(now: Long): Boolean = lastOwnLiveAtMs != 0L && now - lastOwnLiveAtMs <= RETURN_MOVING_MS
+    /** Age of the latest live own walk for the policy (null: the own counter is not the evidence source now). */
+    private fun ownEvidenceAge(now: Long): Long? =
+        if (!ownActive()) null else if (lastOwnLiveAtMs == 0L) Long.MAX_VALUE else now - lastOwnLiveAtMs
+    private fun ownDepartureProofAvailable(): Boolean = OWN_DR_M > 0.0 && motion.ownSteps != null
+    /** 0.4.0b shadow: the own-walk proof is observed (logged) next to the location window. */
+    private fun ownDepartureProofShadowed(): Boolean = OwnRules.shadow && OwnRules.drMetres > 0.0 && motion.ownSteps != null
+    private var lastOwnWhy = "-"
+    /** Own steps since the car: the latest strong reading (else the unlock), restarted by a weak return, a pause or a turn. */
+    private fun ownStepsAwayFromCar(): Long? {
+        val own = motion.ownSteps ?: return null
+        val bases = mutableListOf<Long>()
+        bases += (ownAtLastStrongNear ?: ownAtUnlock ?: return null)
+        if (stepsAtReturn != null && returnToCar.returnedAtMs > lastStrongNearAtMs) ownAtReturn?.let { bases += it }
+        ownAtPause?.let { bases += it }
+        ownAtTurn?.let { bases += it }
+        return (own - bases.max()).coerceAtLeast(0L)
+    }
+    private fun ownWalkSummary(): String {
+        val steps = ownStepsAwayFromCar() ?: -1L
+        return "%d own steps ~%.0f m since the car, smoothed %s".format(steps, steps * OWN_STRIDE_M, gattEma?.toInt()?.toString() ?: "?")
+    }
+    private var ownWhyAtMs = 0L
+    private fun ownWhy(msg: String) {
+        lastOwnWhy = msg
+        if (!OWN_DR_WHY) return
+        val now = clock.wallMs()
+        if (now - ownWhyAtMs < 2_000L) return
+        ownWhyAtMs = now
+        Logx.d("prox", "own walk wait: $msg")
+    }
+    /**
+     * 0.4.0 study (design section 4, "sluiten"): the own counter walked at least [OWN_DR_M] metres (own steps x
+     * [OWN_STRIDE_M]) since the car without a pause of [OWN_PAUSE_MS] or a signal turn, is walking right now, and the
+     * smoothed signal is [OWN_DR_DB] below the unlock level (with SIM_OWN_DR_BLE also the sustained separation).
+     * Polled every 0.5 s next to the location window; [OWN_DR_STREAK] polls in a row prove the departure.
+     */
+    private fun ownDepartureProven(): Boolean {
+        if (!ownActive()) { ownWhy("own counter not counting"); return false }
+        val now = clock.wallMs()
+        refreshOwnEvidence(now)
+        val steps = ownStepsAwayFromCar() ?: run { ownWhy("no own base"); return false }
+        if (steps * OWN_STRIDE_M < OwnRules.drMetres) { ownWhy("$steps own steps since the car"); return false }
+        val last = motion.ownLastStepAtMs ?: run { ownWhy("no own step yet"); return false }
+        if (now - last > OWN_PAUSE_MS) { ownWhy("standing ${(now - last) / 100 / 10.0} s"); return false }
+        val smoothed = gattEma?.toInt() ?: run { ownWhy("no signal"); return false }
+        val level = config().sensitivityUnlockRssi - OWN_DR_DB
+        if (smoothed > level) { ownWhy("smoothed $smoothed above $level"); return false }
+        if (OWN_DR_BLE && !departureBleCorroborated()) { ownWhy("no sustained separation"); return false }
+        return true
+    }
 
     /** 0.3.29: the signal says "at the car" but nothing says the user walked there; the alarm keeps sounding (logged per 30 s). */
     private fun noteAlarmKept() {
@@ -1130,8 +1247,12 @@ class ProximityController internal constructor(
      * far the user walked, so it must not hold an alarm (simulator stress F20: "0 steps since the car" at
      * 30 m, the alarm held twice until the user turned back).
      */
-    private fun stepCountStale(): Boolean =
-        lastMovingSeenAtMs != 0L && lastMovingSeenAtMs > lastStrongNearAtMs && lastStepAdvanceAtMs <= lastStrongNearAtMs
+    private fun stepCountStale(): Boolean {
+        // 0.4.0 study: an own advance is a step advance while the own counter counts (MOVING now comes from own steps;
+        // the hub still holds a short walk's first steps - warm-up, batches - which read as a silent counter).
+        val lastAdvance = if (OWN_LOCK && ownActive()) maxOf(lastStepAdvanceAtMs, lastOwnAdvanceAtMs) else lastStepAdvanceAtMs
+        return lastMovingSeenAtMs != 0L && lastMovingSeenAtMs > lastStrongNearAtMs && lastAdvance <= lastStrongNearAtMs
+    }
 
     /**
      * Weak evidence that the user is back at the car (0.3.9) ends the alarm episode, so a departure that
@@ -1177,7 +1298,19 @@ class ProximityController internal constructor(
         if (mark != ReturnToCarWatch.Mark.NONE) {
             if (mark == ReturnToCarWatch.Mark.RETURN)
                 Logx.d("prox", "return to the car without a strong reading (rssi=$rssi) -> steps since the car count from here")
-            stepsAtReturn = motion.observedSteps; counterAtReturn = motion.counterSteps
+            stepsAtReturn = motion.observedSteps; counterAtReturn = motion.counterSteps; ownAtReturn = motion.ownSteps
+        }
+        // 0.4.0 study: a signal that turns round by [OWN_TURN_DB] within [OWN_TURN_WINDOW_MS] while the car is open restarts
+        // the own-walk count: the way back after a turn must prove a departure on its own (night study B, round 14).
+        if (OwnRules.enabled && OwnRules.drMetres > 0.0 && OWN_TURN_DB > 0 && armedUnlocked && ownActive()) {
+            val floor = recentReadings.filter { now - it.first <= OWN_TURN_WINDOW_MS }.minOfOrNull { it.second }
+            if (floor != null && rssi >= floor + OWN_TURN_DB) {
+                ownAtTurn = motion.ownSteps
+                if (now - ownTurnLoggedAtMs >= 10_000L) {
+                    ownTurnLoggedAtMs = now
+                    Logx.d("prox", "own walk: the signal turned ($floor -> $rssi dBm) -> own-walk count restarts")
+                }
+            }
         }
         // 0.3.12: two weak fresh readings in a row break a strong streak ([markStrongNear]).
         if (rssi < STRONG_NEAR_DIAGNOSTIC_RSSI) { if (++weakReadingsInRow >= 2) streakBrokenAtMs = now } else weakReadingsInRow = 0
@@ -1253,10 +1386,12 @@ class ProximityController internal constructor(
      * once the detector is ahead, counter steps taken while the CPU slept do not show in it (stress
      * F22: 22 m walked, "3 steps since the unlock").
      */
-    private fun stepsSince(mergedBase: Long?, counterBase: Long?): Long? {
+    private fun stepsSince(mergedBase: Long?, counterBase: Long?, ownBase: Long? = null): Long? {
         val merged = mergedBase?.let { base -> motion.observedSteps?.let { it - base } }
         val counter = counterBase?.let { base -> motion.counterSteps?.let { it - base } }
-        return listOfNotNull(merged, counter).maxOrNull()
+        // 0.4.0 study: the own counter is its own source - a hub that led earlier must not hide the steps walked NOW.
+        val own = if (OWN_LOCK) ownBase?.let { base -> motion.ownSteps?.let { it - base } } else null
+        return listOfNotNull(merged, counter, own).maxOrNull()
     }
 
     /** At least [STEPS_RISING_MIN] counted steps within the last [STEPS_RISING_WINDOW_MS] (false without steps). */
@@ -1270,8 +1405,8 @@ class ProximityController internal constructor(
 
     /** Steps since the latest strong reading at the car, else since the unlock (null without steps). */
     private fun stepsAwayFromCar(): Long? =
-        if (stepsAtLastStrongNear != null) stepsSince(stepsAtLastStrongNear, counterAtLastStrongNear)
-        else stepsSince(stepsAtUnlock, counterAtUnlock)
+        if (stepsAtLastStrongNear != null) stepsSince(stepsAtLastStrongNear, counterAtLastStrongNear, ownAtLastStrongNear)
+        else stepsSince(stepsAtUnlock, counterAtUnlock, ownAtUnlock)
 
     /**
      * 0.3.19 (study I): [LOCK_MIN_STEPS_SINCE_CAR] also counts from a return to the car that never read strong
@@ -1282,7 +1417,7 @@ class ProximityController internal constructor(
     private fun stepsShortOfReturn(): String? {
         if ((stepsSinceUnlock() ?: 0L) <= 0L) return null
         if (stepsAtReturn == null || returnToCar.returnedAtMs <= lastStrongNearAtMs) return null
-        val sinceReturn = stepsSince(stepsAtReturn, counterAtReturn) ?: return null
+        val sinceReturn = stepsSince(stepsAtReturn, counterAtReturn, ownAtReturn) ?: return null
         val steps = stepsAwayFromCar()?.let { minOf(it, sinceReturn) } ?: sinceReturn
         return if (steps < LOCK_MIN_STEPS_SINCE_CAR) "only $steps steps since the return to the car (${motion.stepSummary})" else null
     }
@@ -1520,7 +1655,7 @@ class ProximityController internal constructor(
             // (simulator 03/10, loading the boot). Where steps are counted, a real departure has
             // walked clearly further than that; hold the alarm and look again. The 60 s far watch
             // and the link-loss alarm stay as the backstop.
-            val stepsSinceCar = if (stepsAtLastStrongNear != null) stepsSince(stepsAtLastStrongNear, counterAtLastStrongNear) else null
+            val stepsSinceCar = if (stepsAtLastStrongNear != null) stepsSince(stepsAtLastStrongNear, counterAtLastStrongNear, ownAtLastStrongNear) else null
             // 0.3.9: not when the position already proved the departure - a step counter that went
             // silent then shows "2 steps since the car" while the user is 30 m away (simulator F20).
             if (departureAlarmHolds < DEPARTURE_ALARM_MAX_HOLDS && departurePositionProofAtMs == 0L && !stepCountStale() &&
@@ -1676,11 +1811,11 @@ class ProximityController internal constructor(
                 }
             }
             val idleDecision = if (rssi == null) ProximityDecisionPolicy.ArmedDecision.NONE else
-                decisionPolicy.onUnlockedSample(
+                policies("onUnlockedSample") { it.onUnlockedSample(
                     clock.wallMs(), rssi,
                     motion.state.value == MotionMonitor.Motion.MOVING,
                     config().sensitivityLockRssi,
-                )
+                ) }
             if (idleDecision == ProximityDecisionPolicy.ArmedDecision.LOCK) {
                 Logx.d("prox", "armed idle safety-check rssi=$rssi -> verifying fresh separation")
                 requestVerifiedWalkAwayLock("idle-far-lock")
@@ -1778,11 +1913,14 @@ class ProximityController internal constructor(
      * evidence of leaving (calibrated F05: a location jump "proved" a departure at 1 m).
      */
     private fun stepsForDepartureProof(): Long? =
-        if (stepsAtLastStrongNear != null) stepsSince(stepsAtLastStrongNear, counterAtLastStrongNear)?.coerceAtLeast(0L)
+        if (stepsAtLastStrongNear != null) stepsSince(stepsAtLastStrongNear, counterAtLastStrongNear, ownAtLastStrongNear)?.coerceAtLeast(0L)
         else stepsAtUnlock?.let { baseline -> motion.observedSteps?.let { (it - baseline).coerceAtLeast(0L) } }
 
-    private fun stepsSinceUnlock(): Long? = stepsAtUnlock?.let { baseline ->
-        motion.observedSteps?.let { (it - baseline).coerceAtLeast(0L) }
+    private fun stepsSinceUnlock(): Long? {
+        val hub = stepsAtUnlock?.let { baseline -> motion.observedSteps?.let { (it - baseline).coerceAtLeast(0L) } }
+        if (!OWN_LOCK) return hub
+        val own = ownAtUnlock?.let { base -> motion.ownSteps?.let { (it - base).coerceAtLeast(0L) } }
+        return listOfNotNull(hub, own).maxOrNull()
     }
 
     /** Feeds one fresh GATT reading to this epoch's BLE departure route; true when confirmed. */
@@ -1790,16 +1928,21 @@ class ProximityController internal constructor(
         val route = bleRoute ?: return false
         val now = clock.elapsedMs()
         departureSteps.observe(now, motion.observedSteps)
+        ownDepartureSteps.observe(now, motion.ownSteps)
+        // 0.4.0 study: while the own counter counts, the walk and its stop come from it.
+        val ownWalk = OWN_LOCK && ownActive()
+        fun stepsWalking() = if (ownWalk) ownDepartureSteps.walking(now) else departureSteps.walking(now)
+        fun stepsStopped() = if (ownWalk) ownDepartureSteps.stopped(now) else departureSteps.stopped(now)
         // 0.3.2 (simulation audit C): a rising step total is walking, whatever the motion state says
         // (s24-off: no MOVING for a whole walk away, the car stayed open until the alarm). Close to
         // the car a stop in the step stream ends the walk at once: Activity Recognition says MOVING
         // for 3-10 s more, and the proof completed during a stop 5 m from the car (stress F04).
-        val stoppedNearCar = departureSteps.stopped(now) &&
+        val stoppedNearCar = stepsStopped() &&
             (stepsAwayFromCar()?.let { it < STOP_RULE_MAX_STEPS_FROM_CAR } ?: true)
-        val moving = (motion.state.value == MotionMonitor.Motion.MOVING || departureSteps.walking(now)) &&
+        val moving = (motion.state.value == MotionMonitor.Motion.MOVING || stepsWalking()) &&
             !stoppedNearCar
         // 0.3.20: MOVING that only comes from the drive (see BleDepartureEvidence.DRIVE_DESCENT_MS).
-        val vehicleOnly = motion.vehicleMotion && !departureSteps.walking(now)
+        val vehicleOnly = motion.vehicleMotion && !departureSteps.walking(now) && !(ownWalk && ownDepartureSteps.walking(now))
         val authorized = route.observe(now, rawRssi, smoothedRssi, moving, stepsSinceUnlock(), vehicleOnly)
         if (route.driveMotionHeld && !driveMotionLogged) {
             driveMotionLogged = true
@@ -1903,26 +2046,91 @@ class ProximityController internal constructor(
     /** A fresh position change independent of BLE body shadowing is mandatory before any Lock. */
     private suspend fun confirmPhysicalDeparture(): Boolean {
         val anchor = departureAnchor
-        if (anchor == null) {
+        val ownProof = ownDepartureProofAvailable()
+        if (anchor == null && !ownProof) {
             Logx.d("prox", "independent departure unverified: location anchor unavailable")
             return false
         }
         // Battery (0.3.1): every check is a 25 s GNSS window. Six per visit cover a departure, a
         // return and a second departure; past that the visit gets the alarm, not more GNSS.
-        if (gnssWindowsThisEpoch >= MAX_GNSS_WINDOWS_PER_EPOCH) {
+        var useGnss = anchor != null
+        if (useGnss && gnssWindowsThisEpoch >= MAX_GNSS_WINDOWS_PER_EPOCH) {
             if (!gnssBudgetLogged) Logx.d("prox", "independent departure unverified: location budget of this visit spent " +
                 "($MAX_GNSS_WINDOWS_PER_EPOCH windows)")
             gnssBudgetLogged = true
-            return false
+            if (!ownProof) return false
+            useGnss = false
         }
-        gnssWindowsThisEpoch++
-        maxGnssWindowsInAnEpoch = maxOf(maxGnssWindowsInAnEpoch, gnssWindowsThisEpoch)
+        if (useGnss) {
+            gnssWindowsThisEpoch++
+            maxGnssWindowsInAnEpoch = maxOf(maxGnssWindowsInAnEpoch, gnssWindowsThisEpoch)
+        }
         val observedUnlockAt = unlockObservedAtMs
         fun sameSession(): Boolean = armedUnlocked && unlockObservedAtMs == observedUnlockAt &&
-            _state.value.running && config().proximityEnabled && departureAnchor === anchor
-        val confirmed = departureLocationSource.confirmsDeparture(anchor, steps = ::stepsForDepartureProof,
-            enabled = ::sameSession, bleCorroborated = ::departureBleCorroborated,
-            memory = departureMemory, lastMotionAtMs = ::lastMotionAt) && sameSession()
+            _state.value.running && config().proximityEnabled && (anchor == null || departureAnchor === anchor)
+        val confirmed = if (!ownProof) {
+            if (anchor == null) return false // cannot happen (checked above); keeps the anchor non-null below
+            if (!ownDepartureProofShadowed()) {
+                departureLocationSource.confirmsDeparture(anchor, steps = ::stepsForDepartureProof,
+                    enabled = ::sameSession, bleCorroborated = ::departureBleCorroborated,
+                    memory = departureMemory, lastMotionAtMs = ::lastMotionAt) && sameSession()
+            } else coroutineScope {
+                // 0.4.0b shadow: the own-walk proof is observed next to the location window and only logged.
+                val startedAt = clock.wallMs()
+                val shadow = launch {
+                    var streak = 0
+                    val until = startedAt + DepartureObservationWindow.WINDOW_MS
+                    while (clock.wallMs() < until && sameSession()) {
+                        streak = if (ownDepartureProven()) streak + 1 else 0
+                        if (streak >= OWN_DR_STREAK) {
+                            Logx.d("prox", "shadow: own walk would prove the departure now, ${(clock.wallMs() - startedAt) / 1000} s into the window (${ownWalkSummary()})")
+                            return@launch
+                        }
+                        delay(500L)
+                    }
+                    Logx.d("prox", "shadow: own walk did not prove the departure in the window (last: $lastOwnWhy; ${ownWalkSummary()})")
+                }
+                val ok = departureLocationSource.confirmsDeparture(anchor, steps = ::stepsForDepartureProof,
+                    enabled = ::sameSession, bleCorroborated = ::departureBleCorroborated,
+                    memory = departureMemory, lastMotionAtMs = ::lastMotionAt) && sameSession()
+                Logx.d("prox", "shadow: position proof ${if (ok) "confirmed" else "failed"} after ${(clock.wallMs() - startedAt) / 1000} s")
+                shadow.cancel()
+                ok
+            }
+        } else coroutineScope {
+            // 0.4.0 study: the own-walk proof runs next to the location window (when there is one); the first that
+            // succeeds decides, a failed one waits for the other.
+            val own = async {
+                var streak = 0; var proven = false
+                val until = clock.wallMs() + DepartureObservationWindow.WINDOW_MS
+                while (clock.wallMs() < until && sameSession()) {
+                    streak = if (ownDepartureProven()) streak + 1 else 0
+                    if (streak >= OWN_DR_STREAK) { proven = true; break }
+                    delay(500L)
+                }
+                proven
+            }
+            val loc = if (useGnss) async {
+                departureLocationSource.confirmsDeparture(anchor!!, steps = ::stepsForDepartureProof,
+                    enabled = ::sameSession, bleCorroborated = ::departureBleCorroborated,
+                    memory = departureMemory, lastMotionAtMs = ::lastMotionAt)
+            } else null
+            val ok: Boolean
+            val route: String
+            if (loc == null) { ok = own.await(); route = "own_walk" }
+            else {
+                val first = select<Pair<String, Boolean>> {
+                    own.onAwait { "own_walk" to it }
+                    loc.onAwait { "position" to it }
+                }
+                if (first.second) { ok = true; route = first.first }
+                else if (first.first == "own_walk") { ok = loc.await(); route = "position" }
+                else { ok = own.await(); route = "own_walk" }
+            }
+            own.cancel(); loc?.cancel()
+            if (ok && route == "own_walk") Logx.d("prox", "departure proven by the own walk (${ownWalkSummary()}); no position needed")
+            ok
+        } && sameSession()
         if (confirmed) departureProofAtMs = clock.wallMs()
         else Logx.d("prox", "independent departure unverified: bounded live location proof unavailable " +
             "(stepsSinceUnlock=${stepsSinceUnlock() ?: "unavailable"} ${motion.stepSummary})")
@@ -1934,7 +2142,7 @@ class ProximityController internal constructor(
             farNoMotionCheck?.isActive == true ||
             lockJob?.isActive == true) return
         if (clock.wallMs() - lastShadowDepartureAtMs < SHADOW_REARM_MS) {
-            decisionPolicy.onWalkAwayVerificationFailed()
+            policies("onWalkAwayVerificationFailed") { it.onWalkAwayVerificationFailed() }
             return
         }
         lockConfirmationJob = scope.launch {
@@ -1963,7 +2171,7 @@ class ProximityController internal constructor(
                             "strongestRssi=$strongestRssiSinceUnlock " +
                             "lastStrongAgeMs=${lastStrongAgeMs ?: "unavailable"} " +
                             "motion=${motion.state.value} reminderPosted=$posted; NO LOCK SENT")
-                        decisionPolicy.onWalkAwayVerificationFailed()
+                        policies("onWalkAwayVerificationFailed") { it.onWalkAwayVerificationFailed() }
                     }
                     AutomaticLockGate.Action.LOCK -> {
                         // 0.3.21 (B, field 20/10): the walk-away is confirmed and only the independent proof is
@@ -1988,13 +2196,13 @@ class ProximityController internal constructor(
                             } else false
                             Logx.w("prox", "departure position unverified; NO LOCK SENT; " +
                                 "manual Lock required, reminderPosted=$posted")
-                            decisionPolicy.onWalkAwayVerificationFailed()
+                            policies("onWalkAwayVerificationFailed") { it.onWalkAwayVerificationFailed() }
                             scheduleLinkDepartureCheck()
                         }
                     }
                 }
             } else {
-                decisionPolicy.onWalkAwayVerificationFailed()
+                policies("onWalkAwayVerificationFailed") { it.onWalkAwayVerificationFailed() }
                 // Stopping after the walk can cancel RSSI confirmation. It cannot erase two fresh
                 // positions outside the conservative clearance; check them independently - unless the
                 // signal came back above the lock threshold: that is evidence of nearness, and the
@@ -2094,30 +2302,64 @@ class ProximityController internal constructor(
             }
         }
         if (armedUnlocked) { observeStationaryFar(rssi, lockThresh); maybeArmStepDepartureAlarm() }
-        val armedDecision = if (armedUnlocked) decisionPolicy.onUnlockedSample(
+        val armedDecision = if (armedUnlocked) policies("onUnlockedSample") { it.onUnlockedSample(
             now, smoothed, motion.state.value == MotionMonitor.Motion.MOVING, lockThresh,
-        ) else ProximityDecisionPolicy.ArmedDecision.NONE
+        ) } else ProximityDecisionPolicy.ArmedDecision.NONE
         // Observe locked RSSI even while CONNECTED is still handshaking. The deep-sleep field trace
         // reached the door at -61 dBm, but SESSION_READY arrived ~3.4 s later after the signal had
         // weakened; gating observation on READY discarded the only reliable arrival evidence.
         lastSmoothedRssi = smoothed
         val stepsNow = motion.observedSteps
-        val walkingBySteps = stepStall.walking(now, stepsNow)
+        val hubWalking = stepStall.walking(now, stepsNow)
+        // 0.4.0 study: the locked-side window follows every reading in the band; while the own counter counts, the walk,
+        // its stop and "steps rising" come from it (the hub is 5-14 s late and hands a walk over in batches).
+        if (!armedUnlocked && OWN_WINDOWS && smoothed >= unlockThresh - OWN_BAND_DB) motion.ownApproachWindow(true)
+        val ownSeen = if (OwnRules.enabled && ownActive()) motion.ownSteps else null   // the counter counts now ...
+        val ownNow = if (OWN_RULES) ownSeen else null                                   // ... and the live rules may use it
+        val ownWalking = ownStall.walking(now, ownSeen)
+        if (ownSeen != null) refreshOwnEvidence(now)
+        val walkingBySteps = if (ownNow != null) ownWalking else hubWalking
+        val stallAge = if (ownNow != null) ownStall.stalledForMs else stepStall.stalledForMs
+        val ownRising = ownSeen != null && motion.ownStepsSince(now - STEPS_RISING_WINDOW_MS) >= STEPS_RISING_MIN
+        val hubRising = stepsRisingNow(now, stepsNow)
+        val movingNow = motion.state.value == MotionMonitor.Motion.MOVING
         val unlockQualified = !armedUnlocked && !needToUnlock && decisionPolicy.shouldUnlock(
-            now, smoothed, motion.state.value == MotionMonitor.Motion.MOVING, unlockThresh,
-            if (awayReturnSteps) stepsNow else null, walkingBySteps, stepStall.stalledForMs,
-            stepsRising = stepsRisingNow(now, stepsNow),
+            now, smoothed, movingNow, unlockThresh,
+            if (awayReturnSteps) stepsNow else null, walkingBySteps, stallAge,
+            stepsRising = if (ownNow != null) ownRising else hubRising,
             stepsTotal = stepsNow,
+            ownEvidenceAgeMs = if (ownNow != null) ownEvidenceAge(now) else null,
+            ownActive = ownNow != null && OWN_NO_STILL,
+            ownTotal = ownNow,
         )
+        decisionPolicy.consumeRiseHoldEvent()?.let { Logx.d("prox", "rise hold: $it (rssi=$smoothed motion=${motion.state.value})") }
+        // 0.4.0b shadow: the same reading through the policy that may use the own counter (own steps also count as
+        // walking there, as they will feed MOVING live); a different answer is logged.
+        shadowPolicy?.let { sp ->
+            val shadowQualified = !armedUnlocked && !needToUnlock && sp.shouldUnlock(
+                now, smoothed, movingNow || (ownSeen != null && ownWalking), unlockThresh,
+                if (awayReturnSteps) stepsNow else null, if (ownSeen != null) ownWalking else hubWalking,
+                if (ownSeen != null) ownStall.stalledForMs else stepStall.stalledForMs,
+                stepsRising = if (ownSeen != null) ownRising else hubRising,
+                stepsTotal = stepsNow,
+                ownEvidenceAgeMs = if (ownSeen != null) ownEvidenceAge(now) else null,
+                ownActive = ownSeen != null && OWN_NO_STILL,
+                ownTotal = ownSeen,
+            )
+            sp.consumeRiseHoldEvent()?.let { Logx.d("prox", "shadow: rise hold: $it (rssi=$smoothed own=$ownSeen)") }
+            if (shadowQualified != unlockQualified) shadowNote("unlock", "0.4.0 ${if (shadowQualified) "qualifies (${sp.unlockRoute})" else "waits"}, " +
+                "live ${if (unlockQualified) "qualifies (${decisionPolicy.unlockRoute})" else "waits"} (rssi=$smoothed own=$ownSeen walking=$ownWalking)")
+        }
         if (!walkingBySteps && !stepStallLogged) {
             stepStallLogged = true
             Logx.d("prox", "step count stalled ${stepStall.stalledForMs / 1000.0} s -> walking approach paused")
         } else if (walkingBySteps) stepStallLogged = false
-        if (decisionPolicy.consumeDeepFarReturnRearm()) {
+        if (policies("consumeDeepFarReturnRearm") { it.consumeDeepFarReturnRearm() }) {
             Logx.d("prox", "return after Lock recognised from signal (clearly far, now near rssi=$smoothed) " +
                 "-> approach unlock rearmed")
         }
         // 0.3.28: the signal return reached the return level without walking evidence (logged at most every 30 s).
+        shadowPolicy?.consumeDeepReturnHeldForWalk()
         if (decisionPolicy.consumeDeepReturnHeldForWalk() && now - deepReturnHeldLoggedAtMs >= 30_000L) {
             deepReturnHeldLoggedAtMs = now
             Logx.d("prox", "return after Lock held (rssi=$smoothed motion=${motion.state.value} " +
@@ -2246,7 +2488,7 @@ class ProximityController internal constructor(
         // latch still guarantees a single unlock per approach (reconnects while parked won't re-fire).
         if (!armedUnlocked && !needToUnlock && unlockQualified) {
             needToUnlock = true
-            decisionPolicy.onPendingUnlockStarted()
+            policies("onPendingUnlockStarted") { it.onPendingUnlockStarted() }
             // A liveness command must never occupy the shared reply slots while unlock starts.
             pingJob?.cancel(); pingJob = null; pingInFlight = false
             // Screen state (0.3.2): whether a phone in the hand opens early is decided in the field, not
@@ -2259,13 +2501,13 @@ class ProximityController internal constructor(
         // WALK-AWAY cancels a pending unlock loop — only once we cross to FAR (≤ lockThresh). The NEAR/FAR
         // hysteresis gap is the "smoothing" so it can't flap while you hover at the door; cancelling also
         // stops any stale mid-retry command dead.
-        val cancelPendingUnlock = needToUnlock && decisionPolicy.shouldCancelPendingUnlock(
+        val cancelPendingUnlock = needToUnlock && policies("shouldCancelPendingUnlock") { it.shouldCancelPendingUnlock(
             nowMs = now,
             rssi = smoothed,
             moving = motion.state.value == MotionMonitor.Motion.MOVING,
             unlockThreshold = unlockThresh,
             lockThreshold = lockThresh,
-        )
+        ) }
         if (cancelPendingUnlock) {
             Logx.d("prox", "sustained walk-away — cancelling unlock loop (rssi=$smoothed)")
             needToUnlock = false
@@ -2372,7 +2614,7 @@ class ProximityController internal constructor(
         needToUnlock = false; unlockJob?.cancel(); unlockJob = null
         // Terminal for this BLE session: a post-lock RSSI rebound must never emit CTRL_UNLOCK.
         // A genuine later arrival is rearmed only by link-down + a fresh hardware presence hit.
-        decisionPolicy.onDepartureLockStarted(stepsAtLastStrongNear ?: motion.observedSteps)
+        policies("onDepartureLockStarted") { it.onDepartureLockStarted(stepsAtLastStrongNear ?: motion.observedSteps) }
         lockJob = scope.launch {
             val lockStartedAtMs = clock.wallMs()
             lastTriggerMs = lockStartedAtMs   // start the action cooldown
@@ -2388,7 +2630,7 @@ class ProximityController internal constructor(
                 if (lastCarLockedReportAtMs >= lockStartedAtMs) {
                     confirmed = true
                     Logx.d("prox", "$reason: the car reports locked (status push) -> Lock confirmed")
-                    decisionPolicy.onAutomaticLockProvenDeparture(clock.wallMs())
+                    policies("onAutomaticLockProvenDeparture") { it.onAutomaticLockProvenDeparture(clock.wallMs()) }
                     departureAlarmJob?.cancel(); departureAlarmJob = null
                     alerts.silenceAlarm()
                     break
@@ -2453,7 +2695,7 @@ class ProximityController internal constructor(
                     confirmed = true
                     Logx.d("prox", "auto lock confirmed ($reason): the car reports locked")
                     // The guard of the walk-back return starts at the confirmed Lock (review 0.1.63).
-                    decisionPolicy.onAutomaticLockProvenDeparture(clock.wallMs())
+                    policies("onAutomaticLockProvenDeparture") { it.onAutomaticLockProvenDeparture(clock.wallMs()) }
                     // The car acknowledged: stop any alarm now, not after the cloud catches up.
                     departureAlarmJob?.cancel(); departureAlarmJob = null
                     alerts.silenceAlarm()
@@ -2534,7 +2776,7 @@ class ProximityController internal constructor(
                         armedUnlocked = false
                         resetLinkedWatch()
                         carSelfLock.onLockedByUs()
-                        decisionPolicy.onAutomaticLockProvenDeparture(clock.wallMs())
+                        policies("onAutomaticLockProvenDeparture") { it.onAutomaticLockProvenDeparture(clock.wallMs()) }
                     }
                     com.openzeekr.app.remote.LocalLockEvidence.onKeyConfirmed(locked = true)
                     unverifiedLockAlertRaised = false
@@ -2906,6 +3148,28 @@ class ProximityController internal constructor(
         private const val RETURN_MOVING_MS = 10_000L
         /** 0.3.29: two step advances this close are a walk now (the hub's packet interval is 5-9 s). */
         private const val STEP_CADENCE_MS = 15_000L
+        /** 0.4.0b: shadow divergence notes at most this often (the reading loop runs every 200 ms). */
+        private const val SHADOW_NOTE_MIN_GAP_MS = 2_000L
+        // ---- 0.4.0b: the own counter as walking evidence; the mode and the knobs live in [OwnRules] ----
+        /** The rules decide (LIVE); in SHADOW the live decisions stay 0.3.30 and the shadow policy logs. */
+        private val OWN_RULES: Boolean get() = OwnRules.live
+        /** The locked-side window runs (SHADOW and LIVE): the counter measures the approach. */
+        private val OWN_WINDOWS: Boolean get() = OwnRules.enabled
+        /** Steps since the car, the BLE route's walk and the step veto count own steps too (LIVE). */
+        private val OWN_LOCK: Boolean get() = OwnRules.live
+        /** The own-walk departure proof decides (LIVE; 0 = off). In SHADOW it runs next to the location window, logs only. */
+        private val OWN_DR_M: Double get() = if (OwnRules.live) OwnRules.drMetres else 0.0
+        private val OWN_STRIDE_M: Double get() = OwnRules.strideM
+        private val OWN_DR_DB: Int get() = OwnRules.drDb
+        private val OWN_DR_STREAK: Int get() = OwnRules.drStreak
+        private val OWN_DR_BLE: Boolean get() = OwnRules.drBle
+        private val OWN_DR_WHY: Boolean get() = OwnRules.drWhy
+        private val OWN_TURN_DB: Int get() = OwnRules.turnDb
+        private val OWN_NO_STILL: Boolean get() = OwnRules.noStill
+        private const val OWN_BAND_DB = OwnRules.BAND_DB
+        private const val OWN_LIVE_MS = OwnRules.LIVE_MS
+        private const val OWN_PAUSE_MS = OwnRules.PAUSE_MS
+        private const val OWN_TURN_WINDOW_MS = OwnRules.TURN_WINDOW_MS
         /** ... and the signal this much above its best reading in this window before (or none then). */
         private const val RETURN_RISE_DB = 6
         private const val RETURN_EARLIER_FROM_MS = 8_000L

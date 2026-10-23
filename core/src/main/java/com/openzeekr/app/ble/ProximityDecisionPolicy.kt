@@ -11,7 +11,13 @@ internal class ProximityDecisionPolicy(
     private val approachConfirm: ApproachConfirm = ApproachConfirm.UNBROKEN,
     /** The walk-back return at the ordinary approach level after a proven departure (0.3.2). */
     private val walkBackReturn: Boolean = true,
+    /** 0.4.0b: this instance applies the own-counter rules (the rise hold, the walk credit; [OwnRules]). The live
+     *  policy of the shadow mode does not; the shadow policy next to it does. */
+    private val ownRules: Boolean = false,
 ) {
+    /** The rise hold is on for this instance. */
+    private val riseHoldOn = ownRules && OwnRules.riseHold
+
     enum class ArmedDecision { NONE, ARRIVAL_CONFIRMED, LOCK }
 
     /**
@@ -105,6 +111,19 @@ internal class ProximityDecisionPolicy(
     private var readingWalkingConfirmed = true
     private var readingStallAgeMs = 0L
     private var readingStepsTotal: Long? = null
+    /** 0.4.0 study: age of the latest live walk on the app's own counter (null: not the evidence source now). */
+    private var readingOwnEvidenceAgeMs: Long? = null
+    // 0.4.0 study round 4: the rise hold - the held level, when it was taken, the route it holds and the own total then.
+    private var riseBaseRssi = Int.MIN_VALUE
+    private var riseBaseAtMs = UNSET_MS
+    private var riseHeldRoute = "approach"
+    private var riseBaseOwn: Long? = null
+    /** Round 4c: the own total and time of the last far reading (<= unlock - OWN_RISE_FAR_DB): the walk credit's start. */
+    private var riseFarOwn: Long? = null
+    private var riseFarAtMs = UNSET_MS
+    /** Diagnostic for the controller's log: a hold began / confirmed / dropped on this reading (consumed). */
+    var riseHoldEvent: String? = null
+        private set
     // The step total when the manual return's motion began, and the latest deep-far reading after a Lock.
     private var manualReturnStepsAtMotionStart: Long? = null
     private var lastDeepFarAtMs = UNSET_MS
@@ -217,8 +236,16 @@ internal class ProximityDecisionPolicy(
         stepsRising: Boolean = false,
         /** The raw step total, whatever route asked for [steps] (null without a step source). */
         stepsTotal: Long? = null,
+        /** 0.4.0 study: age of the latest live walk on the app's own step counter (null: that counter is not the evidence now). */
+        ownEvidenceAgeMs: Long? = null,
+        /** 0.4.0 study: the own counter counts now, so a signal rise without steps is no walk (the still route is off). */
+        ownActive: Boolean = false,
+        /** 0.4.0 study round 4: the own counter's total (the step cap of the rise hold). */
+        ownTotal: Long? = null,
     ): Boolean {
-        readingSteps = steps; readingStepsRising = stepsRising
+        readingSteps = steps; readingStepsRising = stepsRising; readingOwnEvidenceAgeMs = ownEvidenceAgeMs
+        val qualifiedBefore = unlockQualifiedAtMs
+        if (ownTotal != null && rssi <= unlockThreshold - OWN_RISE_FAR_DB) { riseFarOwn = ownTotal; riseFarAtMs = nowMs }
         readingWalkingConfirmed = walkingConfirmed; readingStallAgeMs = stepStallAgeMs; readingStepsTotal = stepsTotal
         // 0.3.28: walking evidence per reading, for the signal-only return after a Lock ([tryRearmManualDeepFarReturn]).
         // A count advance is a walk now only at a live cadence: the hub hands a whole walk over in one late batch
@@ -280,10 +307,12 @@ internal class ProximityDecisionPolicy(
             stillApproachSinceMs = UNSET_MS
             nearCandidateSinceMs = UNSET_MS; clearApproachReadings()
             unlockQualifiedAtMs = UNSET_MS
+            if (riseBaseAtMs != UNSET_MS) { clearRiseHold(); riseHoldEvent = "dropped (far reading)" }
             return false
         }
 
         farSinceMs = UNSET_MS
+        observeRiseHold(nowMs, rssi, unlockThreshold, moving && walkingConfirmed, ownTotal)
         // Once we were already strongly at the car and subsequently went FAR, a later multipath
         // rebound is departure noise, not a second approach. A genuine new approach starts with a
         // fresh policy/session and therefore has no [departureObserved] latch.
@@ -294,7 +323,7 @@ internal class ProximityDecisionPolicy(
         // S24+ reported STILL for a whole walk to the car and the door stayed locked). Only a clear,
         // sustained rise from a FAR baseline to well inside the approach band counts; a turn or
         // a passer-by at 10-15 m does not lift a FAR floor this far for this long.
-        val stillApproach = farQualified && !departureObserved && !moving &&
+        val stillApproach = farQualified && !departureObserved && !moving && !ownActive &&
             rssi >= unlockThreshold + STILL_APPROACH_MARGIN_DB && rssi >= farFloorRssi + STILL_APPROACH_RISE_DB &&
             // 0.3.2: this route stands for "walking while AR says STILL". A live step count that
             // stopped more than [STILL_APPROACH_STEP_STALL_WINDOW_MS] ago says the walk is over: a
@@ -334,10 +363,59 @@ internal class ProximityDecisionPolicy(
             rssi >= unlockThreshold + MANUAL_DEEP_RETURN_MARGIN_DB) {
             unlockQualifiedAtMs = nowMs; unlockRoute = "deep_window"
         }
+        // 0.4.0 study round 4: a route that qualified on this reading only just above the threshold is held until the
+        // signal rises further while walking (a fade peak 15-20 m out never does; the last metres always do).
+        if (riseHoldOn && qualifiedBefore == UNSET_MS && unlockQualifiedAtMs == nowMs && riseEligible(unlockRoute) &&
+            rssi < unlockThreshold + OWN_RISE_STRONG && !riseWalkCredit(nowMs, rssi, ownTotal)) {
+            if (riseBaseAtMs == UNSET_MS) {
+                riseBaseAtMs = nowMs; riseBaseRssi = rssi; riseHeldRoute = unlockRoute; riseBaseOwn = ownTotal
+                riseHoldEvent = "held $unlockRoute at $rssi dBm: waiting for +$OWN_RISE_DB dB while walking"
+            }
+            unlockQualifiedAtMs = UNSET_MS
+        }
         return unlockQualifiedAtMs != UNSET_MS
     }
 
+    private fun riseEligible(route: String): Boolean = when {
+        route == "door" || route == "at_car" || route.endsWith("_rise") -> false
+        OWN_RISE_ROUTES == "approach" -> route == "approach" || route == "presence" || route == "still"
+        else -> true
+    }
+    private fun clearRiseHold() { riseBaseAtMs = UNSET_MS; riseBaseRssi = Int.MIN_VALUE; riseBaseOwn = null }
+    /** Round 4c: the owner walked OWN_RISE_WALK own steps since the signal was last far (within OWN_RISE_WALK_MS) -
+     *  this qualification is a genuine approach's last metres, not a fade peak far out: no hold. */
+    private fun riseWalkCredit(nowMs: Long, rssi: Int, ownTotal: Long?): Boolean {
+        if (OWN_RISE_WALK <= 0 || ownTotal == null || riseFarOwn == null || riseFarAtMs == UNSET_MS) return false
+        if (nowMs - riseFarAtMs > OWN_RISE_WALK_MS) return false
+        val walked = ownTotal - riseFarOwn!!
+        if (walked < OWN_RISE_WALK) return false
+        riseHoldEvent = "credit $unlockRoute at $rssi dBm: $walked own steps since far (${(nowMs - riseFarAtMs) / 1000} s) - no hold"
+        if (riseBaseAtMs != UNSET_MS) clearRiseHold()
+        return true
+    }
+    /** Every non-far reading while a hold is pending: the rise confirms (walking), a fall, the timeout or the own-step
+     *  cap drops it; the next qualifying reading starts a new hold. */
+    private fun observeRiseHold(nowMs: Long, rssi: Int, unlockThreshold: Int, walking: Boolean, ownTotal: Long?) {
+        if (riseBaseAtMs == UNSET_MS) return
+        if (walking && (rssi >= riseBaseRssi + OWN_RISE_DB || rssi >= unlockThreshold + OWN_RISE_STRONG)) {
+            if (unlockQualifiedAtMs == UNSET_MS) { unlockQualifiedAtMs = nowMs; unlockRoute = riseHeldRoute + "_rise" }
+            riseHoldEvent = "confirmed ${riseHeldRoute}_rise: $riseBaseRssi -> $rssi dBm"
+            clearRiseHold(); return
+        }
+        val stepsHeld = if (OWN_RISE_STEPS > 0 && riseBaseOwn != null && ownTotal != null) ownTotal - riseBaseOwn!! else 0L
+        val why = when {
+            rssi <= riseBaseRssi - OWN_RISE_FALL -> "fell to $rssi dBm"
+            nowMs - riseBaseAtMs > OWN_RISE_MS -> "timed out"
+            OWN_RISE_STEPS > 0 && stepsHeld >= OWN_RISE_STEPS -> "$stepsHeld own steps without the rise"
+            else -> null
+        }
+        if (why != null) { riseHoldEvent = "dropped ($why)"; clearRiseHold() }
+    }
+    /** The controller logs the hold's events (one line each). */
+    fun consumeRiseHoldEvent(): String? = riseHoldEvent.also { riseHoldEvent = null }
+
     fun onUnlockConfirmed(nowMs: Long) {
+        clearRiseHold()
         lastUnlockedSampleAtMs = UNSET_MS
         arrivalEpochAfterLock = false
         deepReturnUnlockUntilMs = UNSET_MS
@@ -418,6 +496,7 @@ internal class ProximityDecisionPolicy(
 
     /** A later arrival may rearm only through [onPresenceMatch], never from connected RSSI alone. */
     fun onLinkEnded() {
+        clearRiseHold()
         if (departureLatched) {
             departureLinkEnded = true
             manualDeparture = false
@@ -783,7 +862,9 @@ internal class ProximityDecisionPolicy(
         // the strong-near level. The cost is honest: a walk back that neither sensor reports (the 0.1.60 field shape)
         // stays locked until the door; the app's own step counter (0.4.0) is to close that gap.
         val walkEvidence = lastWalkEvidenceAtMs != UNSET_MS && nowMs - lastWalkEvidenceAtMs <= DEEP_RETURN_WALK_EVIDENCE_MS
-        if (!walkEvidence) {
+        // 0.4.0: while the app's own counter counts, it is the evidence (a live own walk within the same 10 s).
+        val walkEvidenceNow = readingOwnEvidenceAgeMs?.let { it <= DEEP_RETURN_WALK_EVIDENCE_MS } ?: walkEvidence
+        if (!walkEvidenceNow) {
             if (rssi >= unlockThreshold + returnMargin) deepReturnHeldForWalk = true
             manualDeepReturnSinceMs = UNSET_MS
             manualDeepReturnReadings = 0
@@ -1127,6 +1208,16 @@ internal class ProximityDecisionPolicy(
         const val ARRIVAL_STRONG_RSSI = -72
         const val FAR_MARGIN_DB = 2
         const val UNLOCK_MARGIN_DB = 1
+        // 0.4.0b: the rise hold (round 4) and the walk credit (round 4c); the values live in [OwnRules].
+        private val OWN_RISE_DB = OwnRules.riseDb
+        private val OWN_RISE_STRONG = OwnRules.riseStrongDb
+        private val OWN_RISE_FALL = OwnRules.riseFallDb
+        private val OWN_RISE_MS = OwnRules.riseMs
+        private val OWN_RISE_STEPS = OwnRules.riseSteps
+        private val OWN_RISE_ROUTES = OwnRules.riseRoutes
+        private val OWN_RISE_WALK = OwnRules.creditSteps
+        private val OWN_RISE_FAR_DB = OwnRules.creditFarDb
+        private val OWN_RISE_WALK_MS = OwnRules.creditWindowMs
         const val FAR_BASELINE_MS = 2_500L
         const val APPROACH_CONFIRM_MS = 400L
         /** Two approach hits are separate readings, never one sample seen twice (cadence is 200 ms). */

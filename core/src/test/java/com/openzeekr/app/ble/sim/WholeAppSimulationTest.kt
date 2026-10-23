@@ -70,6 +70,8 @@ internal object SimRunner {
      *  0.3.21 (user decision 20/10): connects at the edge of range that end in status 133. */
     val WORST_CASES = listOf("steps-silent", "steps-dead", "gps-poor", "ar-poor", "signal-flat", "steps-late", "strong-spot", "ar-quick-still",
         "hand-wobble", "field-like", "strong-spot-walk", "steps-stall", "link-holds", "steps-after-drive", "edge-133")
+        // 0.4.0 (field 22/10): the hub hands a whole walk over in one batch, minutes late.
+        .plus("steps-batch")
 
     /** The world of a run. A stress world depends on the seed only, so two app versions meet the same world. */
     fun physicsFor(suite: String, seed: Long): SimPhysics = when (suite) {
@@ -100,6 +102,8 @@ internal object SimRunner {
         // Field 20/10 (phone in a pocket): the presence scan heard the car indoors at about -100; two connects at an advert
         // of about -90 ended in status 133, one a few dB stronger connected. Here every connect below -90 fails.
         "edge-133" -> SimPhysics(name = suite, presenceFloorRssi = -100.0, edge133Rssi = -90.0)
+        // Field 22/10: the walk away reached the app as one batch of 12 steps, 1665 s late; nothing while walking.
+        "steps-batch" -> SimPhysics(name = suite, hubBatchMinMs = 30_000L, hubBatchMaxMs = 300_000L)
         // The field of 16/10 together: late steps after standing, quick STILL (profileFor), poor GPS as in
         // "gps-poor", and the hand wobble.
         "field-like" -> SimPhysics(name = suite, lateStepsMinMs = 8_000L, lateStepsMaxMs = 14_000L,
@@ -394,7 +398,7 @@ internal object SimReport {
                 r.world.samples.forEach { s -> appendLine("%8.1f d=%5.1f %s %s %s %s %s %s %6.1f %s %s".format(s.atMs / 1000.0, s.distanceM,
                     if (s.carLocked) "L" else "U", if (s.moving) "mov" else "---", if (s.appBelievesUnlocked) "open" else "lckd",
                     if (s.linkUp) "link" else "----", if (s.cpuAwake) "cpu" else "zzz", if (s.gnssOn) "gnss" else "----",
-                    s.trueRssi, s.motionState, s.steps ?: "-")) }
+                    s.trueRssi, s.motionState, (s.steps ?: "-").toString() + (if (s.own != null) " own=${s.own}${if (s.ownOn) "*" else ""}" else ""))) }
             }
         }
     }

@@ -2,6 +2,11 @@
 
 Wat je per versie merkt, in gewone taal. ZeekRemote is een privé-afsplitsing van [OpenZeekr](https://github.com/borconi/openzeekr) (splitpunt: OpenZeekr 0.1.4) voor één telefoon en één auto; de nadruk ligt op betrouwbaar openen bij het naderen en sluiten bij het weglopen, met een simulator en een regressiepoort als bewaker. Dit logboek bevat geen meetwaarden, tijden, plaatsen of persoonsgegevens; technische details staan in de commits.
 
+## 0.4.0b (meetversie)
+
+- **De eigen stappenteller rekent mee, maar beslist nog niet.** De regels uit de simulatorstudie (de eigen teller als loopbewijs bij naderen en weglopen, een korte wachtregel tegen openen van ver, en een loopkrediet dat die wachtregel overslaat na een echte aanloop) draaien als schaduw naast de bestaande beslissingen en schrijven in het logboek wat ze anders gedaan zouden hebben. Het gedrag van de auto is dat van 0.3.30.
+- De eigen teller draait daarvoor ook tijdens het naderen (alleen zolang je loopt; een stilliggende telefoon houdt de sensor niet aan).
+
 ## 0.3.30
 
 - **Laadsnelheid bij DC-snelladen.** Aan een snellader toonde de app "Laden" zonder kW; de stroom en spanning van de snellaadpaal werden gedeclareerd maar nooit uit de status gelezen. Nu wel (overgenomen uit OpenZeekr 0.2.2).

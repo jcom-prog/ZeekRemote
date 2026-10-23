@@ -36,7 +36,7 @@ class SimScanStartTest {
 
     @Test fun with0320ARefusedRestartLeavesTheWalkUpWithoutAScan() {
         val world = play("F07", Carry.HAND, "good", SEED, scan0320 = true)
-        val log = world.logLines.joinToString("\n")
+        val log = world.logLines.filterNot { it.contains("own window") }.joinToString("\n")  // 0.4.0b: the own counter logs between the scan lines
         assertTrue("connects at the edge ended in status 133", world.events.count { it.kind == "STATUS_133" } >= 2)
         assertTrue("a running scan was stopped for a restart that was refused",
             Regex("presence scan DISARMED\n.*presence scan arm deferred").containsMatchIn(log))
@@ -46,7 +46,7 @@ class SimScanStartTest {
 
     @Test fun theScanListensThroughTheWalkUp() {
         val world = play("F07", Carry.HAND, "good", SEED, scan0320 = false)
-        val log = world.logLines.joinToString("\n")
+        val log = world.logLines.filterNot { it.contains("own window") }.joinToString("\n")  // 0.4.0b: the own counter logs between the scan lines
         assertTrue("connects at the edge ended in status 133", world.events.count { it.kind == "STATUS_133" } >= 2)
         assertTrue("no running scan stopped for a refused restart",
             !Regex("presence scan DISARMED\n.*presence scan arm deferred").containsMatchIn(log))
