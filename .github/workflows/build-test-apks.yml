@@ -82,6 +82,7 @@ on:
       - zeekremote-0.3.27-measure-window
       - zeekremote-0.3.28-deep-return-walk
       - zeekremote-0.3.29-alarm-walk
+      - zeekremote-0.3.30-upstream-ports
 
 permissions:
   contents: read
@@ -513,6 +514,12 @@ jobs:
           grep -Fq 'if (!walkedRecently(now)) { noteAlarmKept(); return }' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'ALARM_KEPT -82 STILL steps=same' core/src/test/java/com/openzeekr/app/util/ProximityDiagnosticJournalTest.kt
           grep -Fq 'class SimAlarmKeptTest' core/src/test/java/com/openzeekr/app/ble/sim/SimAlarmKeptTest.kt
+          # 0.3.30 (owner approval 23/10): three small ports from upstream 0.2.2 - DC fast-charge power is read, the log ring keeps 5000 lines, a CHANGELOG.
+          grep -Fq 'dcChargePileIAct = e.str("dcChargePileIAct"),' core/src/main/java/com/openzeekr/app/net/model/Models.kt
+          grep -Fq 'val a = dcChargePileIAct?.toDoubleOrNull()?.let { kotlin.math.abs(it) } ?: return null' core/src/main/java/com/openzeekr/app/net/model/Models.kt
+          grep -Fq 'private const val MAX = 5000' core/src/main/java/com/openzeekr/app/util/Logx.kt
+          grep -Fq 'fun dcFastChargePowerIsReadFromTheStatusAndSigned()' core/src/test/java/com/openzeekr/app/net/model/UpstreamPortsTest.kt
+          grep -Fq '## 0.3.30' CHANGELOG.md
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -534,7 +541,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='153' versionName='0.3.29-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='154' versionName='0.3.30-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

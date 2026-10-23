@@ -26,6 +26,18 @@ class UpstreamPortsTest {
         assertFalse(ElectricStatusVo(chargeIAct = "0", chargeUAct = "230").chargingActive)
     }
 
+    /** 0.3.30 (upstream 0.2.2): the DC pile pair reaches the model through the real status parser, as magnitudes. */
+    @Test fun dcFastChargePowerIsReadFromTheStatusAndSigned() {
+        val root = Json.parseToJsonElement("""{"additionalVehicleStatus":{"electricVehicleStatus":{
+            "chargerState":"3","chargeIAct":"0","chargeUAct":"0","dcChargePileIAct":"-150","dcChargePileUAct":"380"}}}""")
+        val e = VehicleStatus.parse(root as kotlinx.serialization.json.JsonObject).additionalVehicleStatus?.electricVehicleStatus!!
+        assertEquals("the signed pile current is a magnitude", 57_000.0, e.chargePowerW!!, 0.01)
+        assertTrue(e.chargingActive)
+        val ac = Json.parseToJsonElement("""{"additionalVehicleStatus":{"electricVehicleStatus":{"chargeIAct":"16","chargeUAct":"230"}}}""")
+        assertEquals(3_680.0, VehicleStatus.parse(ac as kotlinx.serialization.json.JsonObject)
+            .additionalVehicleStatus?.electricVehicleStatus!!.chargePowerW!!, 0.01)
+    }
+
     private fun caps(json: String) = VehicleCapabilityParse.parse(Json.parseToJsonElement(json))
 
     @Test fun rearSeatVentilationOnlyWhenARearPositionIsAdvertised() {

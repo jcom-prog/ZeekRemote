@@ -38,7 +38,9 @@ import java.util.concurrent.TimeUnit
  */
 object Logx {
     private const val TAG = "openzeekr"
-    private const val MAX = 500
+    /** 0.3.30 (upstream 0.2.2): 5000 lines (~15-20 min of active proximity tracing) so a log shared after a problem
+     *  still covers the whole walk away and back; the encrypted share of a full ring is about 1 MB. */
+    private const val MAX = 5000
     @Volatile private var journal: ProximityDiagnosticJournal? = null
     private val journalExecutor = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
         ArrayBlockingQueue<Runnable>(128), { task -> Thread(task, "proximity-diagnostics").apply { isDaemon = true } })

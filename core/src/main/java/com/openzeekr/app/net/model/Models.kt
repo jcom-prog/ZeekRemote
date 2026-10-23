@@ -1152,8 +1152,9 @@ data class ElectricStatusVo(
 
     /** DC pile power (W) when a DC session reports live values, else null. */
     private fun dcPower(): Double? {
-        val a = dcChargePileIAct?.toDoubleOrNull() ?: return null
-        val v = dcChargePileUAct?.toDoubleOrNull() ?: return null
+        // Magnitudes: a firmware may report the pile current signed (upstream 0.2.2).
+        val a = dcChargePileIAct?.toDoubleOrNull()?.let { kotlin.math.abs(it) } ?: return null
+        val v = dcChargePileUAct?.toDoubleOrNull()?.let { kotlin.math.abs(it) } ?: return null
         return if (a > 0.0 && v > 0.0) a * v else null
     }
 
@@ -1310,6 +1311,10 @@ object VehicleStatus {
                             chargeLidDcAcStatus = e.str("chargeLidDcAcStatus"),
                             chargeIAct = e.str("chargeIAct"),
                             chargeUAct = e.str("chargeUAct"),
+                            // 0.3.30 (upstream 0.2.2): the DC fast-charge pair was declared but never read, so a DC
+                            // session showed "Charging" without a kW figure (the AC pair is 0 on DC).
+                            dcChargePileIAct = e.str("dcChargePileIAct"),
+                            dcChargePileUAct = e.str("dcChargePileUAct"),
                             distanceToEmptyOnBatteryOnly = e.str("distanceToEmptyOnBatteryOnly"),
                             hvBatteryPreHeatingActive = e.boolOf("hvBatteryPreHeatingActive"),
                             averPowerConsumption = e.str("averPowerConsumption"),
