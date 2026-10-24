@@ -203,7 +203,9 @@ fun WearApp() {
                 // Phone absent — nothing else can hold the link, connect directly.
                 !status.present -> {
                     message = if (lockIt) "Locking…" else "Unlocking…"
-                    runCatching { connectAndRun(ble, lock, lockIt) }.getOrDefault(false)
+                    val r = runCatching { connectAndRun(ble, lock, lockIt) }.getOrDefault(false)
+                    PhoneLink.done(context, lockIt, r) // W2: best effort - the phone may be out of reach
+                    r
                 }
                 // Phone present without proximity: it might grab the car mid-action, so have it
                 // stand down first, act, then hand the link back.
@@ -216,6 +218,7 @@ fun WearApp() {
                         message = if (lockIt) "Locking…" else "Unlocking…"
                         val r = runCatching { connectAndRun(ble, lock, lockIt) }.getOrDefault(false)
                         runCatching { ble.disconnect() }
+                        PhoneLink.done(context, lockIt, r) // W2 (R1): the outcome first, then the link back
                         PhoneLink.resume(context)
                         r
                     }

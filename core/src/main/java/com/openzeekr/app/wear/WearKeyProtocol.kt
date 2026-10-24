@@ -33,6 +33,11 @@ object WearKeyProtocol {
     /** Watch → phone: "I'm done — take the link back." */
     const val PATH_RESUME = "/openzeekr/resume-link"
 
+    /** Watch → phone (W2): what the watch's own key just did, sent before RESUME. Payload "LOCK|ok", "LOCK|err",
+     *  "UNLOCK|ok" or "UNLOCK|err" (UTF-8). The phone's proximity engine takes a confirmed outcome as an external
+     *  Lock/Unlock at once instead of inferring it from the car's next status. */
+    const val PATH_DONE = "/openzeekr/watch-done"
+
     // ---- cloud control relay (climate / charging / locate) ----
     // The watch has no account or TSP stack, so cloud-only actions are RELAYED to the phone,
     // which runs them (BLE-first via VehicleControl, else cloud). Lock/unlock do NOT come

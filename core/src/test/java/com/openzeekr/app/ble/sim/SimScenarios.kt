@@ -257,6 +257,28 @@ internal object SimScenarios {
                 Mark("expect-locked-by-end"), Walk(40.0), Stand(60_000, Facing.AWAY))),
     )
 
+    /** W2 (24/10): the watch companion's hand-overs, on the phone side (the watch's own key acts; the phone stands down
+     *  and learns the outcome). Not in [families]: WearLinkArbiter is process-global, so these run one world at a time
+     *  (WatchHandOverSimulationTest) and the gate's scenario lines stay what they were. Front pocket only. */
+    val watchFamilies: List<Scenario> = listOf(
+        // Gap 1: a watch Lock right after the approach unlock must not be undone at the door (self-lock reopen rule).
+        Scenario("W-1 watch Lock at the car, then to the door", "open (phone); 5 s; Lock with the watch; 6 m to the door; stand", 30.0,
+            approachAndOpen() + listOf(Stand(5_000), Leg.WatchLock(), Mark("expect-stay-locked"), Walk(6.0, 1.0), Stand(60_000, Facing.AWAY, -4.0))),
+        // Gap 2: an Unlock with the watch while the phone's key sleeps beside the car; the owner leaves without locking.
+        Scenario("W-2 watch Unlock, key asleep, walk away", "35 min still at 4 m (the key sleeps); Unlock with the watch; door; 5 s; away 30 m", 4.0,
+            listOf(Mark("-"), Stand(2_100_000, Facing.SIDE), Leg.WatchUnlock(), OpenDoor, Stand(5_000), Mark("expect-lock"), Walk(30.0), Stand(150_000, Facing.AWAY))),
+        // A Lock with the watch while already walking away from the open car.
+        Scenario("W-3 watch Lock while walking away", "open (phone); away to 8 m; Lock with the watch; on to 30 m", 30.0,
+            approachAndOpen() + listOf(Mark("expect-lock"), Walk(8.0), Leg.WatchLock(), Walk(30.0), Stand(150_000, Facing.AWAY))),
+        // As W-2, but the watch app dies after acting: no RESUME; the phone's fail-safe reclaims the link after 45 s.
+        Scenario("W-4 watch Unlock, resume lost, walk away", "as W-2 without the watch's resume", 4.0,
+            listOf(Mark("-"), Stand(2_100_000, Facing.SIDE), Leg.WatchUnlock(resume = false), OpenDoor, Stand(5_000), Mark("expect-lock"), Walk(30.0), Stand(150_000, Facing.AWAY))),
+        // An Unlock with the watch from inside (30 m, the key asleep); ten minutes later the owner walks to the car.
+        Scenario("W-5 watch Unlock from inside, later to the car", "20 min inside at 30 m (the key sleeps); Unlock with the watch; 10 min; to the car; in", 30.0,
+            listOf(Mark("-"), Stand(1_200_000, Facing.AWAY, -10.0, indoor = true), Leg.WatchUnlock(), Stand(600_000, Facing.AWAY, -10.0, indoor = true),
+                Mark("expect-unlock"), Walk(1.0), Stand(4_000), OpenDoor, Stand(20_000, shadowDb = -6.0))),
+    )
+
     /** Every field incident and the families that reproduce it (incident history, 14/10). */
     val fieldCases: List<FieldCase> = listOf(
         FieldCase("#1 28/09 0.1.38", "auto-Lock with the user beside the car", listOf("F05", "F06", "F36")),

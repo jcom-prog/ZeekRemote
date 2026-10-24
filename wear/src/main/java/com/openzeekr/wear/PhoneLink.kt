@@ -101,6 +101,14 @@ object PhoneLink {
             .also { pauseWaiter = null }
     }
 
+    /** W2 (R1): tell the phone what the watch's own key just did, before handing the link back (best effort). */
+    fun done(ctx: Context, lockIt: Boolean, ok: Boolean) {
+        val payload = (if (lockIt) "LOCK" else "UNLOCK") + "|" + (if (ok) "ok" else "err")
+        Wearable.getNodeClient(ctx).connectedNodes.addOnSuccessListener { nodes ->
+            nodes.forEach { sendTo(ctx, it.id, WearKeyProtocol.PATH_DONE, payload.toByteArray(Charsets.UTF_8)) }
+        }
+    }
+
     /** Tell the phone to take the link back (fire-and-forget — best effort). */
     fun resume(ctx: Context) {
         Wearable.getNodeClient(ctx).connectedNodes.addOnSuccessListener { nodes ->

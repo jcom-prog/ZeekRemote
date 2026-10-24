@@ -595,6 +595,16 @@ jobs:
           grep -Fq 'm.groupValues[1].isNotEmpty() -> "WATCH_CONTROL ${m.groupValues[1]} ${m.groupValues[2]}"' core/src/main/java/com/openzeekr/app/util/ProximityDiagnosticJournal.kt
           grep -Fq 'class WearVehicleSnapshotTest' core/src/test/java/com/openzeekr/app/wear/WearVehicleSnapshotTest.kt
           grep -Fq 'item { BatteryHero(snap) }' wear/src/main/java/com/openzeekr/wear/WearApp.kt
+          # Wear 2.0 W2 (24/10): the watch reports its Lock/Unlock (watch-done); a lock right after a hand-over is the watch's; a hand-over that ends with the car open and no session is a fresh link loss
+          grep -Fq 'const val PATH_DONE = "/openzeekr/watch-done"' core/src/main/java/com/openzeekr/app/wear/WearKeyProtocol.kt
+          grep -Fq 'fun recentHandOver(nowMs: Long = now()): Boolean =' core/src/main/java/com/openzeekr/app/wear/WearLinkArbiter.kt
+          grep -Fq 'WearKeyProtocol.PATH_DONE -> watchDone(String(event.data, Charsets.UTF_8))' app/src/main/java/com/openzeekr/app/wear/PhoneKeySyncService.kt
+          grep -Fq '!com.openzeekr.app.wear.WearLinkArbiter.recentHandOver(clock.wallMs())' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'watch: link reclaimed with the car open and no session - treated as a fresh link loss' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'PhoneLink.done(context, lockIt, r) // W2 (R1): the outcome first, then the link back' wear/src/main/java/com/openzeekr/wear/WearApp.kt
+          grep -Fq 'class WatchHandOverSimulationTest' core/src/test/java/com/openzeekr/app/ble/sim/WatchHandOverSimulationTest.kt
+          grep -Fq 'class WearLinkArbiterTest' core/src/test/java/com/openzeekr/app/wear/WearLinkArbiterTest.kt
+          grep -Fq 'fun onWatchLockConfirmed()' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
 
       - name: Verify read-only diagnostic entry point
         run: |

@@ -404,6 +404,8 @@ class ProximityController internal constructor(
     // 0.3.21 (study K2c): when the current unbroken walk began (MOVING, not from a drive; wall clock, 0 = none).
     private var walkBoutStartMs = 0L
     private var walkBoutJob: Job? = null
+    /** W2 (R3): watches the watch companion's link hand-over ([com.openzeekr.app.wear.WearLinkArbiter]). */
+    private var handOverJob: Job? = null
     // Latest moving walk-away candidate in this unlock (wall clock); with no strong reading after
     // it, the user has walked away (LockAlertPolicy.departureSuspected).
     private var lastWalkAwayCandidateAtMs = 0L
@@ -550,6 +552,21 @@ class ProximityController internal constructor(
         _wakeLockNeeded.value = true   // hold until the first sample decides (bring-up needs the CPU)
         _state.value = State(running = true, phase = Phase.PASSIVE, zone = Zone.UNKNOWN)
         ble.onInboundActivity = { activityWake?.complete(Unit) } // wake the unlocked idle-wait instantly
+        handOverJob?.cancel()
+        handOverJob = scope.launch {
+            // W2 (R3): when the watch hands the link back (or the fail-safe reclaims it) while the car is open and the
+            // phone has no session, the loss the hand-over hid is a fresh one from now: the next monitor round starts
+            // the link-loss watch (stationary check, cloud check, alarm when walking away) instead of staying silent.
+            var suspended = com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value
+            com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.collect { s ->
+                if (suspended && !s && armedUnlocked && _state.value.running &&
+                    ble.state.value !in setOf(DkBleManager.State.SESSION_READY, DkBleManager.State.CONNECTED)) {
+                    linkLostAtMs = 0L
+                    Logx.w("prox", "watch: link reclaimed with the car open and no session - treated as a fresh link loss")
+                }
+                suspended = s
+            }
+        }
         walkBoutJob?.cancel()
         walkBoutJob = scope.launch {
             motion.state.collect {
@@ -680,6 +697,7 @@ class ProximityController internal constructor(
 
     fun stop() {
         monitorJob?.cancel(); monitorJob = null
+        handOverJob?.cancel(); handOverJob = null
         vehicleStatusJob?.cancel(); vehicleStatusJob = null
         lockStateCheckJob?.cancel(); lockStateCheckJob = null
         manualCloudLockCheck?.cancel(); manualCloudLockCheck = null
@@ -755,6 +773,24 @@ class ProximityController internal constructor(
 
     /** Only the BLE receipt verifies a manually requested lock. */
     fun onExternalLockConfirmed(source: String) = onManualLockAcknowledged(source, bleConfirmed = true)
+
+    /**
+     * W2 (R1): the watch locked the car with its own key while this phone stood down. The car's status could not
+     * reach us (the link was the watch's), so everything of ours that was about to lock, to wait for a confirmation
+     * or to alarm about an open car is superseded by that confirmed Lock first (simulator W-3: our Lock loop,
+     * started at 8 m, found its departure proof expired and sounded the alarm 5 s after the watch had locked).
+     */
+    fun onWatchLockConfirmed() {
+        scope.launch {
+            lockJob?.cancel(); lockJob = null
+            lockConfirmationJob?.cancel(); lockConfirmationJob = null
+            departureAlarmJob?.cancel(); departureAlarmJob = null
+            alerts.silenceAlarm()
+            com.openzeekr.app.remote.LocalLockEvidence.onKeyConfirmed(locked = true)
+            lastCarLockedReportAtMs = clock.wallMs()
+        }
+        onExternalLockConfirmed("watch Lock")
+    }
 
     /** The cloud acknowledged the command, but physical actuation remains unknown. */
     fun onExternalCloudLockAccepted() = onManualLockAcknowledged("manual cloud control", bleConfirmed = false)
@@ -1682,7 +1718,9 @@ class ProximityController internal constructor(
         Logx.w("prox", "car locked itself (key status central=${status.centralLockCode}) -> treated as Lock")
         val sinceUnlockMs = clock.wallMs() - unlockObservedAtMs
         selfLockReopenPending = lastUnlockSource == "proximity" && unlockObservedAtMs != 0L &&
-            sinceUnlockMs in 0..SELF_LOCK_REOPEN_AFTER_UNLOCK_MS
+            sinceUnlockMs in 0..SELF_LOCK_REOPEN_AFTER_UNLOCK_MS &&
+            // W2 (R2): a lock the car reports right after a watch hand-over is the watch's Lock, not a self-lock to undo.
+            !com.openzeekr.app.wear.WearLinkArbiter.recentHandOver(clock.wallMs())
         onExternalLockConfirmed("car self-lock")
     }
 

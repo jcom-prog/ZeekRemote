@@ -55,8 +55,25 @@ class PhoneKeySyncService : WearableListenerService() {
                 WearLinkArbiter.resume()
             }
             WearKeyProtocol.PATH_SNAPSHOT_QUERY -> sendSnapshot(event.sourceNodeId)
+            WearKeyProtocol.PATH_DONE -> watchDone(String(event.data, Charsets.UTF_8))
             WearKeyProtocol.PATH_CONTROL -> runControl(event.sourceNodeId, String(event.data, Charsets.UTF_8))
         }
+    }
+
+    /** W2 (R1): the watch reports what its own key did ("LOCK|ok", "UNLOCK|err", ...), before it hands the link back.
+     *  A confirmed outcome goes to the proximity engine as an external Lock/Unlock at once - not only after the car's
+     *  next status: a watch Lock latches the departure without the self-lock reopen rule, a watch Unlock arms the
+     *  walk-away watch. Errors are journaled only. */
+    private fun watchDone(body: String) {
+        val parts = body.split("|")
+        val what = parts.getOrNull(0)?.trim().orEmpty()
+        val ok = parts.getOrNull(1)?.trim() == "ok"
+        if (what != "LOCK" && what != "UNLOCK") { Logx.w("prox", "watch: done message not understood"); return }
+        Logx.d("prox", "watch: control $what ${if (ok) "ok" else "err"}")
+        if (!ok) return
+        val deps = (application as? DepsHolder)?.deps ?: return
+        if (what == "LOCK") deps.proximity.onWatchLockConfirmed()
+        else deps.proximity.onExternalUnlockConfirmed("watch Unlock")
     }
 
     /** Relay a cloud-only control the watch asked for. Runs BLE-first / cloud-fallback via

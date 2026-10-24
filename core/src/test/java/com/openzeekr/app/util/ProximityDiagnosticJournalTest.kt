@@ -319,6 +319,11 @@ class ProximityDiagnosticJournalTest {
         assertEquals("WATCH_KEY unavailable", ProximityDiagnosticJournal.event("prox", "watch: key unavailable (phone not provisioned)"))
         assertEquals("WATCH_LINK paused", ProximityDiagnosticJournal.event("prox", "watch: link paused for the watch"))
         assertEquals("WATCH_LINK resumed", ProximityDiagnosticJournal.event("prox", "watch: link resumed"))
+        // W2: the watch's own Lock/Unlock outcome and the hand-over that ends with the car open.
+        assertEquals("WATCH_CONTROL LOCK ok", ProximityDiagnosticJournal.event("prox", "watch: control LOCK ok"))
+        assertEquals("WATCH_CONTROL UNLOCK err", ProximityDiagnosticJournal.event("prox", "watch: control UNLOCK err"))
+        assertEquals("WATCH_LINK reclaimed_open", ProximityDiagnosticJournal.event("prox",
+            "watch: link reclaimed with the car open and no session - treated as a fresh link loss"))
         assertNull(ProximityDiagnosticJournal.event("prox", "watch: control CLIMATE_ON ok token=private"))
         assertNull(ProximityDiagnosticJournal.event("ble", "watch: key sent"))
     }
