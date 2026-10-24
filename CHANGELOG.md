@@ -2,6 +2,10 @@
 
 Wat je per versie merkt, in gewone taal. ZeekRemote is een privé-afsplitsing van [OpenZeekr](https://github.com/borconi/openzeekr) (splitpunt: OpenZeekr 0.1.4) voor één telefoon en één auto; de nadruk ligt op betrouwbaar openen bij het naderen en sluiten bij het weglopen, met een simulator en een regressiepoort als bewaker. Dit logboek bevat geen meetwaarden, tijden, plaatsen of persoonsgegevens; technische details staan in de commits.
 
+## 0.4.2 (alleen horloge)
+
+- **Horloge-icoon.** De horloge-app toonde nog het icoon van OpenZeekr; hij draagt nu het ZeekRemote-ontwerp "Oranje wiel" uit de icoonreeks van de telefoon-app. De telefoon-app verandert niet en blijft 0.4.1.
+
 ## 0.4.1 (telefoon + horloge)
 
 - **Horloge-app (Galaxy Watch, Wear OS).** De horloge-app haalt op uw verzoek een kopie van de digitale sleutel van de telefoon en kan de auto zelf openen en sluiten, ook als de telefoon niet in de buurt is; daarnaast toont hij accu, bereik en laadstand en bedient hij klimaat, laden, laadklep en zoeken via de telefoon. Het horloge en de telefoon spreken af wie de auto heeft: houdt de telefoon de auto verbonden met naderen aan, dan doet het horloge niets; anders laat de telefoon de verbinding even los, handelt het horloge en meldt het de uitkomst, waarna de telefoon de bewaking weer oppakt (een horloge-Lock wordt nooit ongedaan gemaakt bij de deur; na een horloge-Unlock blijft de telefoon waken of de auto dicht gaat). In Instellingen staat de schakelaar "Watch key": uit betekent dat het horloge de sleutel wist.

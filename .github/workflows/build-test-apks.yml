@@ -589,6 +589,8 @@ jobs:
           grep -Fq '## 0.4.0g' CHANGELOG.md
           # 0.4.1 (W3, owner approval 24/10): the watch companion ships next to the phone app
           grep -Fq '## 0.4.1' CHANGELOG.md
+          # 0.4.2 (W4): watch-only icon release
+          grep -Fq '## 0.4.2' CHANGELOG.md
           # Wear 2.0 (24/10): the snapshot/control relay, the watch-key switch and the watch lines in the journal.
           grep -Fq 'const val PATH_SNAPSHOT_QUERY = "/openzeekr/snapshot-query"' core/src/main/java/com/openzeekr/app/wear/WearKeyProtocol.kt
           grep -Fq 'fun from(bean: VehicleStatusBean?, cloudOnline: Boolean, nowMs: Long): WearVehicleSnapshot' core/src/main/java/com/openzeekr/app/wear/WearVehicleSnapshot.kt
@@ -657,8 +659,12 @@ jobs:
           APK=wear/build/outputs/apk/debug/wear-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='163' versionName='0.4.1-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='164' versionName='0.4.2-work'"
           printf '%s\n' "$BADGING" | grep -F "uses-feature: name='android.hardware.type.watch'"
+          # W4 (0.4.2): the watch carries the phone app's icon design, not the upstream mark
+          printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher[^']*'"
+          grep -Fq '@drawable/ic_launcher_wiel_background' wear/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+          test ! -e wear/src/main/res/values/colors.xml
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'30'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
           sha256sum "$APK"

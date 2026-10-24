@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- ZeekRemote W4: the watch carries the "Oranje wiel" design from the phone app's icon set (copied from the phone module's
+     ic_launcher_wiel.xml); the upstream OpenZeekr mark left with 0.4.2. -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@color/ic_launcher_background" />
-    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <background android:drawable="@drawable/ic_launcher_wiel_background" />
+    <foreground android:drawable="@android:color/transparent" />
+    <monochrome android:drawable="@drawable/ic_launcher_wiel_monochrome" />
 </adaptive-icon>
