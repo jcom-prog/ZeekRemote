@@ -309,4 +309,17 @@ class ProximityDiagnosticJournalTest {
             "shadow: gnss: veto approach at -82 dBm: 25 m acc 6 from the car at 52.0,4.0 (rssi=-82 own=100)"))
         assertNull(ProximityDiagnosticJournal.event("ble", "shadow: gnss: fix watch over"))
     }
+
+    @Test fun watchConversationsAreJournaledAsNamesAndOutcomesOnly() {
+        // wear 2.0: the watch's relayed controls, the key hand-over and the link hand-over.
+        assertEquals("WATCH_CONTROL CLIMATE_ON ok", ProximityDiagnosticJournal.event("prox", "watch: control CLIMATE_ON ok"))
+        assertEquals("WATCH_CONTROL CHARGE_STOP err", ProximityDiagnosticJournal.event("prox", "watch: control CHARGE_STOP err"))
+        assertEquals("WATCH_KEY sent", ProximityDiagnosticJournal.event("prox", "watch: key sent"))
+        assertEquals("WATCH_KEY refused", ProximityDiagnosticJournal.event("prox", "watch: key refused (sharing off)"))
+        assertEquals("WATCH_KEY unavailable", ProximityDiagnosticJournal.event("prox", "watch: key unavailable (phone not provisioned)"))
+        assertEquals("WATCH_LINK paused", ProximityDiagnosticJournal.event("prox", "watch: link paused for the watch"))
+        assertEquals("WATCH_LINK resumed", ProximityDiagnosticJournal.event("prox", "watch: link resumed"))
+        assertNull(ProximityDiagnosticJournal.event("prox", "watch: control CLIMATE_ON ok token=private"))
+        assertNull(ProximityDiagnosticJournal.event("ble", "watch: key sent"))
+    }
 }

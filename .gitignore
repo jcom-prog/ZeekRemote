@@ -36,5 +36,4 @@ keystore.properties
 # Drop your own per-model white PNG/WebP here (see README): car_{001,x,7x,7gt,9x}.webp
 /app/src/main/assets/cars/
 
-# Watch hero car cutout (copyrighted render, supply locally)
-/wear/src/main/assets/cars/
+# Watch hero car: ZeekRemote tracks its own render at wear/src/main/assets/cars/car.png (the phone's car_7gt.png)

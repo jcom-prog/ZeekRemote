@@ -7,6 +7,10 @@ import com.google.android.gms.wearable.WearableListenerService
 import com.openzeekr.app.DepsHolder
 import com.openzeekr.app.ble.DkBleManager
 import com.openzeekr.app.ble.DkIdentity
+import com.openzeekr.app.net.model.ServiceParameter
+import com.openzeekr.app.remote.CallResult
+import com.openzeekr.app.remote.Command
+import com.openzeekr.app.util.Logx
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -17,17 +21,26 @@ import kotlinx.serialization.json.Json
 private const val TAG = "OZWearKey"
 
 /**
- * Phone side of the watch companion. Handles two Data-Layer conversations:
+ * Phone side of the watch companion. Handles three Data-Layer conversations:
  *
  *  - **Key clone** ([WearKeyProtocol.PATH_REQUEST]): sends this phone's provisioned DK
  *    credential so the watch can lock/unlock the car itself. The Data Layer only connects
  *    the user's own paired devices (same signing key) and the channel is encrypted; the
  *    credential is a transient MessageClient message, never persisted as a DataItem.
+ *    ZeekRemote: the owner can switch the sharing off (Settings "Watch key"); a request then
+ *    gets a purge instead of the key, so a watch that still holds one forgets it.
  *
  *  - **BLE-link arbitration** (status / pause / resume): the car allows only ONE BLE peer, so
  *    before the watch touches the car it checks with the phone. On PAUSE the phone releases
  *    its keep-alive session and stands down ([WearLinkArbiter]) so the watch can connect
  *    cleanly; on RESUME it takes the link back. See [WearLinkArbiter].
+ *
+ *  - **Cloud relay** (snapshot / control): the watch has no account or cloud stack, so it asks
+ *    the phone for the vehicle snapshot (SOC, charging, lock, reachability) and has the phone run
+ *    the cloud-only controls (climate, charging, locate). Lock/unlock never come through here.
+ *
+ * Every watch conversation that touches the car is logged in the "prox" area ("watch: ...") so the
+ * diagnostic export and the journal show what the watch did next to the phone's own decisions.
  */
 class PhoneKeySyncService : WearableListenerService() {
     override fun onMessageReceived(event: MessageEvent) {
@@ -38,15 +51,85 @@ class PhoneKeySyncService : WearableListenerService() {
             WearKeyProtocol.PATH_PAUSE -> pauseForWatch(event.sourceNodeId)
             WearKeyProtocol.PATH_RESUME -> {
                 Log.i(TAG, "watch resumed — reclaiming car link")
+                Logx.d("prox", "watch: link resumed")
                 WearLinkArbiter.resume()
             }
+            WearKeyProtocol.PATH_SNAPSHOT_QUERY -> sendSnapshot(event.sourceNodeId)
+            WearKeyProtocol.PATH_CONTROL -> runControl(event.sourceNodeId, String(event.data, Charsets.UTF_8))
+        }
+    }
+
+    /** Relay a cloud-only control the watch asked for. Runs BLE-first / cloud-fallback via
+     *  Deps.vehicleControl, acks the result, then pushes a fresh snapshot so the watch's
+     *  charge/lock readout updates once the car reflects the change.
+     *  Body is "<CONTROL>" or "<CONTROL>|<arg>" (climate carries the target temperature). */
+    private fun runControl(nodeId: String, body: String) {
+        val parts = body.split("|")
+        val control = runCatching { WearControl.valueOf(parts[0].trim()) }.getOrNull()
+        val arg = parts.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }
+        val deps = (application as? DepsHolder)?.deps
+        if (control == null || deps == null) {
+            send(nodeId, WearKeyProtocol.PATH_CONTROL_ACK, "${parts.getOrNull(0) ?: body}|err|unavailable".toByteArray())
+            return
+        }
+        // Climate ON is sent as ONE explicit ZAF command (AC=true, AC.temp, AC.duration), exactly like
+        // the phone UI — the generic ZAF envelope avoids AC_ON's base-param dedup, and AC.temp MUST be
+        // dot-decimal (the car rejects a locale comma), so format with Locale.US. arg = target °C.
+        val (cmd, extra) = when (control) {
+            WearControl.CLIMATE_ON -> {
+                val tc = arg?.toDoubleOrNull() ?: 22.0
+                Command.CLIMATE_ZAF to listOf(
+                    ServiceParameter("AC", "true"),
+                    ServiceParameter("AC.temp", String.format(java.util.Locale.US, "%.1f", tc)),
+                    ServiceParameter("AC.duration", "15"),
+                )
+            }
+            WearControl.CLIMATE_OFF -> Command.AC_OFF to emptyList<ServiceParameter>()
+            WearControl.CHARGE_START -> Command.CHARGING_ON to emptyList<ServiceParameter>()
+            WearControl.CHARGE_STOP -> Command.CHARGING_OFF to emptyList<ServiceParameter>()
+            WearControl.CHARGE_PORT_OPEN -> Command.CHARGE_LID_OPEN to emptyList<ServiceParameter>()
+            WearControl.CHARGE_PORT_CLOSE -> Command.CHARGE_LID_CLOSE to emptyList<ServiceParameter>()
+            WearControl.FLASH_HORN -> Command.FLASH_HORN to emptyList<ServiceParameter>()
+        }
+        deps.appScope.launch {
+            val err = when (val r = deps.vehicleControl.send(cmd, extra)) {
+                is CallResult.Ok -> null
+                is CallResult.Err -> r.message.ifBlank { "failed" }
+            }
+            Logx.d("prox", "watch: control ${control.name} ${if (err == null) "ok" else "err"}")
+            val ack = if (err == null) "${control.name}|ok" else "${control.name}|err|$err"
+            send(nodeId, WearKeyProtocol.PATH_CONTROL_ACK, ack.toByteArray())
+            deps.vehicleState.refreshAfterCommand() // nudge the car's status Ts forward
+            delay(1_500)
+            sendSnapshot(nodeId)
+        }
+    }
+
+    /** Push the current vehicle snapshot. If the phone has no status yet (app not in foreground,
+     *  so the poll loop never ran), fetch once first — otherwise the watch shows a blank battery. */
+    private fun sendSnapshot(nodeId: String) {
+        val deps = (application as? DepsHolder)?.deps ?: return
+        deps.appScope.launch {
+            if (deps.vehicleState.state.value == null) runCatching { deps.vehicleState.refresh() }
+            val snap = WearVehicleSnapshot.from(deps.vehicleState.state.value,
+                cloudOnline = deps.vehicleState.state.value != null && deps.vehicleState.lastError == null,
+                nowMs = System.currentTimeMillis())
+            send(nodeId, WearKeyProtocol.PATH_SNAPSHOT, snap.encode().toByteArray(Charsets.UTF_8))
         }
     }
 
     private fun sendKey(nodeId: String) {
+        val deps = (application as? DepsHolder)?.deps
+        if (deps != null && !deps.config.config.value.watchKeyEnabled) {
+            Log.i(TAG, "key sharing is off — telling the watch to purge")
+            Logx.d("prox", "watch: key refused (sharing off)")
+            send(nodeId, WearKeyProtocol.PATH_PURGE, ByteArray(0))
+            return
+        }
         val blob = DkIdentity.get(this).exportCredentialBlob()
         if (blob == null) Log.w(TAG, "phone has no provisioned key to share")
         else Log.i(TAG, "phone sharing key (${blob.size} fields)")
+        Logx.d("prox", if (blob == null) "watch: key unavailable (phone not provisioned)" else "watch: key sent")
         val json = if (blob != null) Json.encodeToString(blob) else "{}"
         send(nodeId, WearKeyProtocol.PATH_KEY, json.toByteArray(Charsets.UTF_8))
     }
@@ -67,6 +150,7 @@ class PhoneKeySyncService : WearableListenerService() {
      *  then ack so the watch connects into a clean radio. */
     private fun pauseForWatch(nodeId: String) {
         val deps = (application as? DepsHolder)?.deps
+        Logx.d("prox", "watch: link paused for the watch")
         WearLinkArbiter.suspendForWatch()
         if (deps == null) { send(nodeId, WearKeyProtocol.PATH_PAUSED, ByteArray(0)); return }
         deps.appScope.launch(Dispatchers.Main) {

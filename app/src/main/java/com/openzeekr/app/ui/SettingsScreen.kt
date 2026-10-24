@@ -307,6 +307,22 @@ fun SettingsScreen(deps: Deps, modifier: Modifier = Modifier) {
                     colors = brandSwitchColors(),
                 )
             }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Watch key", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Text("Shares the digital key with a paired Wear OS watch. Off: the watch forgets its key.",
+                        color = Brand.muted, fontSize = 12.sp)
+                }
+                Switch(
+                    checked = liveCfg.watchKeyEnabled,
+                    onCheckedChange = { on ->
+                        store.update { it.copy(watchKeyEnabled = on) }
+                        if (on) com.openzeekr.app.wear.PhoneKeyPush.pushToWatches(ctx)
+                        else com.openzeekr.app.wear.PhoneKeyPush.purgeWatches(ctx)
+                    },
+                    colors = brandSwitchColors(),
+                )
+            }
             if (liveCfg.logHttp || liveCfg.logBle) LogViewer()
             Text("Diagnostic build: proximity behaviour is unchanged. Capability observation is read-only.", fontSize = 12.sp)
             OutlinedButton(enabled = liveCfg.logBle && !observingCapabilities, onClick = {

@@ -118,6 +118,9 @@ data class SecretsConfig(
 
     // ---- proximity (RSSI-based approach-unlock / walk-away-lock) ----
     val proximityEnabled: Boolean = false,
+    /** Share the digital key with a paired Wear OS watch (Settings "Watch key"). Off: a watch asking for the
+     *  key is told to purge its copy instead. Anyone wearing a provisioned watch has a working key to the car. */
+    val watchKeyEnabled: Boolean = true,
     /** BLE MAC of the vehicle to range against (blank = strongest advertiser). */
     val proximityDeviceMac: String = "",
     /**

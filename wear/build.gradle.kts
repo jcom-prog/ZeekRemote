@@ -26,8 +26,9 @@ android {
         targetSdk = 34
         // The phone + watch AABs go into ONE Play release (shared applicationId), so each artifact
         // needs a DISTINCT versionCode. Convention here: watch = phone + 1 (bump both each release).
-        versionCode = 33
-        versionName = "0.1.17"
+        // ZeekRemote: the watch tracks the phone version; versionCode = phone + 1 (phone 0.4.0f = 160).
+        versionCode = 161
+        versionName = "0.4.0f"
     }
 
     signingConfigs {
@@ -93,6 +94,9 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    // Material icons for the control chips (tree-shaken out of the release build by R8).
+    implementation("androidx.compose.material:material-icons-extended")
 
     // Wear Data Layer — receives the cloned DK key from the phone.
     implementation("com.google.android.gms:play-services-wearable:18.2.0")

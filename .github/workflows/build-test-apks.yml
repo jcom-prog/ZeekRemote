@@ -89,6 +89,7 @@ on:
       - zeekremote-0.4.0e-car-map
       - zeekremote-0.4.0f-map-detail
       - zeekremote-0.4.0g-aerial-buildings
+      - zeekremote-wear-2.0
 
 permissions:
   contents: read
@@ -144,8 +145,8 @@ jobs:
           printf 'XCHANGER_SIGN_SECRET=%s\n' "$XCHANGER_SIGN_SECRET" > secrets.properties
           chmod 600 secrets.properties
 
-      - name: Test core and build phone APK
-        run: ./gradlew :core:test :app:assembleDebug --stacktrace
+      - name: Test core and build phone and watch APKs
+        run: ./gradlew :core:test :app:assembleDebug :wear:assembleDebug --stacktrace
 
       # Fase 0 (14/10): the whole-app simulator (calibrated + stress worlds) must not show more
       # SAFETY findings than core/src/test/resources/sim-baseline.json allows; 0.3.2: nor clearly
@@ -586,6 +587,14 @@ jobs:
           grep -Fq 'layer.setProperties(PropertyFactory.visibility(if (on) Property.NONE else Property.VISIBLE))' app/src/main/java/com/openzeekr/app/ui/LocationMap.kt
           grep -Fq 'fun theBuildingLayersAreRecognisedByTheirIds' core/src/test/java/com/openzeekr/app/util/CarMapSupportTest.kt
           grep -Fq '## 0.4.0g' CHANGELOG.md
+          # Wear 2.0 (24/10): the snapshot/control relay, the watch-key switch and the watch lines in the journal.
+          grep -Fq 'const val PATH_SNAPSHOT_QUERY = "/openzeekr/snapshot-query"' core/src/main/java/com/openzeekr/app/wear/WearKeyProtocol.kt
+          grep -Fq 'fun from(bean: VehicleStatusBean?, cloudOnline: Boolean, nowMs: Long): WearVehicleSnapshot' core/src/main/java/com/openzeekr/app/wear/WearVehicleSnapshot.kt
+          grep -Fq 'val watchKeyEnabled: Boolean = true,' core/src/main/java/com/openzeekr/app/config/SecretsConfig.kt
+          grep -Fq 'WearKeyProtocol.PATH_CONTROL -> runControl(event.sourceNodeId, String(event.data, Charsets.UTF_8))' app/src/main/java/com/openzeekr/app/wear/PhoneKeySyncService.kt
+          grep -Fq 'm.groupValues[1].isNotEmpty() -> "WATCH_CONTROL ${m.groupValues[1]} ${m.groupValues[2]}"' core/src/main/java/com/openzeekr/app/util/ProximityDiagnosticJournal.kt
+          grep -Fq 'class WearVehicleSnapshotTest' core/src/test/java/com/openzeekr/app/wear/WearVehicleSnapshotTest.kt
+          grep -Fq 'item { BatteryHero(snap) }' wear/src/main/java/com/openzeekr/wear/WearApp.kt
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -618,4 +627,33 @@ jobs:
         with:
           name: ZeekRemote-phone-test
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      # Wear 2.0 (owner decision 24/10): the watch companion is built next to the phone, signed with the same
+      # permanent test identity (the Wear Data Layer only pairs apps with the same applicationId AND signer).
+      - name: Verify permanent watch signing identity
+        run: |
+          APKSIGNER="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner"
+          EXPECTED="96f1627b1da334cb443596b1746bcce390750f1db751ec2bf371e82d323b45b9"
+          APK=wear/build/outputs/apk/debug/wear-debug.apk
+          CERTS=$("$APKSIGNER" verify --print-certs "$APK")
+          printf '%s\n' "$CERTS"
+          printf '%s\n' "$CERTS" | grep -Fqi "certificate SHA-256 digest: $EXPECTED"
+
+      - name: Verify built watch APK identity and SHA-256
+        run: |
+          APK=wear/build/outputs/apk/debug/wear-debug.apk
+          AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
+          BADGING=$("$AAPT" dump badging "$APK")
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='161' versionName='0.4.0f-work'"
+          printf '%s\n' "$BADGING" | grep -F "uses-feature: name='android.hardware.type.watch'"
+          printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'30'"
+          printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
+          sha256sum "$APK"
+
+      - name: Upload watch APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZeekRemote-watch-test
+          path: wear/build/outputs/apk/debug/wear-debug.apk
           if-no-files-found: error
