@@ -99,6 +99,51 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
             "departure_steps_insufficient", "departure_returning", "departure_timing_invalid",
             "departure_accuracy_invalid", "departure_clearance_insufficient", "departure_fix_implausible")
 
+        // 0.4.0c: the doubt reference and the GNSS gate of the own rules ("gnss:" live, "shadow: gnss:" in the shadow
+        // mode): levels, metres, accuracies, own steps and seconds only - never a position.
+        private val gnssLine = Regex("^(shadow: )?gnss: (.{1,160}) \\(rssi=(-[0-9]{2,3})(?: own=(?:[0-9]{1,7}|null))?\\)$")
+        private val gnssDoubtFresh = Regex("doubt fresh link at (-[0-9]{2,3}) dBm, walk (?:([0-9]{1,4}) s old|unknown)")
+        private val gnssDoubtJump = Regex("doubt jump (-[0-9]{2,3}) -> (-[0-9]{2,3}) dBm \\((-?[0-9]{1,6}) own steps between the readings\\)")
+        private val gnssDoubtFar = Regex("doubt far (-[0-9]{2,3}) dBm(?: for ([0-9]{1,5}) s)?")
+        private val gnssReleased = Regex("released: (?:escape at (-[0-9]{2,3}) dBm|near ([0-9]{1,5}) m acc ([0-9]{1,4}) after (-?[0-9]{1,6}) own steps|" +
+            "rise (-[0-9]{2,3}) dBm over the doubt level (-[0-9]{2,3}) after (-?[0-9]{1,6}) own steps|steps (-?[0-9]{1,6}) own steps since the doubt)")
+        private val gnssFarHold = Regex("far ([0-9]{1,5}) m acc ([0-9]{1,4}) after (-?[0-9]{1,6}) own steps - holds ([a-z_]{1,24}) at (-[0-9]{2,3}) dBm")
+        private val gnssShortHold = Regex("short (-?[0-9]{1,6}) own steps since the doubt \\((fresh|jump|far) [^()]{0,80}(?:\\([^()]{0,60}\\))?\\) - " +
+            "holds ([a-z_]{1,24}) at (-[0-9]{2,3}) dBm")
+        private val gnssVeto = Regex("veto ([a-z_]{1,24}) at (-[0-9]{2,3}) dBm: ([0-9]{1,5}) m acc ([0-9]{1,4}) from the car")
+        private val gnssCarPosition = Regex("^(shadow: )?gnss: car position (?:remembered \\(([1-9]) anchors, acc ([0-9]{1,4})\\)|" +
+            "forgotten \\(the phone rides in the car\\))$")
+        private val gnssFixWatch = Regex("^(shadow: )?gnss: fix watch (?:starts \\((doubt|in band)\\)|over)$")
+
+        /** 0.4.0c: the body of a "gnss:" decision line as a journal entry; null for a body the journal does not know. */
+        private fun gnssEntry(body: String, shadow: Boolean): String? {
+            val tail = if (shadow) " shadow" else ""
+            gnssDoubtFresh.matchEntire(body)?.let { m ->
+                val walk = m.groupValues[2]
+                return "GNSS_DOUBT fresh ${m.groupValues[1]} walk=" + (if (walk.isEmpty()) "unknown" else "${walk}s") + tail
+            }
+            gnssDoubtJump.matchEntire(body)?.let { m ->
+                return "GNSS_DOUBT jump ${m.groupValues[1]} ${m.groupValues[2]} steps=${m.groupValues[3]}$tail" }
+            gnssDoubtFar.matchEntire(body)?.let { m ->
+                return "GNSS_DOUBT far ${m.groupValues[1]}" + (if (m.groupValues[2].isEmpty()) "" else " for=${m.groupValues[2]}s") + tail }
+            gnssReleased.matchEntire(body)?.let { m ->
+                val g = m.groupValues
+                return "GNSS_RELEASED " + when {
+                    g[1].isNotEmpty() -> "escape ${g[1]}"
+                    g[2].isNotEmpty() -> "near m=${g[2]} acc=${g[3]} steps=${g[4]}"
+                    g[5].isNotEmpty() -> "rise ${g[5]} from=${g[6]} steps=${g[7]}"
+                    else -> "steps ${g[8]}"
+                } + tail
+            }
+            gnssFarHold.matchEntire(body)?.let { m ->
+                return "GNSS_HOLD far ${m.groupValues[4]} ${m.groupValues[5]} m=${m.groupValues[1]} acc=${m.groupValues[2]} steps=${m.groupValues[3]}$tail" }
+            gnssShortHold.matchEntire(body)?.let { m ->
+                return "GNSS_HOLD short ${m.groupValues[3]} ${m.groupValues[4]} steps=${m.groupValues[1]} doubt=${m.groupValues[2]}$tail" }
+            gnssVeto.matchEntire(body)?.let { m ->
+                return "GNSS_VETO ${m.groupValues[1]} ${m.groupValues[2]} m=${m.groupValues[3]} acc=${m.groupValues[4]}$tail" }
+            return null
+        }
+
         internal fun event(area: String, message: String): String? {
             if (area == "dk") {
                 val prefix = "vehicle capabilities observed "
@@ -127,6 +172,15 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                 anchor.matchEntire(message)?.let {
                     if (it.groupValues[2] in outcomes) return "ANCHOR ${it.groupValues[1]} ${it.groupValues[2]}"
                 }
+                // 0.4.0c: the car's remembered position (a count and an accuracy), the fix watch and the gate's decisions.
+                gnssCarPosition.matchEntire(message)?.let { m ->
+                    return "GNSS_CAR_POSITION " + (if (m.groupValues[2].isEmpty()) "forgotten"
+                        else "remembered anchors=${m.groupValues[2]} acc=${m.groupValues[3]}") + (if (m.groupValues[1].isEmpty()) "" else " shadow")
+                }
+                gnssFixWatch.matchEntire(message)?.let { m ->
+                    return "GNSS_FIX_WATCH " + m.groupValues[2].ifEmpty { "over" }.replace(' ', '_') + (if (m.groupValues[1].isEmpty()) "" else " shadow")
+                }
+                gnssLine.matchEntire(message)?.let { m -> return gnssEntry(m.groupValues[2], m.groupValues[1].isNotEmpty()) }
                 batteryDay.matchEntire(message)?.let { return "BATTERY_DAY ${it.groupValues[1]}" }
                 return when {
                     message.startsWith("unlock confirmed (") -> "UNLOCK_CONFIRMED"

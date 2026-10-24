@@ -261,4 +261,46 @@ class ProximityDiagnosticJournalTest {
         assertNull(ProximityDiagnosticJournal.event("prox",
             "alarm kept: signal at the car (rssi=-82 motion=STILL steps=same) without walking evidence at home"))
     }
+
+    @Test fun theDoubtAndTheGnssGateAreJournaledAsNumbersOnly() {
+        // 0.4.0c: the lines of the doubt reference and the GNSS gate (levels, metres, own steps, seconds; never a position).
+        assertEquals("GNSS_DOUBT fresh -80 walk=1s shadow", ProximityDiagnosticJournal.event("prox",
+            "shadow: gnss: doubt fresh link at -80 dBm, walk 1 s old (rssi=-80 own=123)"))
+        assertEquals("GNSS_DOUBT fresh -80 walk=unknown", ProximityDiagnosticJournal.event("prox",
+            "gnss: doubt fresh link at -80 dBm, walk unknown (rssi=-80)"))
+        assertEquals("GNSS_DOUBT jump -98 -84 steps=0 shadow", ProximityDiagnosticJournal.event("prox",
+            "shadow: gnss: doubt jump -98 -> -84 dBm (0 own steps between the readings) (rssi=-84 own=null)"))
+        assertEquals("GNSS_DOUBT far -98 for=16s shadow", ProximityDiagnosticJournal.event("prox",
+            "shadow: gnss: doubt far -98 dBm for 16 s (rssi=-98 own=100)"))
+        assertEquals("GNSS_RELEASED near m=6 acc=7 steps=3 shadow", ProximityDiagnosticJournal.event("prox",
+            "shadow: gnss: released: near 6 m acc 7 after 3 own steps (rssi=-80 own=103)"))
+        assertEquals("GNSS_RELEASED rise -78 from=-84 steps=0 shadow", ProximityDiagnosticJournal.event("prox",
+            "shadow: gnss: released: rise -78 dBm over the doubt level -84 after 0 own steps (rssi=-78 own=100)"))
+        assertEquals("GNSS_RELEASED steps 12 shadow", ProximityDiagnosticJournal.event("prox",
+            "shadow: gnss: released: steps 12 own steps since the doubt (rssi=-80 own=112)"))
+        assertEquals("GNSS_RELEASED escape -74 shadow", ProximityDiagnosticJournal.event("prox",
+            "shadow: gnss: released: escape at -74 dBm (rssi=-74 own=100)"))
+        assertEquals("GNSS_HOLD far presence -80 m=25 acc=6 steps=0 shadow", ProximityDiagnosticJournal.event("prox",
+            "shadow: gnss: far 25 m acc 6 after 0 own steps - holds presence at -80 dBm (rssi=-80 own=100)"))
+        assertEquals("GNSS_HOLD short approach -84 steps=0 doubt=jump shadow", ProximityDiagnosticJournal.event("prox",
+            "shadow: gnss: short 0 own steps since the doubt (jump -98 -> -84 dBm (0 own steps between the readings)) - " +
+                "holds approach at -84 dBm (rssi=-84 own=100)"))
+        assertEquals("GNSS_HOLD short presence -80 steps=2 doubt=fresh shadow", ProximityDiagnosticJournal.event("prox",
+            "shadow: gnss: short 2 own steps since the doubt (fresh link at -80 dBm, walk 1 s old) - holds presence at -80 dBm (rssi=-80 own=102)"))
+        assertEquals("GNSS_VETO approach -82 m=25 acc=6", ProximityDiagnosticJournal.event("prox",
+            "gnss: veto approach at -82 dBm: 25 m acc 6 from the car (rssi=-82)"))
+        assertEquals("GNSS_CAR_POSITION remembered anchors=3 acc=5 shadow", ProximityDiagnosticJournal.event("prox",
+            "shadow: gnss: car position remembered (3 anchors, acc 5)"))
+        assertEquals("GNSS_CAR_POSITION forgotten shadow", ProximityDiagnosticJournal.event("prox",
+            "shadow: gnss: car position forgotten (the phone rides in the car)"))
+        assertEquals("GNSS_FIX_WATCH doubt shadow", ProximityDiagnosticJournal.event("prox", "shadow: gnss: fix watch starts (doubt)"))
+        assertEquals("GNSS_FIX_WATCH in_band", ProximityDiagnosticJournal.event("prox", "gnss: fix watch starts (in band)"))
+        assertEquals("GNSS_FIX_WATCH over shadow", ProximityDiagnosticJournal.event("prox", "shadow: gnss: fix watch over"))
+        // the fixes themselves and anything carrying a position stay out of the journal
+        assertNull(ProximityDiagnosticJournal.event("prox", "shadow: gnss: fix accepted 23 m acc 4"))
+        assertNull(ProximityDiagnosticJournal.event("prox", "shadow: gnss: car position remembered (3 anchors, acc 5) at 52.0,4.0"))
+        assertNull(ProximityDiagnosticJournal.event("prox",
+            "shadow: gnss: veto approach at -82 dBm: 25 m acc 6 from the car at 52.0,4.0 (rssi=-82 own=100)"))
+        assertNull(ProximityDiagnosticJournal.event("ble", "shadow: gnss: fix watch over"))
+    }
 }

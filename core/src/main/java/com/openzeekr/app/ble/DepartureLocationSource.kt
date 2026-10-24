@@ -84,6 +84,58 @@ internal class DepartureLocationSource(context: Context) : DepartureLocator {
         }
     }
 
+    /** 0.4.0c: the locked-side watch - one request at 1 Hz for at most [maxMs] or until [enabled] says no; every
+     *  genuine fix with an accuracy goes to [onFix]. Coordinates stay in memory; the listener is always removed. */
+    override suspend fun watchFixes(maxMs: Long, enabled: () -> Boolean, onFix: (DepartureFix) -> Unit) {
+        if (!enabled()) return
+        if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION) !=
+            PackageManager.PERMISSION_GRANTED) {
+            Logx.d("prox", "locked-side location outcome=fine_permission_missing")
+            return
+        }
+        var callback: LocationCallback? = null
+        try {
+            withTimeoutOrNull(maxMs + 2_000L) {
+                suspendCancellableCoroutine<Unit> { continuation ->
+                    val listener = object : LocationCallback() {
+                        override fun onLocationResult(result: LocationResult) {
+                            if (!continuation.isActive) return
+                            if (!enabled()) { continuation.resume(Unit); return }
+                            for (location in result.locations) {
+                                val mock = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                                    location.isMock else location.isFromMockProvider
+                                if (mock || !location.hasAccuracy()) continue
+                                onFix(DepartureFix(location.latitude, location.longitude, location.accuracy,
+                                    location.elapsedRealtimeNanos / 1_000_000L))
+                            }
+                        }
+                    }
+                    callback = listener
+                    val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1_000L)
+                        .setMinUpdateIntervalMillis(1_000L)
+                        .setMaxUpdateAgeMillis(0L)
+                        .setDurationMillis(maxMs)
+                        .build()
+                    try {
+                        client.requestLocationUpdates(request, listener, Looper.getMainLooper())
+                            .addOnSuccessListener { if (!continuation.isActive) client.removeLocationUpdates(listener) }
+                            .addOnFailureListener {
+                                if (continuation.isActive) {
+                                    Logx.d("prox", "locked-side location outcome=provider_failure")
+                                    continuation.resume(Unit)
+                                }
+                            }
+                    } catch (_: SecurityException) {
+                        Logx.d("prox", "locked-side location outcome=security_exception")
+                        if (continuation.isActive) continuation.resume(Unit)
+                    }
+                }
+            }
+        } finally {
+            callback?.let { listener -> runCatching { client.removeLocationUpdates(listener) } }
+        }
+    }
+
     /** Keep one request alive while evaluating a fresh pair, including after poor early fixes. */
     override suspend fun confirmsDeparture(
         anchor: DepartureFix,

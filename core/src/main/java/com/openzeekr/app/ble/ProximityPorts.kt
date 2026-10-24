@@ -99,6 +99,8 @@ internal interface DepartureLocator {
                                   /** 0.3.25: what this visit's earlier windows learnt, and when the phone last moved (fix clock). */
                                   memory: DepartureFixMemory? = null,
                                   lastMotionAtMs: () -> Long = { Long.MAX_VALUE }): Boolean
+    /** 0.4.0c: fixes while [enabled] (about one a second, at most [maxMs]) for the locked-side GNSS gate; no-op by default. */
+    suspend fun watchFixes(maxMs: Long, enabled: () -> Boolean, onFix: (DepartureFix) -> Unit) {}
 }
 
 /**
@@ -110,6 +112,10 @@ interface ProximityStateStore {
     data class Saved(val armedUnlocked: Boolean, val atWallMs: Long, val source: String)
     fun load(): Saved?
     fun save(saved: Saved)
+    /** 0.4.0c: the car's last known positions (the departure anchors of the latest visits, oldest first) as
+     *  [latitude, longitude, accuracy m] triples; empty = none. App-private, never exported. */
+    fun loadCarFixes(): List<DoubleArray> = emptyList()
+    fun saveCarFixes(latLonAcc: List<DoubleArray>) {}
 
     object None : ProximityStateStore {
         override fun load(): Saved? = null
@@ -125,6 +131,15 @@ internal class SharedPrefsProximityStateStore(context: android.content.Context) 
     override fun save(saved: ProximityStateStore.Saved) {
         prefs.edit().putBoolean("armed", saved.armedUnlocked).putLong("at", saved.atWallMs)
             .putString("source", saved.source).commit()
+    }
+    override fun loadCarFixes(): List<DoubleArray> = (prefs.getString("car_fixes", "") ?: "").split(';')
+        .filter { it.isNotBlank() }.mapNotNull { triple ->
+            val parts = triple.split(',')
+            if (parts.size != 3) null else runCatching { DoubleArray(3) { parts[it].trim().toDouble() } }.getOrNull()
+        }
+    override fun saveCarFixes(latLonAcc: List<DoubleArray>) {
+        val text = latLonAcc.joinToString(";") { "%.7f,%.7f,%.1f".format(java.util.Locale.ROOT, it[0], it[1], it[2]) }
+        prefs.edit().putString("car_fixes", text).commit()
     }
 }
 

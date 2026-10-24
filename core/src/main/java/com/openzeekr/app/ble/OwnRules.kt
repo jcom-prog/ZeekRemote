@@ -11,6 +11,12 @@ package com.openzeekr.app.ble
  *           logs when it would have proven the departure.
  *  LIVE   - the rules decide (0.4.0, once the field confirms the shadow).
  *
+ * 0.4.0c adds the doubt reference and the GNSS gate of study round 4f: a fresh link that starts inside the band while
+ * the walk is young (no approach was seen - a line of sight 25 m out reads like the last metres) is a doubt; while it
+ * lives, the car's last known position decides through GNSS (far holds, near releases), and a usable far fix vetoes
+ * any qualification. In SHADOW the shadow policy applies them and the controller logs ("shadow: gnss:"); the fix watch
+ * itself does run, so the field shows what GNSS does on the locked side.
+ *
  * The simulator sets the mode and the knobs through SIM_OWN_* environment variables; the app has none, so the defaults
  * below are the app's values (the study's winning variant r2w12far8).
  */
@@ -67,8 +73,42 @@ internal object OwnRules {
     /** The locked-side window closes this long after the last presence hit / reading in the band. */
     val approachWindowMs: Long = envLong("SIM_OWN_WINDOW_MS", 90_000L)
 
+    // ---- 0.4.0c: the doubt reference and the GNSS gate (study round 4f, owner decision 24/10) ----
+    /** The gate rules exist for the policy that applies the own rules (SHADOW: the shadow policy logs them; LIVE: the
+     *  live policy decides with them). SIM_OWN_GNSS=0 gives 0.4.0b. */
+    val gnssRules: Boolean = System.getenv("SIM_OWN_GNSS") != "0"
+    /** A fresh link: the first reading after the link ended, or after this long without one. */
+    val freshGapMs: Long = envLong("SIM_OWN_RISE_FRESH_GAP_MS", 15_000L)
+    /** A walk at most this old at a fresh link that starts inside the band is a doubt (no approach was seen). */
+    val youngWalkMs: Long = envLong("SIM_OWN_RISE_YOUNG_MS", 6_000L)
+    /** No fresh-link doubt when a far reading was seen this recently, in any link (an approach seen from far). */
+    val farMemoryMs: Long = envLong("SIM_OWN_RISE_FAR_MEMORY_MS", 60_000L)
+    /** A far reading is a doubt reference when far readings dominated this trailing window (0 = every far reading). */
+    val farStretchMs: Long = envLong("SIM_OWN_RISE_FAR_MIN_MS", 20_000L)
+    /** A level jump this large within 3 s from a far level with at most two own steps between the readings (0 = off). */
+    val jumpDb: Int = envInt("SIM_OWN_RISE_JUMP_DB", 8)
+    /** Own steps since the doubt that release the gate. */
+    val doubtSteps: Long = envLong("SIM_OWN_RISE_DOUBT_WALK", 12L)
+    /** The walked rise over the doubt level (the maximum of its first 2 s) that releases the gate (0 = off). */
+    val doubtRiseDb: Int = envInt("SIM_OWN_RISE_DOUBT_RISE_DB", 6)
+    /** A reading this far above the unlock level is never held: the at-car level, unreachable from 25 m. */
+    val escapeDb: Int = envInt("SIM_OWN_RISE_DOUBT_ESCAPE_DB", 12)
+    /** A usable fix this far from the car's last position holds; closer releases (0 = no GNSS in the gate). */
+    val gnssFarM: Double = envDouble("SIM_OWN_GNSS_M", 15.0)
+    /** Margin factor on the fixes' accuracies in the far test (0 = the plain distance). */
+    val gnssMarginK: Double = envDouble("SIM_OWN_GNSS_K", 0.0)
+    /** Fixes less accurate than this are not used. */
+    val gnssAccMaxM: Float = envDouble("SIM_OWN_GNSS_ACC_MAX", 12.0).toFloat()
+    /** The veto: a usable far fix holds every approach and return qualification, doubt or no doubt. */
+    val gnssVeto: Boolean = System.getenv("SIM_OWN_GNSS_ALL") != "0"
+    /** The locked-side fix watch runs while the link is in the band, at most this long per in-band episode. */
+    val gnssWatchBudgetMs: Long = envLong("SIM_OWN_GNSS_ALL_MAX_MS", 60_000L)
+    /** A doubt reference expires after this long. */
+    val doubtWindowMs: Long = envLong("SIM_OWN_RISE_WALK_MS", 60_000L)
+
     fun describe(): String = "own rules $mode (dr ${drMetres}m/${drDb}dB, hold ${if (riseHold) "+${riseDb}dB" else "off"}, " +
-        "credit ${creditSteps} steps since -${creditFarDb}dB within ${creditWindowMs / 1000}s)"
+        "credit ${creditSteps} steps since -${creditFarDb}dB within ${creditWindowMs / 1000}s, " +
+        "gnss ${if (gnssRules) "gate ${gnssFarM}m${if (gnssVeto) " + veto" else ""}" else "off"})"
 
     private fun envInt(name: String, default: Int): Int = System.getenv(name)?.toIntOrNull() ?: default
     private fun envLong(name: String, default: Long): Long = System.getenv(name)?.toLongOrNull() ?: default

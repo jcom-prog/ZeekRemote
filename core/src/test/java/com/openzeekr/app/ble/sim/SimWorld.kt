@@ -1257,6 +1257,18 @@ internal class SimWorld(
             // 1 degree latitude ~ 111 km; the car sits at (52.0, 5.0), the walker moves north.
             return DepartureFix(52.0 + metres / 111_000.0, 5.0, acc, clock.elapsedMs())
         }
+        /** 0.4.0c: the locked-side watch - a fix a second while [enabled], at most [maxMs]; counts as a GNSS request. */
+        override suspend fun watchFixes(maxMs: Long, enabled: () -> Boolean, onFix: (DepartureFix) -> Unit) {
+            val until = now() + maxMs
+            requestStartMs = now(); gnssActive++
+            try {
+                while (now() < until && enabled()) {
+                    delay(1_000L)
+                    if (!enabled()) return
+                    fix()?.let(onFix)
+                }
+            } finally { gnssActive-- }
+        }
         override suspend fun nearAnchor(policy: NearDepartureAnchor, enabled: () -> Boolean): DepartureFix? {
             val until = now() + NearDepartureAnchor.WINDOW_MS
             requestStartMs = now(); gnssActive++
@@ -1307,9 +1319,13 @@ internal class SimWorld(
     var appAlive = true; private set
     /** App-private storage: survives a process restart (SharedPreferences in the app). */
     private var savedState: com.openzeekr.app.ble.ProximityStateStore.Saved? = null
+    /** 0.4.0c: the car's last known positions, on disk like the calibration profile (survive the restart). */
+    private var savedCarFixes: List<DoubleArray> = emptyList()
     val stateStore = object : com.openzeekr.app.ble.ProximityStateStore {
         override fun load() = savedState
         override fun save(saved: com.openzeekr.app.ble.ProximityStateStore.Saved) { savedState = saved }
+        override fun loadCarFixes(): List<DoubleArray> = savedCarFixes
+        override fun saveCarFixes(latLonAcc: List<DoubleArray>) { savedCarFixes = latLonAcc }
     }
     /** The self-calibration profile (SharedPreferences in the app): survives a process restart. */
     var learnedProfile: com.openzeekr.app.ble.PhoneCalibration.Profile? = null; private set

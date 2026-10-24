@@ -84,6 +84,7 @@ on:
       - zeekremote-0.3.29-alarm-walk
       - zeekremote-0.3.30-upstream-ports
       - zeekremote-0.4.0b-own-rules-measurement
+      - zeekremote-0.4.0c-gnss-shadow
 
 permissions:
   contents: read
@@ -531,6 +532,20 @@ jobs:
           grep -Fq 'if (hit || walking) ownTracker.extendAtLeast(OwnRules.approachWindowMs)' core/src/main/java/com/openzeekr/app/ble/MotionMonitor.kt
           grep -Fq 'class OwnRulesPolicyTest' core/src/test/java/com/openzeekr/app/ble/OwnRulesPolicyTest.kt
           grep -Fq '## 0.4.0b' CHANGELOG.md
+          # 0.4.0c (owner decision 24/10, study round 4f): the doubt reference and the GNSS gate on the locked side in SHADOW - the car's last position on disk, a fix watch in the band and on a doubt, the gate and the veto logged by the shadow policy; the live decisions stay 0.3.30.
+          grep -Fq 'val gnssRules: Boolean = System.getenv("SIM_OWN_GNSS") != "0"' core/src/main/java/com/openzeekr/app/ble/OwnRules.kt
+          grep -Fq 'val gnssFarM: Double = envDouble("SIM_OWN_GNSS_M", 15.0)' core/src/main/java/com/openzeekr/app/ble/OwnRules.kt
+          grep -Fq 'private val gnssOn = ownRules && gnssRules' core/src/main/java/com/openzeekr/app/ble/ProximityDecisionPolicy.kt
+          grep -Fq 'if (gnssOn) observeDoubt(nowMs, rssi, unlockThreshold, prevReading, ownTotal, walkAgeMs)' core/src/main/java/com/openzeekr/app/ble/ProximityDecisionPolicy.kt
+          grep -Fq 'suspend fun watchFixes(maxMs: Long, enabled: () -> Boolean, onFix: (DepartureFix) -> Unit) {}' core/src/main/java/com/openzeekr/app/ble/ProximityPorts.kt
+          grep -Fq 'fun loadCarFixes(): List<DoubleArray> = emptyList()' core/src/main/java/com/openzeekr/app/ble/ProximityPorts.kt
+          grep -Fq 'internal class CarPositionMemory' core/src/main/java/com/openzeekr/app/ble/GnssGateSupport.kt
+          grep -Fq 'private val gatePolicy: ProximityDecisionPolicy get() = shadowPolicy ?: decisionPolicy' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'sp.consumeGnssEvent()?.let { Logx.d("prox", "shadow: gnss: $it (rssi=$smoothed own=$ownSeen)") }' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq '.setDurationMillis(maxMs)' core/src/main/java/com/openzeekr/app/ble/DepartureLocationSource.kt
+          grep -Fq 'class GnssGatePolicyTest' core/src/test/java/com/openzeekr/app/ble/GnssGatePolicyTest.kt
+          grep -Fq 'class GnssGateSupportTest' core/src/test/java/com/openzeekr/app/ble/GnssGateSupportTest.kt
+          grep -Fq '## 0.4.0c' CHANGELOG.md
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -552,7 +567,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='155' versionName='0.4.0b-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='156' versionName='0.4.0c-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

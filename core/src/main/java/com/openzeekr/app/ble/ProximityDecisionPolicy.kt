@@ -14,6 +14,9 @@ internal class ProximityDecisionPolicy(
     /** 0.4.0b: this instance applies the own-counter rules (the rise hold, the walk credit; [OwnRules]). The live
      *  policy of the shadow mode does not; the shadow policy next to it does. */
     private val ownRules: Boolean = false,
+    /** 0.4.0c: this instance applies the doubt reference and the GNSS gate too (with [ownRules]; [OwnRules.gnssRules]).
+     *  The 0.4.0b rule tests pass false to cover the rise hold and the walk credit on their own. */
+    private val gnssRules: Boolean = OwnRules.gnssRules,
 ) {
     /** The rise hold is on for this instance. */
     private val riseHoldOn = ownRules && OwnRules.riseHold
@@ -121,6 +124,33 @@ internal class ProximityDecisionPolicy(
     /** Round 4c: the own total and time of the last far reading (<= unlock - OWN_RISE_FAR_DB): the walk credit's start. */
     private var riseFarOwn: Long? = null
     private var riseFarAtMs = UNSET_MS
+    // 0.4.0c (study round 4f): the doubt reference - a fresh link inside the band with a young walk, a sustained far
+    // stretch or a level jump from far - with its own baseline, its level and the walked-rise streak that releases it;
+    // the GNSS distances of this reading; the far memory that vetoes a fresh-link doubt.
+    private val gnssOn = ownRules && gnssRules
+    private var previousReadingRssi = Int.MIN_VALUE
+    private var previousReadingAtMs = UNSET_MS
+    private var previousReadingOwn: Long? = null
+    private var linkFreshForDoubt = true
+    private var lastFarSeenAtMs = UNSET_MS
+    private val farHistory = ArrayDeque<Pair<Long, Boolean>>()
+    private var doubtAtMs = UNSET_MS
+    private var doubtOwn: Long? = null
+    private var doubtOwnPending = false
+    private var doubtKind = ""
+    private var doubtRssi = Int.MIN_VALUE
+    private var doubtRiseStreak = 0
+    private var doubtRiseStreakFromMs = UNSET_MS
+    private var doubtRiseReleased = false
+    private var doubtResolved = false
+    private var readingGnssMedianM: Double? = null
+    private var readingGnssAccM: Double? = null
+    private var readingGnssLatestM: Double? = null
+    private var gnssNoteAtMs = UNSET_MS
+    private var doubtNotedAtMs = UNSET_MS
+    /** Diagnostic for the controller's log: what the doubt and the GNSS gate did on this reading (consumed). */
+    var gnssEvent: String? = null
+        private set
     /** Diagnostic for the controller's log: a hold began / confirmed / dropped on this reading (consumed). */
     var riseHoldEvent: String? = null
         private set
@@ -242,10 +272,19 @@ internal class ProximityDecisionPolicy(
         ownActive: Boolean = false,
         /** 0.4.0 study round 4: the own counter's total (the step cap of the rise hold). */
         ownTotal: Long? = null,
+        /** 0.4.0c: ms since the STILL->MOVING edge while moving (null: not moving or unknown). */
+        walkAgeMs: Long? = null,
+        /** 0.4.0c: GNSS on the locked side - the median distance from the car's last position over the last fixes, the
+         *  accuracies summed (the worst fix plus the car's), and the latest fix's distance; null without a usable fix. */
+        gnssFromCarM: Double? = null, gnssAccM: Double? = null, gnssLatestM: Double? = null,
     ): Boolean {
         readingSteps = steps; readingStepsRising = stepsRising; readingOwnEvidenceAgeMs = ownEvidenceAgeMs
+        readingGnssMedianM = gnssFromCarM; readingGnssAccM = gnssAccM; readingGnssLatestM = gnssLatestM
         val qualifiedBefore = unlockQualifiedAtMs
+        val prevReading = previousReadingRssi
+        previousReadingRssi = rssi
         if (ownTotal != null && rssi <= unlockThreshold - OWN_RISE_FAR_DB) { riseFarOwn = ownTotal; riseFarAtMs = nowMs }
+        if (gnssOn) observeDoubt(nowMs, rssi, unlockThreshold, prevReading, ownTotal, walkAgeMs)
         readingWalkingConfirmed = walkingConfirmed; readingStallAgeMs = stepStallAgeMs; readingStepsTotal = stepsTotal
         // 0.3.28: walking evidence per reading, for the signal-only return after a Lock ([tryRearmManualDeepFarReturn]).
         // A count advance is a walk now only at a live cadence: the hub hands a whole walk over in one late batch
@@ -365,11 +404,15 @@ internal class ProximityDecisionPolicy(
         }
         // 0.4.0 study round 4: a route that qualified on this reading only just above the threshold is held until the
         // signal rises further while walking (a fade peak 15-20 m out never does; the last metres always do).
+        // 0.4.0c: with a live doubt the gate also holds a strong qualification, and a usable far fix vetoes any; the walk
+        // credit overrides neither.
+        val gateHolds = riseHoldOn && qualifiedBefore == UNSET_MS && unlockQualifiedAtMs == nowMs && riseEligible(unlockRoute) &&
+            (doubtGateShort(nowMs, rssi, unlockThreshold, ownTotal) || gnssVeto(nowMs, rssi, unlockThreshold))
         if (riseHoldOn && qualifiedBefore == UNSET_MS && unlockQualifiedAtMs == nowMs && riseEligible(unlockRoute) &&
-            rssi < unlockThreshold + OWN_RISE_STRONG && !riseWalkCredit(nowMs, rssi, ownTotal)) {
+            (gateHolds || (rssi < unlockThreshold + OWN_RISE_STRONG && !riseWalkCredit(nowMs, rssi, ownTotal)))) {
             if (riseBaseAtMs == UNSET_MS) {
                 riseBaseAtMs = nowMs; riseBaseRssi = rssi; riseHeldRoute = unlockRoute; riseBaseOwn = ownTotal
-                riseHoldEvent = "held $unlockRoute at $rssi dBm: waiting for +$OWN_RISE_DB dB while walking"
+                riseHoldEvent = "held $unlockRoute at $rssi dBm: waiting for +$OWN_RISE_DB dB while walking" + (if (gateHolds) " (gate)" else "")
             }
             unlockQualifiedAtMs = UNSET_MS
         }
@@ -397,7 +440,8 @@ internal class ProximityDecisionPolicy(
      *  cap drops it; the next qualifying reading starts a new hold. */
     private fun observeRiseHold(nowMs: Long, rssi: Int, unlockThreshold: Int, walking: Boolean, ownTotal: Long?) {
         if (riseBaseAtMs == UNSET_MS) return
-        if (walking && (rssi >= riseBaseRssi + OWN_RISE_DB || rssi >= unlockThreshold + OWN_RISE_STRONG)) {
+        if (walking && (rssi >= riseBaseRssi + OWN_RISE_DB || rssi >= unlockThreshold + OWN_RISE_STRONG) &&
+            !doubtGateShort(nowMs, rssi, unlockThreshold, ownTotal) && !gnssVeto(nowMs, rssi, unlockThreshold)) {
             if (unlockQualifiedAtMs == UNSET_MS) { unlockQualifiedAtMs = nowMs; unlockRoute = riseHeldRoute + "_rise" }
             riseHoldEvent = "confirmed ${riseHeldRoute}_rise: $riseBaseRssi -> $rssi dBm"
             clearRiseHold(); return
@@ -413,6 +457,101 @@ internal class ProximityDecisionPolicy(
     }
     /** The controller logs the hold's events (one line each). */
     fun consumeRiseHoldEvent(): String? = riseHoldEvent.also { riseHoldEvent = null }
+    /** The controller logs what the doubt and the GNSS gate did (one line each). */
+    fun consumeGnssEvent(): String? = gnssEvent.also { gnssEvent = null }
+    /** 0.4.0c: a doubt reference is live and not yet released (the controller watches GNSS then). */
+    fun doubtActive(nowMs: Long): Boolean =
+        gnssOn && doubtAtMs != UNSET_MS && !doubtResolved && nowMs - doubtAtMs <= OwnRules.doubtWindowMs
+
+    private fun gnssNote(msg: String) { gnssEvent = msg }
+    private fun gnssNoteRateLimited(nowMs: Long, msg: String) {
+        if (gnssNoteAtMs == UNSET_MS || nowMs - gnssNoteAtMs > 5_000L) { gnssNoteAtMs = nowMs; gnssEvent = msg }
+    }
+    private fun newDoubt(nowMs: Long, rssi: Int, ownTotal: Long?, kind: String) {
+        // every far reading of a sustained stretch renews the far doubt: the log gets one line per 10 s of it
+        val renewedFar = kind.startsWith("far ") && doubtKind.startsWith("far ") && doubtAtMs != UNSET_MS &&
+            doubtNotedAtMs != UNSET_MS && nowMs - doubtNotedAtMs < 10_000L
+        doubtAtMs = nowMs; doubtOwn = ownTotal; doubtOwnPending = ownTotal == null; doubtKind = kind
+        doubtRssi = rssi; doubtRiseStreak = 0; doubtRiseStreakFromMs = UNSET_MS; doubtRiseReleased = false; doubtResolved = false
+        if (!renewedFar) { doubtNotedAtMs = nowMs; gnssNote("doubt $kind") }
+    }
+    private fun releaseDoubt(why: String) { doubtResolved = true; gnssNote("released: $why") }
+    /** 0.4.0c, every reading: the doubt references - a fresh link (the first reading after the link ended or after
+     *  [OwnRules.freshGapMs] without one) inside the band while the walk is at most [OwnRules.youngWalkMs] old and no far
+     *  reading was seen within [OwnRules.farMemoryMs]; a far stretch that dominated [OwnRules.farStretchMs]; a level jump
+     *  of [OwnRules.jumpDb] from a far level with at most two own steps between the readings (a wall or a door, not a
+     *  walk) - plus the doubt level (the maximum of its first 2 s) and the walked-rise streak that releases the gate. */
+    private fun observeDoubt(nowMs: Long, rssi: Int, unlockThreshold: Int, prevReading: Int, ownTotal: Long?, walkAgeMs: Long?) {
+        val far = rssi <= unlockThreshold - OWN_RISE_FAR_DB
+        if (OwnRules.farStretchMs > 0) {
+            farHistory.addLast(nowMs to far)
+            while (farHistory.isNotEmpty() && nowMs - farHistory.first().first > OwnRules.farStretchMs) farHistory.removeFirst()
+        }
+        if (doubtOwnPending && ownTotal != null) { doubtOwn = ownTotal; doubtOwnPending = false }
+        if (OwnRules.doubtRiseDb > 0 && doubtAtMs != UNSET_MS && nowMs - doubtAtMs <= OwnRules.doubtWindowMs) {
+            if (nowMs - doubtAtMs <= 2_000L) doubtRssi = maxOf(doubtRssi, rssi)
+            else if (rssi >= doubtRssi + OwnRules.doubtRiseDb) {
+                if (doubtRiseStreak == 0) doubtRiseStreakFromMs = nowMs
+                doubtRiseStreak++
+                if (doubtRiseStreak >= 3 && nowMs - doubtRiseStreakFromMs >= 800L) doubtRiseReleased = true
+            } else doubtRiseStreak = 0
+        }
+        val stepsBetween = if (ownTotal != null && previousReadingOwn != null) ownTotal - previousReadingOwn!! else 0L
+        val jump = OwnRules.jumpDb > 0 && prevReading != Int.MIN_VALUE && previousReadingAtMs != UNSET_MS &&
+            nowMs - previousReadingAtMs <= 3_000L && rssi - prevReading >= OwnRules.jumpDb && stepsBetween <= 2L &&
+            prevReading <= unlockThreshold - OWN_RISE_FAR_DB
+        val fresh = linkFreshForDoubt || previousReadingAtMs == UNSET_MS || nowMs - previousReadingAtMs > OwnRules.freshGapMs
+        linkFreshForDoubt = false
+        val farRemembered = OwnRules.farMemoryMs > 0 && lastFarSeenAtMs != UNSET_MS && nowMs - lastFarSeenAtMs <= OwnRules.farMemoryMs
+        val freshNear = fresh && !far && (walkAgeMs == null || walkAgeMs <= OwnRules.youngWalkMs) && !farRemembered
+        previousReadingAtMs = nowMs; previousReadingOwn = ownTotal
+        if (far) lastFarSeenAtMs = nowMs
+        when {
+            freshNear -> newDoubt(nowMs, rssi, ownTotal, "fresh link at $rssi dBm, walk " + (walkAgeMs?.let { "${it / 1000} s old" } ?: "unknown"))
+            jump -> newDoubt(nowMs, rssi, ownTotal, "jump $prevReading -> $rssi dBm ($stepsBetween own steps between the readings)")
+            far -> {
+                val sustained = OwnRules.farStretchMs <= 0 || (farHistory.size >= 3 &&
+                    nowMs - farHistory.first().first >= OwnRules.farStretchMs * 4 / 5 &&
+                    farHistory.count { it.second } * 10 >= farHistory.size * 7)
+                if (sustained) newDoubt(nowMs, rssi, ownTotal, "far $rssi dBm" +
+                    (if (OwnRules.farStretchMs > 0) " for ${(nowMs - farHistory.first().first) / 1000} s" else ""))
+            }
+        }
+    }
+    /** 0.4.0c: the gate of a live doubt. A usable fix decides first - far (the median and the latest fix both at least
+     *  [OwnRules.gnssFarM]) holds, near (the latest fix below it) releases; else the at-car level, the walked rise or
+     *  [OwnRules.doubtSteps] own steps release; until then a strong qualification and a hold confirm wait. */
+    private fun doubtGateShort(nowMs: Long, rssi: Int, unlockThreshold: Int, ownTotal: Long?): Boolean {
+        if (!doubtActive(nowMs)) return false
+        if (OwnRules.escapeDb > 0 && rssi >= unlockThreshold + OwnRules.escapeDb) { releaseDoubt("escape at $rssi dBm"); return false }
+        val walked = if (ownTotal != null && doubtOwn != null) ownTotal - doubtOwn!! else 0L
+        val g = readingGnssMedianM; val ga = readingGnssAccM
+        if (OwnRules.gnssFarM > 0.0 && g != null && ga != null) {
+            val latest = readingGnssLatestM ?: g
+            if (g - OwnRules.gnssMarginK * ga >= OwnRules.gnssFarM && latest >= OwnRules.gnssFarM) {
+                gnssNoteRateLimited(nowMs, "far %.0f m acc %.0f after $walked own steps - holds $unlockRoute at $rssi dBm".format(g, ga))
+                return true
+            }
+            if (g < OwnRules.gnssFarM || latest < OwnRules.gnssFarM) {
+                releaseDoubt("near %.0f m acc %.0f after $walked own steps".format(g, ga)); return false
+            }
+        }
+        if (doubtRiseReleased) { releaseDoubt("rise $rssi dBm over the doubt level $doubtRssi after $walked own steps"); return false }
+        if (walked >= OwnRules.doubtSteps) { releaseDoubt("steps $walked own steps since the doubt"); return false }
+        gnssNoteRateLimited(nowMs, "short $walked own steps since the doubt ($doubtKind) - holds $unlockRoute at $rssi dBm")
+        return true
+    }
+    /** 0.4.0c: a usable fix at least [OwnRules.gnssFarM] from the car's last position (the median and the latest fix)
+     *  vetoes any qualification below the at-car level, doubt or no doubt. */
+    private fun gnssVeto(nowMs: Long, rssi: Int, unlockThreshold: Int): Boolean {
+        if (!gnssOn || !OwnRules.gnssVeto || OwnRules.gnssFarM <= 0.0) return false
+        val g = readingGnssMedianM ?: return false
+        val latest = readingGnssLatestM ?: g
+        if (g < OwnRules.gnssFarM || latest < OwnRules.gnssFarM) return false
+        if (OwnRules.escapeDb > 0 && rssi >= unlockThreshold + OwnRules.escapeDb) return false
+        gnssNoteRateLimited(nowMs, "veto $unlockRoute at $rssi dBm: %.0f m acc %.0f from the car".format(g, readingGnssAccM ?: 0.0))
+        return true
+    }
 
     fun onUnlockConfirmed(nowMs: Long) {
         clearRiseHold()
@@ -497,6 +636,7 @@ internal class ProximityDecisionPolicy(
     /** A later arrival may rearm only through [onPresenceMatch], never from connected RSSI alone. */
     fun onLinkEnded() {
         clearRiseHold()
+        linkFreshForDoubt = true
         if (departureLatched) {
             departureLinkEnded = true
             manualDeparture = false

@@ -276,6 +276,54 @@ class ProximityController internal constructor(
         if (sh != live && (live is Boolean || live is ProximityDecisionPolicy.ArmedDecision)) shadowNote(label, "0.4.0 $sh, live $live")
         return live
     }
+    // ---- 0.4.0c: the locked-side GNSS gate (study round 4f) ----
+    /** The policy whose doubt drives the fix watch: the shadow policy in SHADOW, the live one in LIVE. */
+    private val gatePolicy: ProximityDecisionPolicy get() = shadowPolicy ?: decisionPolicy
+    private val gnssTag: String get() = if (OwnRules.live) "gnss" else "shadow: gnss"
+    private class GnssReading(val medianM: Double, val accM: Double, val latestM: Double?)
+    /** The anchor of this visit joins the car's position (median of the last five); null forgets it (a drive). */
+    private fun rememberCarPosition(anchor: DepartureFix?) {
+        if (anchor == null) carPosition.forget() else carPosition.remember(anchor)
+        runCatching { stateStore.saveCarFixes(carPosition.toSaved()) }
+        Logx.d("prox", "$gnssTag: car position " + if (anchor == null) "forgotten (the phone rides in the car)"
+            else "remembered (${carPosition.count} anchors, acc %.0f)".format(carPosition.position?.accuracyM ?: 0f))
+    }
+    /** Per reading on the locked side: starts the fix watch while the link is in the band (the veto's watch, at most
+     *  [OwnRules.gnssWatchBudgetMs] per in-band episode) or while the gate's policy doubts a fresh link; returns the
+     *  distances from the car's last position for the policies, or null without a usable fix. */
+    private fun observeLockedSideGnss(now: Long, smoothed: Int, unlockThresh: Int): GnssReading? {
+        if (!OwnRules.enabled || !OwnRules.gnssRules || OwnRules.gnssFarM <= 0.0) return null
+        if (motion.vehicleMotion && carPosition.position != null) rememberCarPosition(null)
+        val car = carPosition.position ?: return null
+        if (!armedUnlocked && smoothed >= unlockThresh - OWN_BAND_DB) {
+            if (now - lastInBandAtMs > 10_000L) inBandWatchFromMs = now   // a new in-band episode: a fresh budget
+            lastInBandAtMs = now
+        }
+        val inBandWatch = OwnRules.gnssVeto && !armedUnlocked && now - lastInBandAtMs <= 10_000L &&
+            now - inBandWatchFromMs <= OwnRules.gnssWatchBudgetMs
+        val doubtWatch = gatePolicy.doubtActive(now)
+        if (!armedUnlocked && (inBandWatch || doubtWatch) && gnssWatchJob?.isActive != true) {
+            Logx.d("prox", "$gnssTag: fix watch starts (${if (doubtWatch) "doubt" else "in band"})")
+            gnssWatchJob = scope.launch {
+                departureLocationSource.watchFixes(OwnRules.gnssWatchBudgetMs, {
+                    val t = clock.wallMs()
+                    !armedUnlocked && carPosition.position != null && _state.value.running && (gatePolicy.doubtActive(t) ||
+                        (OwnRules.gnssVeto && t - lastInBandAtMs <= 10_000L && t - inBandWatchFromMs <= OwnRules.gnssWatchBudgetMs))
+                }) { fix ->
+                    val carNow = carPosition.position
+                    if (carNow != null) {
+                        val t = clock.wallMs()
+                        lockedFixes.offer(t, DepartureSafetyEvidence.distanceM(fix, carNow), fix.accuracyM)
+                        if (t - gnssFixLoggedAtMs >= 1_000L) { gnssFixLoggedAtMs = t; Logx.d("prox", "$gnssTag: fix ${lockedFixes.lastNote}") }
+                    }
+                }
+                Logx.d("prox", "$gnssTag: fix watch over")
+            }
+        }
+        val median = lockedFixes.medianM(now, OwnRules.gnssAccMaxM) ?: return null
+        val acc = (lockedFixes.worstAccM(now, OwnRules.gnssAccMaxM) ?: 0f) + car.accuracyM
+        return GnssReading(median, acc.toDouble(), lockedFixes.latestM(now, OwnRules.gnssAccMaxM))
+    }
     // Step totals of the last [STEPS_RISING_WINDOW_MS] (wall ms, steps): "counted steps rising now".
     private val recentSteps = ArrayDeque<Pair<Long, Long>>()
     private val relockApproachEvidence = RelockApproachEvidence()
@@ -437,6 +485,15 @@ class ProximityController internal constructor(
     private var lastStepsSeen: Long? = null
     private var lastStepAdvanceAtMs = 0L
     private var lastMovingSeenAtMs = 0L
+    // 0.4.0c: the car's last known position (the departure anchors of the latest visits, on disk), the locked-side fix
+    // watch with its filter and budget, and the current walk's start (the STILL->MOVING edge).
+    private val carPosition = CarPositionMemory(runCatching { stateStore.loadCarFixes() }.getOrDefault(emptyList()))
+    private val lockedFixes = LockedFixFilter()
+    private var gnssWatchJob: Job? = null
+    private var lastInBandAtMs = 0L
+    private var inBandWatchFromMs = 0L
+    private var gnssFixLoggedAtMs = 0L
+    private var movingBoutStartMs = 0L
     // 0.3.29: a step advance at a live cadence (the previous one within [STEP_CADENCE_MS]); one late batch is an old walk.
     private var lastLiveStepAtMs = 0L
     private var alarmKeptLoggedAtMs = 0L
@@ -500,6 +557,7 @@ class ProximityController internal constructor(
         }
         motion.onMovingEdge = {
             stepStall.onMovingEdge(clock.wallMs())
+            movingBoutStartMs = clock.wallMs()
             motionWake?.complete(Unit)   // wake the FAR-still approach sleep
             activityWake?.complete(Unit) // resume armed RSSI tracking on the first motion edge
             if (linkLostAtMs != 0L && armedUnlocked) scope.launch { scheduleLinkDepartureCheck() }
@@ -792,6 +850,7 @@ class ProximityController internal constructor(
                     !config().proximityEnabled) return@launch
                 departureAnchor = fix
                 departureMemory = DepartureFixMemory(fix, stepsForDepartureProof())
+                if (OwnRules.enabled && OwnRules.gnssRules) rememberCarPosition(fix)   // 0.4.0c: nothing of the gate in OFF
                 Logx.d("prox", "usable departure location anchor available")
                 if (linkLostAtMs != 0L)
                     scheduleLinkDepartureCheck()
@@ -2323,6 +2382,9 @@ class ProximityController internal constructor(
         val ownRising = ownSeen != null && motion.ownStepsSince(now - STEPS_RISING_WINDOW_MS) >= STEPS_RISING_MIN
         val hubRising = stepsRisingNow(now, stepsNow)
         val movingNow = motion.state.value == MotionMonitor.Motion.MOVING
+        // 0.4.0c: the locked-side GNSS watch and the distances from the car's last position, for both policies.
+        val gnss = observeLockedSideGnss(now, smoothed, unlockThresh)
+        val walkAgeMs = if (movingNow && movingBoutStartMs != 0L) now - movingBoutStartMs else null
         val unlockQualified = !armedUnlocked && !needToUnlock && decisionPolicy.shouldUnlock(
             now, smoothed, movingNow, unlockThresh,
             if (awayReturnSteps) stepsNow else null, walkingBySteps, stallAge,
@@ -2331,8 +2393,10 @@ class ProximityController internal constructor(
             ownEvidenceAgeMs = if (ownNow != null) ownEvidenceAge(now) else null,
             ownActive = ownNow != null && OWN_NO_STILL,
             ownTotal = ownNow,
+            walkAgeMs = walkAgeMs, gnssFromCarM = gnss?.medianM, gnssAccM = gnss?.accM, gnssLatestM = gnss?.latestM,
         )
         decisionPolicy.consumeRiseHoldEvent()?.let { Logx.d("prox", "rise hold: $it (rssi=$smoothed motion=${motion.state.value})") }
+        decisionPolicy.consumeGnssEvent()?.let { Logx.d("prox", "gnss: $it (rssi=$smoothed)") }
         // 0.4.0b shadow: the same reading through the policy that may use the own counter (own steps also count as
         // walking there, as they will feed MOVING live); a different answer is logged.
         shadowPolicy?.let { sp ->
@@ -2345,8 +2409,10 @@ class ProximityController internal constructor(
                 ownEvidenceAgeMs = if (ownSeen != null) ownEvidenceAge(now) else null,
                 ownActive = ownSeen != null && OWN_NO_STILL,
                 ownTotal = ownSeen,
+                walkAgeMs = walkAgeMs, gnssFromCarM = gnss?.medianM, gnssAccM = gnss?.accM, gnssLatestM = gnss?.latestM,
             )
             sp.consumeRiseHoldEvent()?.let { Logx.d("prox", "shadow: rise hold: $it (rssi=$smoothed own=$ownSeen)") }
+            sp.consumeGnssEvent()?.let { Logx.d("prox", "shadow: gnss: $it (rssi=$smoothed own=$ownSeen)") }
             if (shadowQualified != unlockQualified) shadowNote("unlock", "0.4.0 ${if (shadowQualified) "qualifies (${sp.unlockRoute})" else "waits"}, " +
                 "live ${if (unlockQualified) "qualifies (${decisionPolicy.unlockRoute})" else "waits"} (rssi=$smoothed own=$ownSeen walking=$ownWalking)")
         }

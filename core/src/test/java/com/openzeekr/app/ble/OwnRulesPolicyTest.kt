@@ -10,7 +10,8 @@ import org.junit.Test
 /**
  * 0.4.0b: the rise hold (round 4) and the walk credit (round 4c) of [ProximityDecisionPolicy] with the own rules on,
  * and their absence with the rules off (the live policy of the shadow mode). Unlock level -86; a reading just above
- * it (-85..-83) is "weak", -82 and up is "strong".
+ * it (-85..-83) is "weak", -82 and up is "strong". The 0.4.0c doubt reference and GNSS gate are off here (a 13 dB jump
+ * from the far level without own steps is a doubt there): see [GnssGatePolicyTest].
  */
 class OwnRulesPolicyTest {
     private val unlock = -86
@@ -42,7 +43,7 @@ class OwnRulesPolicyTest {
     }
 
     @Test fun theRiseHoldHoldsAWeakQualificationAndConfirmsOnTheRiseWhileWalking() {
-        val policy = ProximityDecisionPolicy(ownRules = true)
+        val policy = ProximityDecisionPolicy(ownRules = true, gnssRules = false)
         val t0 = farThen(policy, 100L)
         assertNull("held: no unlock at -85 within 4 s", feedUntilQualified(policy, t0, -85, 4_000L, own = 100L))
         val event = policy.consumeRiseHoldEvent()
@@ -56,7 +57,7 @@ class OwnRulesPolicyTest {
     }
 
     @Test fun theRiseHoldDropsOnAFallAndANewHoldBeginsLater() {
-        val policy = ProximityDecisionPolicy(ownRules = true)
+        val policy = ProximityDecisionPolicy(ownRules = true, gnssRules = false)
         val t0 = farThen(policy, 100L)
         assertNull(feedUntilQualified(policy, t0, -84, 2_000L, own = 100L))
         assertTrue(policy.consumeRiseHoldEvent()?.startsWith("held approach at -84") == true)
@@ -69,14 +70,14 @@ class OwnRulesPolicyTest {
     }
 
     @Test fun aStrongQualificationIsNeverHeld() {
-        val policy = ProximityDecisionPolicy(ownRules = true)
+        val policy = ProximityDecisionPolicy(ownRules = true, gnssRules = false)
         val t0 = farThen(policy, 100L)
         assertNotNull("-82 is strong: no hold", feedUntilQualified(policy, t0, -82, 4_000L, own = 100L))
         assertEquals("approach", policy.unlockRoute)
     }
 
     @Test fun theWalkCreditSkipsTheHoldAfterTwelveOwnStepsSinceTheFarReading() {
-        val policy = ProximityDecisionPolicy(ownRules = true)
+        val policy = ProximityDecisionPolicy(ownRules = true, gnssRules = false)
         // far: -98 (<= unlock - 8) with the own total 100 at the last far reading
         val t0 = farThen(policy, 100L)
         // the owner walked 12 own steps since: the weak qualification opens at once
@@ -87,14 +88,14 @@ class OwnRulesPolicyTest {
     }
 
     @Test fun elevenOwnStepsSinceTheFarReadingAreNotEnoughForTheCredit() {
-        val policy = ProximityDecisionPolicy(ownRules = true)
+        val policy = ProximityDecisionPolicy(ownRules = true, gnssRules = false)
         val t0 = farThen(policy, 100L)
         assertNull("11 steps: held", feedUntilQualified(policy, t0, -85, 4_000L, own = 111L))
         assertTrue(policy.consumeRiseHoldEvent()?.startsWith("held approach") == true)
     }
 
     @Test fun theFarReferenceExpiresAfterAMinute() {
-        val policy = ProximityDecisionPolicy(ownRules = true)
+        val policy = ProximityDecisionPolicy(ownRules = true, gnssRules = false)
         val t0 = farThen(policy, 100L)
         // 70 s in the band below the unlock level but above the far level: no new far reading
         var t = t0
@@ -104,7 +105,7 @@ class OwnRulesPolicyTest {
     }
 
     @Test fun withoutAnOwnCounterThereIsNoCreditButTheHoldStillWorks() {
-        val policy = ProximityDecisionPolicy(ownRules = true)
+        val policy = ProximityDecisionPolicy(ownRules = true, gnssRules = false)
         val t0 = farThen(policy, null)
         assertNull(feedUntilQualified(policy, t0, -85, 4_000L, own = null))
         assertTrue(policy.consumeRiseHoldEvent()?.startsWith("held approach") == true)
