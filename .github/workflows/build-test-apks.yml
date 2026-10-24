@@ -587,6 +587,8 @@ jobs:
           grep -Fq 'layer.setProperties(PropertyFactory.visibility(if (on) Property.NONE else Property.VISIBLE))' app/src/main/java/com/openzeekr/app/ui/LocationMap.kt
           grep -Fq 'fun theBuildingLayersAreRecognisedByTheirIds' core/src/test/java/com/openzeekr/app/util/CarMapSupportTest.kt
           grep -Fq '## 0.4.0g' CHANGELOG.md
+          # 0.4.1 (W3, owner approval 24/10): the watch companion ships next to the phone app
+          grep -Fq '## 0.4.1' CHANGELOG.md
           # Wear 2.0 (24/10): the snapshot/control relay, the watch-key switch and the watch lines in the journal.
           grep -Fq 'const val PATH_SNAPSHOT_QUERY = "/openzeekr/snapshot-query"' core/src/main/java/com/openzeekr/app/wear/WearKeyProtocol.kt
           grep -Fq 'fun from(bean: VehicleStatusBean?, cloudOnline: Boolean, nowMs: Long): WearVehicleSnapshot' core/src/main/java/com/openzeekr/app/wear/WearVehicleSnapshot.kt
@@ -626,7 +628,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='161' versionName='0.4.0g-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='162' versionName='0.4.1-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
@@ -655,7 +657,7 @@ jobs:
           APK=wear/build/outputs/apk/debug/wear-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='161' versionName='0.4.0f-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='163' versionName='0.4.1-work'"
           printf '%s\n' "$BADGING" | grep -F "uses-feature: name='android.hardware.type.watch'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'30'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
