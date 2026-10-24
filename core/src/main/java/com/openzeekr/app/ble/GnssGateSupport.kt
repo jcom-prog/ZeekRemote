@@ -76,6 +76,16 @@ internal class LockedFixFilter {
     /** The worst accuracy among the fixes [medianM] used; null without one. */
     fun worstAccM(nowMs: Long, accMax: Float): Float? =
         accepted.indices.filter { nowMs - accepted[it].first <= FRESH_MS && acceptedAcc[it] <= accMax }.maxOfOrNull { acceptedAcc[it] }
+    /** 0.4.0d: the fall of the distance over the accepted fixes of the last [FRESH_MS] that are accurate enough (the
+     *  oldest minus the latest; positive = approaching); null with fewer than two such fixes. */
+    fun trendM(nowMs: Long, accMax: Float): Double? {
+        val idx = accepted.indices.filter { nowMs - accepted[it].first <= FRESH_MS && acceptedAcc[it] <= accMax }
+        if (idx.size < 2) return null
+        return accepted[idx.first()].second - accepted[idx.last()].second
+    }
+    /** 0.4.0d: how many accepted fixes of the last [FRESH_MS] are accurate enough. */
+    fun freshCount(nowMs: Long, accMax: Float): Int =
+        accepted.indices.count { nowMs - accepted[it].first <= FRESH_MS && acceptedAcc[it] <= accMax }
     /** The latest accepted fix's distance when it is at most [LATEST_MS] old and accurate enough; null otherwise. */
     fun latestM(nowMs: Long, accMax: Float): Double? {
         val i = accepted.lastIndex

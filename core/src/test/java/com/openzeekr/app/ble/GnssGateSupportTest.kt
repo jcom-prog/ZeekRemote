@@ -79,4 +79,25 @@ class GnssGateSupportTest {
         assertNull(f.medianM(16_100L, 12f))
         assertNull(f.latestM(16_100L, 12f))
     }
+
+    @Test fun theTrendAndTheFreshCountFollowTheAcceptedFixes() {
+        // 0.4.0d: the fall of the distance over the fresh, accurate fixes (oldest minus latest) and their count.
+        val f = LockedFixFilter()
+        assertNull(f.trendM(0L, 12f))
+        assertEquals(0, f.freshCount(0L, 12f))
+        assertTrue(f.offer(0L, 20.0, 4f))
+        assertNull("one fix has no trend", f.trendM(0L, 12f))
+        assertTrue(f.offer(1_000L, 18.0, 4f))
+        assertTrue(f.offer(2_000L, 16.5, 9f))
+        assertEquals(3.5, f.trendM(2_000L, 12f)!!, 1e-9)
+        assertEquals(3, f.freshCount(2_000L, 12f))
+        assertEquals("the 9 m fix is left out", 2.0, f.trendM(2_000L, 8f)!!, 1e-9)
+        assertEquals(2, f.freshCount(2_000L, 8f))
+        assertNull("only the newest is still fresh", f.trendM(6_500L, 12f))
+        assertEquals(1, f.freshCount(6_500L, 12f))
+        // walking away: a negative trend
+        val g = LockedFixFilter()
+        g.offer(0L, 5.0, 4f); g.offer(1_000L, 7.0, 4f); g.offer(2_000L, 9.0, 4f)
+        assertEquals(-4.0, g.trendM(2_000L, 12f)!!, 1e-9)
+    }
 }

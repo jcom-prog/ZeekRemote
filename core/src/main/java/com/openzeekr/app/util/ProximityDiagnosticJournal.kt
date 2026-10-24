@@ -111,6 +111,9 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
         private val gnssShortHold = Regex("short (-?[0-9]{1,6}) own steps since the doubt \\((fresh|jump|far) [^()]{0,80}(?:\\([^()]{0,60}\\))?\\) - " +
             "holds ([a-z_]{1,24}) at (-[0-9]{2,3}) dBm")
         private val gnssVeto = Regex("veto ([a-z_]{1,24}) at (-[0-9]{2,3}) dBm: ([0-9]{1,5}) m acc ([0-9]{1,4}) from the car")
+        // 0.4.0d: the GNSS approach route opened (level, metres, accuracy, trend, fix count, readings in a row).
+        private val gnssOpen = Regex("open approach_gnss at (-[0-9]{2,3}) dBm: ([0-9]{1,5}) m acc ([0-9]{1,4}) trend (-?[0-9]{1,4}\\.[0-9]) " +
+            "after ([0-9]{1,3}) fixes \\(([0-9]{1,3}) readings\\)")
         private val gnssCarPosition = Regex("^(shadow: )?gnss: car position (?:remembered \\(([1-9]) anchors, acc ([0-9]{1,4})\\)|" +
             "forgotten \\(the phone rides in the car\\))$")
         private val gnssFixWatch = Regex("^(shadow: )?gnss: fix watch (?:starts \\((doubt|in band)\\)|over)$")
@@ -141,6 +144,9 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                 return "GNSS_HOLD short ${m.groupValues[3]} ${m.groupValues[4]} steps=${m.groupValues[1]} doubt=${m.groupValues[2]}$tail" }
             gnssVeto.matchEntire(body)?.let { m ->
                 return "GNSS_VETO ${m.groupValues[1]} ${m.groupValues[2]} m=${m.groupValues[3]} acc=${m.groupValues[4]}$tail" }
+            gnssOpen.matchEntire(body)?.let { m ->
+                return "GNSS_APPROACH_OPEN ${m.groupValues[1]} m=${m.groupValues[2]} acc=${m.groupValues[3]} trend=${m.groupValues[4]} " +
+                    "fixes=${m.groupValues[5]} readings=${m.groupValues[6]}$tail" }
             return null
         }
 

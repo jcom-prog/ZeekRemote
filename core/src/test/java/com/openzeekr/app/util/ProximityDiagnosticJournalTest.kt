@@ -296,6 +296,12 @@ class ProximityDiagnosticJournalTest {
         assertEquals("GNSS_FIX_WATCH doubt shadow", ProximityDiagnosticJournal.event("prox", "shadow: gnss: fix watch starts (doubt)"))
         assertEquals("GNSS_FIX_WATCH in_band", ProximityDiagnosticJournal.event("prox", "gnss: fix watch starts (in band)"))
         assertEquals("GNSS_FIX_WATCH over shadow", ProximityDiagnosticJournal.event("prox", "shadow: gnss: fix watch over"))
+        // 0.4.0d: the GNSS approach route opened (SHADOW: logged only)
+        assertEquals("GNSS_APPROACH_OPEN -87 m=5 acc=5 trend=1.5 fixes=3 readings=2 shadow", ProximityDiagnosticJournal.event("prox",
+            "shadow: gnss: open approach_gnss at -87 dBm: 5 m acc 5 trend 1.5 after 3 fixes (2 readings) (rssi=-87 own=120)"))
+        assertEquals("GNSS_APPROACH_OPEN -85 m=4 acc=7 trend=2.0 fixes=3 readings=2", ProximityDiagnosticJournal.event("prox",
+            "gnss: open approach_gnss at -85 dBm: 4 m acc 7 trend 2.0 after 3 fixes (2 readings) (rssi=-85)"))
+        assertNull(ProximityDiagnosticJournal.event("prox", "shadow: gnss: open approach_gnss at -87 dBm: 5 m acc 5 trend 1.5 after 3 fixes at 52.0,4.0 (rssi=-87 own=120)"))
         // the fixes themselves and anything carrying a position stay out of the journal
         assertNull(ProximityDiagnosticJournal.event("prox", "shadow: gnss: fix accepted 23 m acc 4"))
         assertNull(ProximityDiagnosticJournal.event("prox", "shadow: gnss: car position remembered (3 anchors, acc 5) at 52.0,4.0"))

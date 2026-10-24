@@ -18,9 +18,11 @@ class GnssGatePolicyTest {
     private fun policy() = ProximityDecisionPolicy(ownRules = true)
 
     private fun feed(policy: ProximityDecisionPolicy, t: Long, rssi: Int, own: Long? = 100L, moving: Boolean = true,
-                     walkAgeMs: Long? = null, gnssM: Double? = null, gnssAccM: Double? = null, gnssLatestM: Double? = gnssM): Boolean =
+                     walkAgeMs: Long? = null, gnssM: Double? = null, gnssAccM: Double? = null, gnssLatestM: Double? = gnssM,
+                     gnssTrendM: Double? = null, gnssFixes: Int = 0): Boolean =
         policy.shouldUnlock(t, rssi, moving, unlock, ownTotal = own, ownActive = own != null, stepsRising = moving,
-            walkAgeMs = walkAgeMs, gnssFromCarM = gnssM, gnssAccM = gnssAccM ?: gnssM?.let { 6.0 }, gnssLatestM = gnssLatestM)
+            walkAgeMs = walkAgeMs, gnssFromCarM = gnssM, gnssAccM = gnssAccM ?: gnssM?.let { 6.0 }, gnssLatestM = gnssLatestM,
+            gnssTrendM = gnssTrendM, gnssFixes = gnssFixes)
 
     /** 3 s far at -98 (the 0.4.0b far reference); returns the time after it. */
     private fun farThen(policy: ProximityDecisionPolicy, own: Long?, from: Long = 0L): Long {
@@ -197,5 +199,76 @@ class GnssGatePolicyTest {
         assertTrue("strong: the 0.4.0b rules alone do not hold it", feed(q, 400L, -80, walkAgeMs = 1_200L, gnssM = 25.0))
         assertNull(q.consumeGnssEvent())
         assertFalse(q.doubtActive(400L))
+    }
+
+    // ---- 0.4.0d (study 4g): GNSS as positive approach evidence, the route "approach_gnss" (variant g6-p2) ----
+    // -87 is 1 dB below the unlock level: inside the band and not yet far (the far margin is 2 dB), so no other route
+    // qualifies there. A good fix set: median 5 m, latest 4.5 m, summed accuracy 5, falling 1.5 m over 3 fixes.
+    private fun near(policy: ProximityDecisionPolicy, t: Long, rssi: Int = -87, gnssM: Double = 5.0, latest: Double = 4.5,
+                     acc: Double = 5.0, trend: Double? = 1.5, fixes: Int = 3, moving: Boolean = true): Boolean =
+        feed(policy, t, rssi, moving = moving, gnssM = gnssM, gnssAccM = acc, gnssLatestM = latest, gnssTrendM = trend, gnssFixes = fixes)
+
+    @Test fun theGnssApproachOpensOnTheSecondNearReadingInsideTheBand() {
+        val p = policy()
+        var t = walkIn(p, farThen(p, 100L), 100L)
+        assertFalse("one near reading is not enough", near(p, t)); t += 200L
+        assertNull(p.consumeGnssEvent())
+        assertTrue("the second near reading in a row opens", near(p, t))
+        assertEquals("approach_gnss", p.unlockRoute)
+        val note = p.consumeGnssEvent()
+        assertEquals("open approach_gnss at -87 dBm: 5 m acc 5 trend 1.5 after 3 fixes (2 readings)", note)
+        assertNull("the rise hold does not apply to the GNSS route", p.consumeRiseHoldEvent())
+    }
+
+    @Test fun theStreakRestartsAfterAMissButSurvivesAFarDipInBetween() {
+        val p = policy()
+        var t = walkIn(p, farThen(p, 100L), 100L)
+        assertFalse(near(p, t)); t += 200L
+        assertFalse("a reading without the fall breaks the streak", near(p, t, trend = 0.5)); t += 200L
+        assertFalse(near(p, t)); t += 200L
+        assertTrue(near(p, t)); t += 200L
+        val q = policy()
+        t = walkIn(q, farThen(q, 100L), 100L)
+        assertFalse(near(q, t)); t += 200L
+        assertFalse("a far dip in between (the pocket signal around the far margin)", feed(q, t, -98)); t += 200L
+        assertTrue("the second near reading opens: the dip did not restart the streak", near(q, t))
+        assertEquals("approach_gnss", q.unlockRoute)
+    }
+
+    @Test fun theGnssApproachNeedsAccurateFreshFallingFixesWithinSixMetres() {
+        fun opens(block: (ProximityDecisionPolicy, Long) -> Boolean): Boolean {
+            val p = policy()
+            var t = walkIn(p, farThen(p, 100L), 100L)
+            var ok = false
+            repeat(3) { if (block(p, t)) ok = true; t += 200L }
+            return ok
+        }
+        assertFalse("median 7 m", opens { p, t -> near(p, t, gnssM = 7.0, latest = 4.5) })
+        assertFalse("latest 6.5 m", opens { p, t -> near(p, t, gnssM = 5.0, latest = 6.5) })
+        assertFalse("summed accuracy 9", opens { p, t -> near(p, t, acc = 9.0) })
+        assertFalse("two fixes", opens { p, t -> near(p, t, fixes = 2) })
+        assertFalse("a fall of 0.9 m", opens { p, t -> near(p, t, trend = 0.9) })
+        assertFalse("no trend at all", opens { p, t -> near(p, t, trend = null) })
+        assertFalse("standing", opens { p, t -> near(p, t, moving = false) })
+        assertFalse("below the band", opens { p, t -> near(p, t, rssi = -93) })
+        assertTrue("the good set", opens { p, t -> near(p, t) })
+        assertTrue("6 m is inside", opens { p, t -> near(p, t, gnssM = 6.0, latest = 6.0) })
+    }
+
+    @Test fun theGnssApproachIsOffWithoutTheOwnRulesAndAfterAnObservedDeparture() {
+        val live = ProximityDecisionPolicy(ownRules = false)
+        var t = walkIn(live, farThen(live, 100L), 100L)
+        repeat(4) { assertFalse("0.4.0c live rules: the route does not exist", near(live, t)); t += 200L }
+        assertNull(live.consumeGnssEvent())
+        // strong at the car, then far: an observed departure; the walk back on this session never reopens by GNSS
+        val p = policy()
+        assertFalse(feed(p, 0L, -70))
+        t = farThen(p, 100L, from = 200L)
+        t = walkIn(p, t, 100L)
+        p.consumeGnssEvent()   // the fresh-link doubt of the first strong reading is 0.4.0c's business, not this test's
+        repeat(4) { assertFalse(near(p, t)); t += 200L }
+        val ev = p.consumeGnssEvent()
+        assertTrue("no GNSS opening after an observed departure: $ev", ev == null || !ev.startsWith("open"))
+        assertEquals("none", p.unlockRoute)
     }
 }

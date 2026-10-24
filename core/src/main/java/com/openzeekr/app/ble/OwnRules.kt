@@ -106,9 +106,32 @@ internal object OwnRules {
     /** A doubt reference expires after this long. */
     val doubtWindowMs: Long = envLong("SIM_OWN_RISE_WALK_MS", 60_000L)
 
+    // ---- 0.4.0d (study 4g, owner decision 24/10): GNSS as positive approach evidence (variant g6-p2) ----
+    /** The route "approach_gnss" opens when the median of the last fixes and the latest fix are within this many metres
+     *  of the car's last position (0 = route off). Like every SIM_ knob only the simulator sets it; the app uses the default. */
+    val gnssOpenM: Double = envDouble("SIM_OWN_GNSS_OPEN_M", 6.0)
+    /** The summed accuracy of the fixes (the worst fix plus the car's position) may be at most this. */
+    val gnssOpenAccMaxM: Double = envDouble("SIM_OWN_GNSS_OPEN_ACC", 8.0)
+    /** The signal must be at most this far below the unlock level. (The far margin of the policy, 2 dB, returns earlier,
+     *  so in practice the route sees readings from 1 dB below the level up; the knob is kept as studied.) */
+    val gnssOpenBandDb: Int = envInt("SIM_OWN_GNSS_OPEN_BAND", 6)
+    /** The distance must have fallen at least this much over the fresh fixes (0 = no trend needed). */
+    val gnssOpenTrendM: Double = envDouble("SIM_OWN_GNSS_OPEN_TREND_M", 1.0)
+    /** At least this many usable fixes in the fresh window of the fix filter. */
+    val gnssOpenMinFixes: Int = envInt("SIM_OWN_GNSS_OPEN_FIXES", 3)
+    /** The near condition must hold on this many readings in a row before the route opens (one lucky set of fixes is
+     *  not enough; study 4g: two readings take a third of the early openings away for 0.3 points). */
+    val gnssOpenPersist: Int = envInt("SIM_OWN_GNSS_OPEN_PERSIST", 2)
+    /** Only a failing near condition restarts the streak of near readings; a far dip of the signal between two near
+     *  readings does not (the pocket signal hovers around the far margin, and the fix set is the safety here) - the
+     *  variant as measured in study 4g. SIM_OWN_GNSS_OPEN_STRICT=1 (simulator) also restarts it at a far reading and
+     *  at a locked reset: 72.8 % against 73.1 % open before the door, otherwise alike. */
+    val gnssOpenStrict: Boolean = System.getenv("SIM_OWN_GNSS_OPEN_STRICT") == "1"
+
     fun describe(): String = "own rules $mode (dr ${drMetres}m/${drDb}dB, hold ${if (riseHold) "+${riseDb}dB" else "off"}, " +
         "credit ${creditSteps} steps since -${creditFarDb}dB within ${creditWindowMs / 1000}s, " +
-        "gnss ${if (gnssRules) "gate ${gnssFarM}m${if (gnssVeto) " + veto" else ""}" else "off"})"
+        "gnss ${if (gnssRules) "gate ${gnssFarM}m${if (gnssVeto) " + veto" else ""}" +
+            (if (gnssOpenM > 0.0) " + open ${gnssOpenM}m x$gnssOpenPersist" else "") else "off"})"
 
     private fun envInt(name: String, default: Int): Int = System.getenv(name)?.toIntOrNull() ?: default
     private fun envLong(name: String, default: Long): Long = System.getenv(name)?.toLongOrNull() ?: default

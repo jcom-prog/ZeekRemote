@@ -85,6 +85,7 @@ on:
       - zeekremote-0.3.30-upstream-ports
       - zeekremote-0.4.0b-own-rules-measurement
       - zeekremote-0.4.0c-gnss-shadow
+      - zeekremote-0.4.0d-gnss-approach
 
 permissions:
   contents: read
@@ -546,6 +547,17 @@ jobs:
           grep -Fq 'class GnssGatePolicyTest' core/src/test/java/com/openzeekr/app/ble/GnssGatePolicyTest.kt
           grep -Fq 'class GnssGateSupportTest' core/src/test/java/com/openzeekr/app/ble/GnssGateSupportTest.kt
           grep -Fq '## 0.4.0c' CHANGELOG.md
+          # 0.4.0d (owner decision 24/10, study 4g): GNSS as positive approach evidence - the route approach_gnss (6 m, falling, walking, in the band, two readings in a row) in SHADOW next to the 0.4.0c gate; the fix watch also serves it
+          grep -Fq 'val gnssOpenM: Double = envDouble("SIM_OWN_GNSS_OPEN_M", 6.0)' core/src/main/java/com/openzeekr/app/ble/OwnRules.kt
+          grep -Fq 'val gnssOpenPersist: Int = envInt("SIM_OWN_GNSS_OPEN_PERSIST", 2)' core/src/main/java/com/openzeekr/app/ble/OwnRules.kt
+          grep -Fq 'unlockQualifiedAtMs = nowMs; unlockRoute = "approach_gnss"' core/src/main/java/com/openzeekr/app/ble/ProximityDecisionPolicy.kt
+          grep -Fq 'route == "door" || route == "at_car" || route == "approach_gnss" || route.endsWith("_rise") -> false' core/src/main/java/com/openzeekr/app/ble/ProximityDecisionPolicy.kt
+          grep -Fq 'fun trendM(nowMs: Long, accMax: Float): Double?' core/src/main/java/com/openzeekr/app/ble/GnssGateSupport.kt
+          grep -Fq 'val inBandWatch = (OwnRules.gnssVeto || OwnRules.gnssOpenM > 0.0) && !armedUnlocked' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'GNSS_APPROACH_OPEN' core/src/main/java/com/openzeekr/app/util/ProximityDiagnosticJournal.kt
+          grep -Fq 'fun theGnssApproachOpensOnTheSecondNearReadingInsideTheBand' core/src/test/java/com/openzeekr/app/ble/GnssGatePolicyTest.kt
+          grep -Fq 'fun theTrendAndTheFreshCountFollowTheAcceptedFixes' core/src/test/java/com/openzeekr/app/ble/GnssGateSupportTest.kt
+          grep -Fq '## 0.4.0d' CHANGELOG.md
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -567,7 +579,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='156' versionName='0.4.0c-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='158' versionName='0.4.0d-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

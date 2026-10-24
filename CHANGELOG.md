@@ -2,6 +2,10 @@
 
 Wat je per versie merkt, in gewone taal. ZeekRemote is een privé-afsplitsing van [OpenZeekr](https://github.com/borconi/openzeekr) (splitpunt: OpenZeekr 0.1.4) voor één telefoon en één auto; de nadruk ligt op betrouwbaar openen bij het naderen en sluiten bij het weglopen, met een simulator en een regressiepoort als bewaker. Dit logboek bevat geen meetwaarden, tijden, plaatsen of persoonsgegevens; technische details staan in de commits.
 
+## 0.4.0d (meetversie)
+
+- **De plaats van de auto mag het openen nu ook aankondigen, maar beslist nog niet.** Komt de telefoon volgens de positiepeiling tot binnen zes meter van de onthouden plek van de auto, neemt die afstand af terwijl je loopt en zit het signaal al vlak onder het openniveau, dan noteert de app (bij twee peilingen op rij) dat het portier nu open zou kunnen. In deze meetversie staat dat alleen in het logboek en in het dagboek; de beslissing blijft die van 0.4.0c. Na een waargenomen vertrek doet de regel niets.
+
 ## 0.4.0c (meetversie)
 
 - **De plaats van de auto doet mee, maar beslist nog niet.** De app onthoudt waar de auto stond (de locatiepeiling bij de auto vlak na het openen, de laatste vijf bezoeken samengenomen; alleen op de telefoon, nooit in een export) en vergeet dat zodra je met de auto wegrijdt. Komt de Bluetooth-verbinding ineens sterk binnen terwijl je net begint te lopen — zoals bij een voordeur met vrij zicht op de auto — dan vraagt de app zijn positie op en schrijft in het logboek of hij de opening had tegengehouden (te ver van de auto) of juist had laten gaan. Ook tijdens een gewone nadering kijkt hij kort mee. Het gedrag van de auto is dat van 0.3.30; de schaduw uit 0.4.0b blijft.

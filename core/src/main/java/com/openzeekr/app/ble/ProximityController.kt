@@ -280,7 +280,7 @@ class ProximityController internal constructor(
     /** The policy whose doubt drives the fix watch: the shadow policy in SHADOW, the live one in LIVE. */
     private val gatePolicy: ProximityDecisionPolicy get() = shadowPolicy ?: decisionPolicy
     private val gnssTag: String get() = if (OwnRules.live) "gnss" else "shadow: gnss"
-    private class GnssReading(val medianM: Double, val accM: Double, val latestM: Double?)
+    private class GnssReading(val medianM: Double, val accM: Double, val latestM: Double?, val trendM: Double?, val fixes: Int)
     /** The anchor of this visit joins the car's position (median of the last five); null forgets it (a drive). */
     private fun rememberCarPosition(anchor: DepartureFix?) {
         if (anchor == null) carPosition.forget() else carPosition.remember(anchor)
@@ -288,7 +288,8 @@ class ProximityController internal constructor(
         Logx.d("prox", "$gnssTag: car position " + if (anchor == null) "forgotten (the phone rides in the car)"
             else "remembered (${carPosition.count} anchors, acc %.0f)".format(carPosition.position?.accuracyM ?: 0f))
     }
-    /** Per reading on the locked side: starts the fix watch while the link is in the band (the veto's watch, at most
+    /** Per reading on the locked side: starts the fix watch while the link is in the band (the veto's and, 0.4.0d, the
+     *  approach route's watch, at most
      *  [OwnRules.gnssWatchBudgetMs] per in-band episode) or while the gate's policy doubts a fresh link; returns the
      *  distances from the car's last position for the policies, or null without a usable fix. */
     private fun observeLockedSideGnss(now: Long, smoothed: Int, unlockThresh: Int): GnssReading? {
@@ -299,7 +300,7 @@ class ProximityController internal constructor(
             if (now - lastInBandAtMs > 10_000L) inBandWatchFromMs = now   // a new in-band episode: a fresh budget
             lastInBandAtMs = now
         }
-        val inBandWatch = OwnRules.gnssVeto && !armedUnlocked && now - lastInBandAtMs <= 10_000L &&
+        val inBandWatch = (OwnRules.gnssVeto || OwnRules.gnssOpenM > 0.0) && !armedUnlocked && now - lastInBandAtMs <= 10_000L &&
             now - inBandWatchFromMs <= OwnRules.gnssWatchBudgetMs
         val doubtWatch = gatePolicy.doubtActive(now)
         if (!armedUnlocked && (inBandWatch || doubtWatch) && gnssWatchJob?.isActive != true) {
@@ -308,7 +309,7 @@ class ProximityController internal constructor(
                 departureLocationSource.watchFixes(OwnRules.gnssWatchBudgetMs, {
                     val t = clock.wallMs()
                     !armedUnlocked && carPosition.position != null && _state.value.running && (gatePolicy.doubtActive(t) ||
-                        (OwnRules.gnssVeto && t - lastInBandAtMs <= 10_000L && t - inBandWatchFromMs <= OwnRules.gnssWatchBudgetMs))
+                        ((OwnRules.gnssVeto || OwnRules.gnssOpenM > 0.0) && t - lastInBandAtMs <= 10_000L && t - inBandWatchFromMs <= OwnRules.gnssWatchBudgetMs))
                 }) { fix ->
                     val carNow = carPosition.position
                     if (carNow != null) {
@@ -322,7 +323,8 @@ class ProximityController internal constructor(
         }
         val median = lockedFixes.medianM(now, OwnRules.gnssAccMaxM) ?: return null
         val acc = (lockedFixes.worstAccM(now, OwnRules.gnssAccMaxM) ?: 0f) + car.accuracyM
-        return GnssReading(median, acc.toDouble(), lockedFixes.latestM(now, OwnRules.gnssAccMaxM))
+        return GnssReading(median, acc.toDouble(), lockedFixes.latestM(now, OwnRules.gnssAccMaxM),
+            lockedFixes.trendM(now, OwnRules.gnssAccMaxM), lockedFixes.freshCount(now, OwnRules.gnssAccMaxM))
     }
     // Step totals of the last [STEPS_RISING_WINDOW_MS] (wall ms, steps): "counted steps rising now".
     private val recentSteps = ArrayDeque<Pair<Long, Long>>()
@@ -2394,6 +2396,7 @@ class ProximityController internal constructor(
             ownActive = ownNow != null && OWN_NO_STILL,
             ownTotal = ownNow,
             walkAgeMs = walkAgeMs, gnssFromCarM = gnss?.medianM, gnssAccM = gnss?.accM, gnssLatestM = gnss?.latestM,
+            gnssTrendM = gnss?.trendM, gnssFixes = gnss?.fixes ?: 0,
         )
         decisionPolicy.consumeRiseHoldEvent()?.let { Logx.d("prox", "rise hold: $it (rssi=$smoothed motion=${motion.state.value})") }
         decisionPolicy.consumeGnssEvent()?.let { Logx.d("prox", "gnss: $it (rssi=$smoothed)") }
@@ -2410,6 +2413,7 @@ class ProximityController internal constructor(
                 ownActive = ownSeen != null && OWN_NO_STILL,
                 ownTotal = ownSeen,
                 walkAgeMs = walkAgeMs, gnssFromCarM = gnss?.medianM, gnssAccM = gnss?.accM, gnssLatestM = gnss?.latestM,
+                gnssTrendM = gnss?.trendM, gnssFixes = gnss?.fixes ?: 0,
             )
             sp.consumeRiseHoldEvent()?.let { Logx.d("prox", "shadow: rise hold: $it (rssi=$smoothed own=$ownSeen)") }
             sp.consumeGnssEvent()?.let { Logx.d("prox", "shadow: gnss: $it (rssi=$smoothed own=$ownSeen)") }

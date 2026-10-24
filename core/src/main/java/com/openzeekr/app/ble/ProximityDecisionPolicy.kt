@@ -1,5 +1,7 @@
 package com.openzeekr.app.ble
 
+import java.util.Locale
+
 /**
  * Pure, time-based proximity decision policy.
  *
@@ -146,6 +148,11 @@ internal class ProximityDecisionPolicy(
     private var readingGnssMedianM: Double? = null
     private var readingGnssAccM: Double? = null
     private var readingGnssLatestM: Double? = null
+    // 0.4.0d (study 4g): the trend and count of this reading's fresh fixes, and the streak of readings on which the
+    // near condition of the route "approach_gnss" held.
+    private var readingGnssTrendM: Double? = null
+    private var readingGnssFixes = 0
+    private var gnssNearStreak = 0
     private var gnssNoteAtMs = UNSET_MS
     private var doubtNotedAtMs = UNSET_MS
     /** Diagnostic for the controller's log: what the doubt and the GNSS gate did on this reading (consumed). */
@@ -201,6 +208,7 @@ internal class ProximityDecisionPolicy(
     fun resetLocked() {
         sawStrongNearWhileLocked = false
         departureObserved = false
+        if (OwnRules.gnssOpenStrict) gnssNearStreak = 0
         farSinceMs = UNSET_MS
         farQualified = false
         farFloorRssi = 0; stillApproachSinceMs = UNSET_MS
@@ -277,9 +285,12 @@ internal class ProximityDecisionPolicy(
         /** 0.4.0c: GNSS on the locked side - the median distance from the car's last position over the last fixes, the
          *  accuracies summed (the worst fix plus the car's), and the latest fix's distance; null without a usable fix. */
         gnssFromCarM: Double? = null, gnssAccM: Double? = null, gnssLatestM: Double? = null,
+        /** 0.4.0d: the fall of the distance over the fresh fixes (m, positive = approaching) and how many there are. */
+        gnssTrendM: Double? = null, gnssFixes: Int = 0,
     ): Boolean {
         readingSteps = steps; readingStepsRising = stepsRising; readingOwnEvidenceAgeMs = ownEvidenceAgeMs
         readingGnssMedianM = gnssFromCarM; readingGnssAccM = gnssAccM; readingGnssLatestM = gnssLatestM
+        readingGnssTrendM = gnssTrendM; readingGnssFixes = gnssFixes
         val qualifiedBefore = unlockQualifiedAtMs
         val prevReading = previousReadingRssi
         previousReadingRssi = rssi
@@ -347,11 +358,26 @@ internal class ProximityDecisionPolicy(
             nearCandidateSinceMs = UNSET_MS; clearApproachReadings()
             unlockQualifiedAtMs = UNSET_MS
             if (riseBaseAtMs != UNSET_MS) { clearRiseHold(); riseHoldEvent = "dropped (far reading)" }
+            if (OwnRules.gnssOpenStrict) gnssNearStreak = 0
             return false
         }
 
         farSinceMs = UNSET_MS
         observeRiseHold(nowMs, rssi, unlockThreshold, moving && walkingConfirmed, ownTotal)
+        // 0.4.0d (study 4g, owner decision 24/10): GNSS as positive approach evidence. Within OwnRules.gnssOpenM of the
+        // car's last position on the median of the fresh fixes and on the latest one, the distance falling, the owner
+        // walking and the signal inside the band below the unlock level: the route "approach_gnss" opens without
+        // waiting for the signal itself to cross the level, once the near condition held on OwnRules.gnssOpenPersist
+        // readings in a row. Never after an observed departure; the rise hold does not apply (GNSS is the second witness).
+        val gnssNear = if (gnssOn && OwnRules.gnssOpenM > 0.0 && unlockQualifiedAtMs == UNSET_MS && !departureObserved &&
+            moving && walkingConfirmed && rssi >= unlockThreshold - OwnRules.gnssOpenBandDb) gnssOpenNear() else null
+        if (gnssNear != null) {
+            gnssNearStreak++
+            if (gnssNearStreak >= OwnRules.gnssOpenPersist) {
+                unlockQualifiedAtMs = nowMs; unlockRoute = "approach_gnss"
+                gnssNote("open approach_gnss at $rssi dBm: $gnssNear ($gnssNearStreak readings)")
+            }
+        } else gnssNearStreak = 0
         // Once we were already strongly at the car and subsequently went FAR, a later multipath
         // rebound is departure noise, not a second approach. A genuine new approach starts with a
         // fresh policy/session and therefore has no [departureObserved] latch.
@@ -420,7 +446,7 @@ internal class ProximityDecisionPolicy(
     }
 
     private fun riseEligible(route: String): Boolean = when {
-        route == "door" || route == "at_car" || route.endsWith("_rise") -> false
+        route == "door" || route == "at_car" || route == "approach_gnss" || route.endsWith("_rise") -> false
         OWN_RISE_ROUTES == "approach" -> route == "approach" || route == "presence" || route == "still"
         else -> true
     }
@@ -551,6 +577,20 @@ internal class ProximityDecisionPolicy(
         if (OwnRules.escapeDb > 0 && rssi >= unlockThreshold + OwnRules.escapeDb) return false
         gnssNoteRateLimited(nowMs, "veto $unlockRoute at $rssi dBm: %.0f m acc %.0f from the car".format(g, readingGnssAccM ?: 0.0))
         return true
+    }
+
+    /** 0.4.0d: a usable near fix set - the median and the latest fix within [OwnRules.gnssOpenM], the summed accuracy at
+     *  most [OwnRules.gnssOpenAccMaxM], at least [OwnRules.gnssOpenMinFixes] fresh fixes and a fall of at least
+     *  [OwnRules.gnssOpenTrendM] over them. Returns the numbers for the log (metres, accuracy, trend, count), else null. */
+    private fun gnssOpenNear(): String? {
+        val g = readingGnssMedianM ?: return null
+        val latest = readingGnssLatestM ?: return null
+        val acc = readingGnssAccM ?: return null
+        if (acc > OwnRules.gnssOpenAccMaxM || readingGnssFixes < OwnRules.gnssOpenMinFixes) return null
+        if (g > OwnRules.gnssOpenM || latest > OwnRules.gnssOpenM) return null
+        val trend = readingGnssTrendM ?: 0.0
+        if (OwnRules.gnssOpenTrendM > 0.0 && trend < OwnRules.gnssOpenTrendM) return null
+        return "%.0f m acc %.0f trend %.1f after $readingGnssFixes fixes".format(Locale.ROOT, g, acc, trend)
     }
 
     fun onUnlockConfirmed(nowMs: Long) {
