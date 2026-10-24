@@ -591,6 +591,11 @@ jobs:
           grep -Fq '## 0.4.1' CHANGELOG.md
           # 0.4.2 (W4): watch-only icon release
           grep -Fq '## 0.4.2' CHANGELOG.md
+          # 0.4.3 (review 24/10): the engine stands down during a watch hand-over, hand-over ids, the watch's key wipe
+          grep -Fq '## 0.4.3' CHANGELOG.md
+          grep -Fq 'fun acceptsReport(id: Long' core/src/main/java/com/openzeekr/app/wear/WearLinkArbiter.kt
+          grep -Fq 'private fun onWatchHandOverStarted()' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'fun clearCredential()' core/src/main/java/com/openzeekr/app/ble/DkBleManager.kt
           # Wear 2.0 (24/10): the snapshot/control relay, the watch-key switch and the watch lines in the journal.
           grep -Fq 'const val PATH_SNAPSHOT_QUERY = "/openzeekr/snapshot-query"' core/src/main/java/com/openzeekr/app/wear/WearKeyProtocol.kt
           grep -Fq 'fun from(bean: VehicleStatusBean?, cloudOnline: Boolean, nowMs: Long): WearVehicleSnapshot' core/src/main/java/com/openzeekr/app/wear/WearVehicleSnapshot.kt
@@ -605,7 +610,7 @@ jobs:
           grep -Fq 'WearKeyProtocol.PATH_DONE -> watchDone(String(event.data, Charsets.UTF_8))' app/src/main/java/com/openzeekr/app/wear/PhoneKeySyncService.kt
           grep -Fq '!com.openzeekr.app.wear.WearLinkArbiter.recentHandOver(clock.wallMs())' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'watch: link reclaimed with the car open and no session - treated as a fresh link loss' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
-          grep -Fq 'PhoneLink.done(context, lockIt, r) // W2 (R1): the outcome first, then the link back' wear/src/main/java/com/openzeekr/wear/WearApp.kt
+          grep -Fq 'PhoneLink.doneAndResume(context, lockIt, r) // W2 (R1) / 0.4.3: the outcome first, then the link back' wear/src/main/java/com/openzeekr/wear/WearApp.kt
           grep -Fq 'class WatchHandOverSimulationTest' core/src/test/java/com/openzeekr/app/ble/sim/WatchHandOverSimulationTest.kt
           grep -Fq 'class WearLinkArbiterTest' core/src/test/java/com/openzeekr/app/wear/WearLinkArbiterTest.kt
           grep -Fq 'fun onWatchLockConfirmed()' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
@@ -630,7 +635,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='162' versionName='0.4.1-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='165' versionName='0.4.3-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"
@@ -659,7 +664,7 @@ jobs:
           APK=wear/build/outputs/apk/debug/wear-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='164' versionName='0.4.2-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='166' versionName='0.4.3-work'"
           printf '%s\n' "$BADGING" | grep -F "uses-feature: name='android.hardware.type.watch'"
           # W4 (0.4.2): the watch carries the phone app's icon design, not the upstream mark
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher[^']*'"

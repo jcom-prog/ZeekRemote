@@ -21,21 +21,27 @@ object WearKeyProtocol {
     /** Watch → phone: "are you present / holding the car link / is proximity on?" */
     const val PATH_STATUS_QUERY = "/openzeekr/status-query"
 
-    /** Phone → watch: reply to a status query. JSON: {"connected":"0|1","prox":"0|1"}. */
+    /** Phone → watch: reply to a status query. JSON: {"connected":"0|1","prox":"0|1","key":"0|1"} - 0.4.3: "key" is
+     *  the owner's "Watch key" switch; a provisioned watch that reads 0 wipes its copy (T7), "connected" means a
+     *  ready session and "prox" a running engine (T10). */
     const val PATH_STATUS = "/openzeekr/status"
 
     /** Watch → phone: "release the car link and stand your keep-alive down, I need it." */
     const val PATH_PAUSE = "/openzeekr/pause-link"
 
-    /** Phone → watch: "released — the car is free, go ahead." */
+    /** Phone → watch: "released — the car is free, go ahead." 0.4.3: payload = the hand-over id (decimal, UTF-8); the
+     *  watch echoes it in DONE and RESUME. An empty payload is an older phone. */
     const val PATH_PAUSED = "/openzeekr/link-paused"
 
-    /** Watch → phone: "I'm done — take the link back." */
+    /** Watch → phone: "I'm done — take the link back." 0.4.3: payload "<id>" or "<id>|LOCK|ok" (the outcome rides along
+     *  so a RESUME that overtakes or replaces DONE still carries it); empty = older watch. */
     const val PATH_RESUME = "/openzeekr/resume-link"
 
     /** Watch → phone (W2): what the watch's own key just did, sent before RESUME. Payload "LOCK|ok", "LOCK|err",
-     *  "UNLOCK|ok" or "UNLOCK|err" (UTF-8). The phone's proximity engine takes a confirmed outcome as an external
-     *  Lock/Unlock at once instead of inferring it from the car's next status. */
+     *  "UNLOCK|ok" or "UNLOCK|err" (UTF-8), 0.4.3: followed by "|<id>" inside a hand-over (none from the standalone
+     *  branch). The phone's proximity engine takes a confirmed outcome as an external Lock/Unlock at once instead of
+     *  inferring it from the car's next status - only for the hand-over it belongs to, or standalone while the phone
+     *  holds no session (T8). */
     const val PATH_DONE = "/openzeekr/watch-done"
 
     // ---- cloud control relay (climate / charging / locate) ----

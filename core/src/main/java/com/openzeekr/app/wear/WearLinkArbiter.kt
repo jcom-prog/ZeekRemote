@@ -16,6 +16,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
  * W2 (24/10): the arbiter also remembers when the last hand-over ended, so the proximity engine
  * can tell a lock the car reports right after one apart from the car's own self-lock
  * ([recentHandOver]), and it takes its time from [now] (the simulator injects its clock).
+ *
+ * 0.4.3: every hand-over has an id. The phone sends it with its "paused" ack, the watch echoes it in
+ * its report and its resume, and the phone applies a report only for the running hand-over or the one
+ * that ended less than [RECENT_HAND_OVER_MS] ago ([acceptsReport]); a resume with a stale id is ignored.
+ * The 45 s lease counts from the ack ([markAcked]), not from the request: the phone needs up to 4 s to
+ * release the car before the watch may even start.
  */
 object WearLinkArbiter {
     /** True while the watch is borrowing the car link; the keep-alive must stay off it. */
@@ -30,16 +36,29 @@ object WearLinkArbiter {
     @Volatile var handOverEndedAtMs = 0L
         private set
 
-    fun suspendForWatch() {
+    /** Id of the running hand-over (while [linkSuspended]) or of the last one; 0 = none yet. */
+    @Volatile var handOverId = 0L
+        private set
+
+    /** The watch asks for the car: a new hand-over (or the running one again, re-stamped). Returns its id. */
+    fun suspendForWatch(): Long {
         suspendedAtMs = now()
+        if (!linkSuspended.value) handOverId++
         linkSuspended.value = true
+        return handOverId
     }
 
-    /** The watch is done (or the fail-safe reclaims): the keep-alive may take the link back. */
-    fun resume() {
+    /** The "paused" ack went out: the lease starts now (the release itself took the time before). */
+    fun markAcked() { if (linkSuspended.value) suspendedAtMs = now() }
+
+    /** The watch is done (or the fail-safe reclaims): the keep-alive may take the link back.
+     *  [id] (when the watch sends one) must be the running hand-over's; a stale resume is ignored (false). */
+    fun resume(id: Long? = null): Boolean {
+        if (id != null && id != handOverId) return false
         if (linkSuspended.value) handOverEndedAtMs = now()
         suspendedAtMs = 0L
         linkSuspended.value = false
+        return true
     }
 
     /** Fail-safe: has the watch held the link past the auto-resume deadline without resuming? */
@@ -50,11 +69,17 @@ object WearLinkArbiter {
     fun recentHandOver(nowMs: Long = now()): Boolean =
         linkSuspended.value || (handOverEndedAtMs != 0L && nowMs - handOverEndedAtMs in 0..RECENT_HAND_OVER_MS)
 
+    /** 0.4.3 (T6/T8): does a watch report carrying [id] belong to the running hand-over, or to the last one that
+     *  ended less than [RECENT_HAND_OVER_MS] ago (a report that arrives after the fail-safe took the link back)? */
+    fun acceptsReport(id: Long, nowMs: Long = now()): Boolean =
+        id != 0L && id == handOverId && recentHandOver(nowMs)
+
     /** A new process (and every simulator run) starts without any memory of a hand-over. */
     fun reset(clock: () -> Long = { System.currentTimeMillis() }) {
         now = clock
         suspendedAtMs = 0L
         handOverEndedAtMs = 0L
+        handOverId = 0L
         linkSuspended.value = false
     }
 

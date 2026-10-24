@@ -118,7 +118,11 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
             "forgotten \\(the phone rides in the car\\))$")
         private val gnssFixWatch = Regex("^(shadow: )?gnss: fix watch (?:starts \\((doubt|in band)\\)|over)$")
 
-        private val watchLine = Regex("^watch: (?:control ([A-Z_]{1,24}) (ok|err)|key (sent|refused|unavailable)(?: \\([a-z ]{1,40}\\))?|link (paused for the watch|resumed|reclaimed with the car open[a-z -]{0,60}))$")
+        // 0.4.3: the engine's stand-down, the fail-safe reclaim, an ignored (stale) report or resume, the key push/purge.
+        private val watchLine = Regex("^watch: (?:control ([A-Z_]{1,24}) (ok|err|ignored)(?: \\([a-z -]{1,40}\\))?|" +
+            "key (sent|refused|unavailable|pushed|purge sent)(?: \\([a-z ]{1,40}\\))?|" +
+            "link (paused for the watch|resumed(?: \\([a-z -]{1,30}\\))?|reclaimed with the car open[a-z -]{0,60}|" +
+            "stood down(?: \\([a-z -]{1,60}\\))?|resume ignored(?: \\([a-z -]{1,30}\\))?))$")
 
         /** 0.4.0c: the body of a "gnss:" decision line as a journal entry; null for a body the journal does not know. */
         private fun gnssEntry(body: String, shadow: Boolean): String? {
@@ -193,10 +197,12 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                 watchLine.matchEntire(message)?.let { m ->
                     return when {
                         m.groupValues[1].isNotEmpty() -> "WATCH_CONTROL ${m.groupValues[1]} ${m.groupValues[2]}"
-                        m.groupValues[3].isNotEmpty() -> "WATCH_KEY ${m.groupValues[3]}"
+                        m.groupValues[3].isNotEmpty() -> "WATCH_KEY ${m.groupValues[3].replace(' ', '_')}"
                         else -> "WATCH_LINK " + when {
                             m.groupValues[4].startsWith("paused") -> "paused"
                             m.groupValues[4].startsWith("reclaimed") -> "reclaimed_open"   // W2 (R3)
+                            m.groupValues[4].startsWith("stood down") -> "stood_down"        // 0.4.3 (T1)
+                            m.groupValues[4].startsWith("resume ignored") -> "resume_ignored" // 0.4.3 (T6)
                             else -> "resumed"
                         }
                     }

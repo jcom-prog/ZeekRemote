@@ -2,6 +2,12 @@
 
 Wat je per versie merkt, in gewone taal. ZeekRemote is een privé-afsplitsing van [OpenZeekr](https://github.com/borconi/openzeekr) (splitpunt: OpenZeekr 0.1.4) voor één telefoon en één auto; de nadruk ligt op betrouwbaar openen bij het naderen en sluiten bij het weglopen, met een simulator en een regressiepoort als bewaker. Dit logboek bevat geen meetwaarden, tijden, plaatsen of persoonsgegevens; technische details staan in de commits.
 
+## 0.4.3 (telefoon + horloge)
+
+- **Horloge en telefoon vechten niet meer om de auto.** Zolang het horloge de auto bedient, doet de telefoon niets met de verbinding: geen herverbinding, geen eigen Lock en geen cloud-Lock als uitwijk, zodat een opening met het horloge nooit seconden later door de telefoon ongedaan wordt gemaakt. Elke overdracht heeft een nummer; een melding van het horloge telt alleen voor de overdracht waar hij bij hoort, en de wachttijd van de telefoon (45 s) loopt pas vanaf het moment dat de auto echt is vrijgegeven. Na een overdracht die met de auto open eindigt, kijkt de telefoon opnieuw met verse gegevens.
+- **Horloge zonder telefoon.** Zonder gegevens van de telefoon toont het horloge twee knoppen (Openen, Sluiten) in plaats van een schuifknop die de verkeerde kant op kon sturen; na een handeling laat het horloge de auto los, zodat de telefoon er weer bij kan; bevestigingen van klimaat, laden en zoeken horen weer bij de juiste knop; bij een mislukte overdracht geeft het horloge de verbinding meteen terug; de sleutel wordt één keer per start gevraagd.
+- **"Watch key" uit wist het horloge ook als het op dat moment buiten bereik was** (het horloge leest de stand bij elk contact). In het dagboek staan nu ook de noodrem van de telefoon en genegeerde meldingen.
+
 ## 0.4.2 (alleen horloge)
 
 - **Horloge-icoon.** De horloge-app toonde nog het icoon van OpenZeekr; hij draagt nu het ZeekRemote-ontwerp "Oranje wiel" uit de icoonreeks van de telefoon-app. De telefoon-app verandert niet en blijft 0.4.1.

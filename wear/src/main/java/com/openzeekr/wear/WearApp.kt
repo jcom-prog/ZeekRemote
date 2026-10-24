@@ -23,10 +23,13 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.EvStation
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.PowerOff
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -68,6 +71,7 @@ import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material.PositionIndicator
 import androidx.compose.ui.text.font.FontWeight
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.repeatOnLifecycle
 import com.openzeekr.app.ble.DkBleManager
 import com.openzeekr.app.ble.DkIdentity
@@ -94,7 +98,8 @@ object WearKeyState {
     fun refresh(context: Context) {
         val id = DkIdentity.get(context)
         val ok = id.isProvisioned
-        if (ok) id.credential()?.let { DkBleManager.get(context).setCredential(it) }
+        val ble = DkBleManager.get(context)
+        if (ok) id.credential()?.let { ble.setCredential(it) } else ble.clearCredential()   // 0.4.3 (H9)
         provisioned.value = ok
     }
 }
@@ -121,13 +126,33 @@ fun WearApp() {
     val snap by PhoneLink.snapshot.collectAsState()
     // Climate target temperature set on the wrist (°C). Sent with "Climate on".
     var tempC by remember { mutableStateOf(22) }
+    val lifecycleOwner = LocalLifecycleOwner.current
     // Optimistic lock state: the watch locks/unlocks over BLE, which the cloud snapshot won't
     // reflect for up to ~20 s, so we show the action's result immediately and clear it once a
     // snapshot confirms (or keep it if the cloud never catches up — the watch's action is truth).
     var lockOverride by remember { mutableStateOf<Boolean?>(null) }
-    val lockedState = lockOverride ?: (snap?.locked == true)
-    LaunchedEffect(snap?.locked) {
-        if (lockOverride != null && snap?.locked == lockOverride) lockOverride = null
+    var lockOverrideAtMs by remember { mutableStateOf(0L) }
+    // 0.4.3 (H1): null = unknown (no snapshot from the phone): the UI shows two explicit buttons instead of a switch
+    // that would send the opposite of what it shows. (H7): a snapshot newer than the action ends the override whatever
+    // it says, and so does a minute - the car may have been locked by the phone, the fob or itself meanwhile.
+    val lockedState: Boolean? = lockOverride ?: snap?.locked
+    LaunchedEffect(snap?.locked, snap?.updatedAt) {
+        if (lockOverride != null && (snap?.locked == lockOverride || (snap?.updatedAt ?: 0L) > lockOverrideAtMs)) lockOverride = null
+    }
+    LaunchedEffect(lockOverride) {
+        if (lockOverride != null) { delay(LOCK_OVERRIDE_MS); lockOverride = null }
+    }
+    // 0.4.3 (H13): a result line clears by itself, so the live status (connected / lock-on-approach) shows again.
+    LaunchedEffect(message, busy) {
+        if (message != null && !busy) { delay(MESSAGE_MS); message = null }
+    }
+    // 0.4.3 (H2): the watch holds no BLE session while it is not on screen - the car's single peer slot is the phone's.
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP && !busy) runCatching { ble.disconnect() }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // FOREGROUND-ONLY comms. Both effects are gated on repeatOnLifecycle(RESUMED): a Compose
@@ -136,7 +161,6 @@ fun WearApp() {
     // clock — ~5% overnight for an app that wasn't even opened. repeatOnLifecycle cancels the body
     // the instant we leave the foreground and restarts it when the watch app is shown again, so a
     // backgrounded/asleep watch does ZERO Data Layer traffic and burns no battery here.
-    val lifecycleOwner = LocalLifecycleOwner.current
 
     // No sign-in on the watch: it's an extension of the phone app. Whenever we don't hold a key,
     // ask the paired phone for it — but only while the app is actually on screen.
@@ -204,6 +228,8 @@ fun WearApp() {
                 !status.present -> {
                     message = if (lockIt) "Locking…" else "Unlocking…"
                     val r = runCatching { connectAndRun(ble, lock, lockIt) }.getOrDefault(false)
+                    // 0.4.3 (H2): never keep the car's single peer slot after the action - the phone needs it next.
+                    runCatching { ble.disconnect() }
                     PhoneLink.done(context, lockIt, r) // W2: best effort - the phone may be out of reach
                     r
                 }
@@ -213,20 +239,24 @@ fun WearApp() {
                     message = "Freeing the car…"
                     if (!PhoneLink.pauseAndAwait(context)) {
                         message = "Phone didn't hand over — try again"
+                        // 0.4.3 (H5): the phone may have released the car already - give the link back at once.
+                        PhoneLink.doneAndResume(context, lockIt = null, ok = false)
                         null
                     } else {
                         message = if (lockIt) "Locking…" else "Unlocking…"
                         val r = runCatching { connectAndRun(ble, lock, lockIt) }.getOrDefault(false)
                         runCatching { ble.disconnect() }
-                        PhoneLink.done(context, lockIt, r) // W2 (R1): the outcome first, then the link back
-                        PhoneLink.resume(context)
+                        PhoneLink.doneAndResume(context, lockIt, r) // W2 (R1) / 0.4.3: the outcome first, then the link back
                         r
                     }
                 }
             }
             if (ok != null) {
-                message = when { ok && lockIt -> "Locked ✓"; ok -> "Unlocked ✓"; else -> "Failed — try again" }
-                if (ok) lockOverride = lockIt // reflect the switch immediately; snapshot confirms later
+                message = when {
+                    ok && lockIt -> "Locked ✓"; ok -> "Unlocked ✓"
+                    else -> "Failed — try again" + (ble.lastError?.take(40)?.let { " ($it)" } ?: "")   // 0.4.3 (H13)
+                }
+                if (ok) { lockOverride = lockIt; lockOverrideAtMs = System.currentTimeMillis() } // reflect at once; snapshot confirms later
             }
             busy = false
         }
@@ -298,6 +328,11 @@ fun WearApp() {
                                     color = MaterialTheme.colors.onSurfaceVariant,
                                 )
                             }
+                        } else if (lockedState == null) {
+                            // 0.4.3 (H1): no snapshot (phone off or far away) - the lock state is unknown here, so two
+                            // explicit buttons; a switch would send the opposite of what it shows.
+                            item { ControlChip("Unlock", Icons.Filled.LockOpen, enabled = !busy, primary = true) { act(lockIt = false) } }
+                            item { ControlChip("Lock", Icons.Filled.Lock, enabled = !busy) { act(lockIt = true) } }
                         } else {
                             item {
                                 SwitchChip(
@@ -545,6 +580,10 @@ private fun ControlChip(
 
 private const val TEMP_MIN = 16
 private const val TEMP_MAX = 30
+/** 0.4.3 (H7): the optimistic lock state after the watch's own action lasts at most this long. */
+private const val LOCK_OVERRIDE_MS = 60_000L
+/** 0.4.3 (H13): a result line stays this long, then the live status shows again. */
+private const val MESSAGE_MS = 8_000L
 
 /** The car cutout shipped at wear `assets/cars/car.png` (the phone app's hero render). */
 @Composable
@@ -555,15 +594,21 @@ private fun rememberWearCar(): ImageBitmap? {
     }
 }
 
+/** 0.4.3 (T6): connect + handshake must fit the phone's 45 s lease with the pause ack (up to 10 s) and the action. */
+private const val CONNECT_TIMEOUT_MS = 22_000L
+
 /** One-tap: connect + run the DK handshake if we aren't already in a session, then act. */
 private suspend fun connectAndRun(ble: DkBleManager, lock: DkLockController, lockIt: Boolean): Boolean {
     if (ble.state.value != DkBleManager.State.SESSION_READY) {
         ble.resetHandshakeBackoff() // user tapped the watch: an explicit connect must not be delayed
         ble.connect(null)
-        val reached = withTimeoutOrNull(25_000L) {
+        val reached = withTimeoutOrNull(CONNECT_TIMEOUT_MS) {
             ble.state.first { it == DkBleManager.State.SESSION_READY || it == DkBleManager.State.ERROR }
         }
-        if (reached != DkBleManager.State.SESSION_READY) return false
+        if (reached != DkBleManager.State.SESSION_READY) {
+            runCatching { ble.disconnect() }   // 0.4.3 (H2): a connect that completes later must not own the car's slot
+            return false
+        }
     }
     return if (lockIt) lock.lock() else lock.unlock()
 }

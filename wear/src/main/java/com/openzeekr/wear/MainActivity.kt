@@ -18,8 +18,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WearKeyState.refresh(this)
-        // Extension of the phone app — pull the key automatically, never ask the user to sign in.
-        if (!WearKeyState.provisioned.value) KeySyncClient.requestKey(this)
+        // Extension of the phone app — the key is pulled automatically by WearApp's lifecycle effect (0.4.3 H8: one
+        // trigger; onCreate, onResume and the effect used to ask three times per launch), never a sign-in.
         ensureBlePermissions()
         setContent { WearApp() }
     }
@@ -28,7 +28,6 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         // The key may have arrived from the phone while we were backgrounded.
         WearKeyState.refresh(this)
-        if (!WearKeyState.provisioned.value) KeySyncClient.requestKey(this)
     }
 
     private fun ensureBlePermissions() {

@@ -11,7 +11,9 @@ import java.io.File
  *
  * What must hold: a watch Lock is never undone on the walk to the door (W-1, W-3) and never doubled; the car is never left
  * open and silent after a watch Unlock, with or without the watch's resume (W-2, W-4); the approach after a remote Unlock
- * from inside is a normal arrival (W-5).
+ * from inside is a normal arrival (W-5). 0.4.3: a hand-over while the phone's own Lock loop runs stands the loop down - no
+ * Lock of the phone behind the watch's Unlock, no second Lock (W-6, W-7); an aborted hand-over leaves no trace (W-8); a
+ * hand-over that outruns the fail-safe still delivers the watch's Unlock to the engine (W-9).
  */
 class WatchHandOverSimulationTest {
     private class Run(val sc: Scenario, val world: String, val seed: Long, val findings: List<SimOracle.Finding>,
@@ -87,7 +89,45 @@ class WatchHandOverSimulationTest {
                         problems += "${r.name}: ${r.codes}"
                     if (r.after("KEY_LOCK_CMD", "WATCH_UNLOCK").any { it.distanceM > 20.0 }) problems += "${r.name}: the phone locked the car from inside"
                 }
+                // 0.4.3 (T1): a hand-over mid-Lock-loop - the phone never locks behind the watch's Unlock, never doubles its Lock.
+                "W-6" -> {
+                    if (r.after("KEY_LOCK_CMD", "WATCH_UNLOCK").isNotEmpty() || r.after("CLOUD_LOCK_CMD", "WATCH_UNLOCK").isNotEmpty())
+                        problems += "${r.name}: the phone locked the car after the watch Unlock"
+                    if (r.alarmsAfter("WATCH_UNLOCK").isNotEmpty()) problems += "${r.name}: an alarm after the watch Unlock"
+                    if (r.codes.any { it in setOf("BACK_AT_CAR_BUT_LOCKED", "LOCK_WHILE_NEAR", "LOCK_UNLOCK_THRASH", "APPROACH_NO_UNLOCK") })
+                        problems += "${r.name}: ${r.codes}"
+                    if (r.events.any { it.kind == "WATCH_TAP" && it.detail != "no loop" } && "watch: link stood down" !in r.log)
+                        problems += "${r.name}: the engine did not stand down for the hand-over"
+                }
+                "W-7" -> {
+                    if (r.after("KEY_LOCK_CMD", "WATCH_LOCK").isNotEmpty() || r.after("CLOUD_LOCK_CMD", "WATCH_LOCK").isNotEmpty())
+                        problems += "${r.name}: a second Lock after the watch Lock"
+                    if (r.alarmsAfter("WATCH_LOCK").isNotEmpty()) problems += "${r.name}: an alarm after the watch Lock"
+                    if (r.codes.any { it in setOf("GONE_BUT_UNLOCKED", "DEPARTURE_NO_LOCK_SILENT", "LOCK_UNLOCK_THRASH", "FALSE_ALARM_CAR_LOCKED") })
+                        problems += "${r.name}: ${r.codes}"
+                }
+                // 0.4.3 (H5/T5): an aborted hand-over leaves no trace but the pause and the resume.
+                "W-8" -> {
+                    if (r.alarmsAfter("WATCH_PAUSE").isNotEmpty()) problems += "${r.name}: an alarm after an aborted hand-over"
+                    if (r.after("KEY_LOCK_CMD", "WATCH_PAUSE").isNotEmpty() || r.after("CLOUD_LOCK_CMD", "WATCH_PAUSE").isNotEmpty() ||
+                        r.after("KEY_UNLOCK_CMD", "WATCH_PAUSE").isNotEmpty()) problems += "${r.name}: the phone acted after an aborted hand-over"
+                    if (!resumed) problems += "${r.name}: no WATCH_RESUME"
+                }
+                // 0.4.3 (T6): the fail-safe took the link back before the watch's Unlock - the car is never left open and silent.
+                "W-9" -> {
+                    if (r.codes.any { it in setOf("DEPARTURE_NO_LOCK_SILENT", "GONE_BUT_UNLOCKED", "OPEN_FAR_NO_ALARM", "LOCK_UNLOCK_THRASH") })
+                        problems += "${r.name}: ${r.codes}"
+                    if ("watch link-borrow expired" !in r.log) problems += "${r.name}: the fail-safe did not reclaim the link"
+                    if ("unlock confirmed (watch Unlock)" !in r.log) problems += "${r.name}: the late watch Unlock did not reach the engine"
+                }
             }
+        }
+        // 0.4.3: the mid-loop taps must have landed in a running loop in at least one run per family, or they prove nothing.
+        for (f in listOf("W-6", "W-7")) {
+            val taps = runs.filter { it.sc.family.startsWith(f) }
+            val inLoop = taps.count { r -> r.events.any { it.kind == "WATCH_TAP" && it.detail != "no loop" } }
+            println("$f: the tap landed in a running loop in $inLoop of ${taps.size} runs")
+            if (inLoop == 0) problems += "$f: no run tapped the watch while a loop ran"
         }
         // Informational (decided with the owner): does the phone alarm after a remote Unlock from inside (W-5)?
         val w5Alarms = runs.filter { it.sc.family.startsWith("W-5") }.count { it.alarmsAfter("WATCH_UNLOCK").isNotEmpty() }
@@ -98,7 +138,7 @@ class WatchHandOverSimulationTest {
     private companion object {
         val WORLDS = listOf("calibrated", "steps-late", "field-like")
         val SEEDS = listOf(11L, 23L)
-        val SHOWN = setOf("MARK", "CAR_UNLOCKED", "CAR_LOCKED", "DOOR_OPENED", "WATCH_PAUSE", "WATCH_LOCK", "WATCH_UNLOCK", "WATCH_RESUME",
+        val SHOWN = setOf("MARK", "CAR_UNLOCKED", "CAR_LOCKED", "DOOR_OPENED", "WATCH_PAUSE", "WATCH_TAP", "WATCH_LOCK", "WATCH_UNLOCK", "WATCH_RESUME",
             "KEY_LOCK_CMD", "KEY_UNLOCK_CMD", "CLOUD_LOCK_CMD", "ALARM", "ALARM_STOP", "SECURITY_SLEEP", "LINK_DOWN", "APP_KILLED")
     }
 }

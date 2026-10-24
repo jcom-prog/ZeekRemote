@@ -554,16 +554,11 @@ class ProximityController internal constructor(
         ble.onInboundActivity = { activityWake?.complete(Unit) } // wake the unlocked idle-wait instantly
         handOverJob?.cancel()
         handOverJob = scope.launch {
-            // W2 (R3): when the watch hands the link back (or the fail-safe reclaims it) while the car is open and the
-            // phone has no session, the loss the hand-over hid is a fresh one from now: the next monitor round starts
-            // the link-loss watch (stationary check, cloud check, alarm when walking away) instead of staying silent.
+            // W2 (R3) / 0.4.3 (T1-T3): the watch companion's hand-over, edge by edge (see onWatchHandOverStarted/Ended).
             var suspended = com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value
             com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.collect { s ->
-                if (suspended && !s && armedUnlocked && _state.value.running &&
-                    ble.state.value !in setOf(DkBleManager.State.SESSION_READY, DkBleManager.State.CONNECTED)) {
-                    linkLostAtMs = 0L
-                    Logx.w("prox", "watch: link reclaimed with the car open and no session - treated as a fresh link loss")
-                }
+                if (!suspended && s) onWatchHandOverStarted()
+                if (suspended && !s) onWatchHandOverEnded()
                 suspended = s
             }
         }
@@ -795,6 +790,55 @@ class ProximityController internal constructor(
     /** The cloud acknowledged the command, but physical actuation remains unknown. */
     fun onExternalCloudLockAccepted() = onManualLockAcknowledged("manual cloud control", bleConfirmed = false)
 
+    /** Simulator hooks (0.4.3): is the engine's own Lock / Unlock loop running right now? */
+    internal val lockLoopActive: Boolean get() = lockJob?.isActive == true
+    internal val unlockLoopActive: Boolean get() = unlockJob?.isActive == true
+
+    private var handOverWakelock: Any? = null
+
+    /**
+     * 0.4.3 (T1, T3): the watch borrows the car link. Nothing of ours may connect, lock, unlock or fall back to the
+     * cloud while it does: a Lock loop that kicks a reconnect fights the watch for the car's single peer slot, and a
+     * cloud Lock after its one failed attempt undoes the watch's Unlock while the owner walks back to the car (review
+     * 24/10, T1). Everything in flight is cancelled here; the loops themselves also stand down when a hand-over starts
+     * mid-attempt. The CPU is held for the lease so the keep-alive's fail-safe (45 s) is evaluated on time, also with
+     * the key asleep and the owner standing still (T3).
+     */
+    private fun onWatchHandOverStarted() {
+        val had = listOfNotNull(lockJob?.takeIf { it.isActive }?.let { "lock loop" },
+            unlockJob?.takeIf { it.isActive }?.let { "unlock loop" },
+            linkDepartureJob?.takeIf { it.isActive }?.let { "departure check" })
+        lockJob?.cancel(); lockJob = null
+        needToUnlock = false; unlockJob?.cancel(); unlockJob = null
+        linkDepartureJob?.cancel(); linkDepartureJob = null
+        farNoMotionCheck?.cancel(); farNoMotionCheck = null
+        relockProbeJob?.cancel(); relockProbeJob = null
+        releaseSafetyWakelock(handOverWakelock)
+        handOverWakelock = acquireSafetyWakelock(com.openzeekr.app.wear.WearLinkArbiter.AUTO_RESUME_MS + HAND_OVER_WAKE_SLACK_MS)
+        Logx.w("prox", "watch: link stood down" + if (had.isEmpty()) "" else " (${had.joinToString(" and ")} cancelled)")
+    }
+
+    /**
+     * W2 (R3) / 0.4.3 (T2): the watch hands the link back (or the fail-safe reclaims it). With the car open and no
+     * session the loss the hand-over hid is a fresh one from now: the stale alert job is cancelled (its "moved"
+     * verdict and step baseline belong to the original loss, up to 35 min old after a key sleep) so the next monitor
+     * round re-queues it, and the last reading's age and step baseline restart now. The reading's signal itself
+     * stays: a key that slept beside the car was read beside the car (near loss: silent until walking), one that
+     * went to sleep after a walk indoors was read far (out-of-range loss: cloud check and alarm) - the behaviour
+     * the owner chose for the situations A and B (24/10).
+     */
+    private fun onWatchHandOverEnded() {
+        releaseSafetyWakelock(handOverWakelock); handOverWakelock = null
+        if (armedUnlocked && _state.value.running &&
+            ble.state.value !in setOf(DkBleManager.State.SESSION_READY, DkBleManager.State.CONNECTED)) {
+            linkLostAtMs = 0L
+            pendingUnverifiedLockAlert?.cancel(); pendingUnverifiedLockAlert = null
+            linkDepartureJob?.cancel(); linkDepartureJob = null
+            lostRssiAtMs = clock.wallMs(); lostRssiSteps = motion.observedSteps; lostRssiCounter = motion.counterSteps
+            Logx.w("prox", "watch: link reclaimed with the car open and no session - treated as a fresh link loss")
+        }
+    }
+
     private fun onManualLockAcknowledged(source: String, bleConfirmed: Boolean, away: Boolean = false) {
         scope.launch {
             departureAnchorJob?.cancel(); departureAnchorJob = null; departureAnchor = null; departureMemory = null
@@ -995,7 +1039,8 @@ class ProximityController internal constructor(
     private fun scheduleLinkDepartureCheck() {
         if (!armedUnlocked || (departureAnchor == null && !ownDepartureProofAvailable()) || linkDepartureJob?.isActive == true ||
             farNoMotionCheck?.isActive == true ||
-            lockJob?.isActive == true) return
+            lockJob?.isActive == true ||
+            com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value) return   // 0.4.3 (T1): the watch holds the link
         linkDepartureJob = scope.launch {
             repeat(3) {
                 // Plan H8: hold the CPU for the short wait (the GNSS check itself keeps it awake).
@@ -2663,6 +2708,12 @@ class ProximityController internal constructor(
             var attempt = 0
             val loopStartedAtMs = clock.elapsedMs()
             while (isActive && needToUnlock && attempt < MAX_UNLOCK_ATTEMPTS) {
+                // 0.4.3 (T1): the watch holds the car link - no reconnect, no Unlock of ours until it is back.
+                if (com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value) {
+                    Logx.w("prox", "watch: link stood down (unlock loop)")
+                    needToUnlock = false
+                    break
+                }
                 attempt++
                 if (clock.elapsedMs() - loopStartedAtMs > UNLOCK_LOOP_MAX_MS) {
                     Logx.w("prox", "unlock: no confirmation within ${UNLOCK_LOOP_MAX_MS / 1000} s - stopping (no stale retry)")
@@ -2718,6 +2769,11 @@ class ProximityController internal constructor(
             "Automatic Lock is disabled in this test build"
         }
         if (lockJob?.isActive == true) return
+        // 0.4.3 (T1): the watch holds the car link - the hand-over hook re-decides from the car's status afterwards.
+        if (com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value) {
+            Logx.w("prox", "watch: link stood down (no lock loop $reason)")
+            return
+        }
         // A pending unlock loop is now moot (we've decided you're leaving) — stop it fighting us.
         needToUnlock = false; unlockJob?.cancel(); unlockJob = null
         // Terminal for this BLE session: a post-lock RSSI rebound must never emit CTRL_UNLOCK.
@@ -2733,6 +2789,12 @@ class ProximityController internal constructor(
             val maxAttempts = if (ble.state.value == DkBleManager.State.SESSION_READY)
                 MAX_LOCK_ATTEMPTS else 1 // a lost radio should reach the cloud fallback promptly
             while (isActive && attempt < maxAttempts) {
+                // 0.4.3 (T1): a hand-over that starts mid-attempt: no reconnect kick, no Lock, no cloud fallback.
+                if (com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value) {
+                    Logx.w("prox", "watch: link stood down (lock loop $reason)")
+                    lockJob = null
+                    return@launch
+                }
                 // Plan H5: the car reported locked since this Lock started (its own push, a fob, a
                 // manual Lock): that is the confirmation, not a reason to retry or alarm.
                 if (lastCarLockedReportAtMs >= lockStartedAtMs) {
@@ -2833,6 +2895,12 @@ class ProximityController internal constructor(
                 delay(UNLOCK_RETRY_DELAY_MS)
             }
             if (!isActive || !armedUnlocked) {
+                lockJob = null
+                return@launch
+            }
+            if (!confirmed && com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value) {
+                // 0.4.3 (T1): the watch took the car meanwhile - its own report decides, never a cloud Lock of ours.
+                Logx.w("prox", "watch: link stood down (no cloud lock $reason)")
                 lockJob = null
                 return@launch
             }
@@ -3047,6 +3115,10 @@ class ProximityController internal constructor(
 
     /** Tear the link down and re-establish it (reuse the KNOWN device, no rescan), for the unlock loop. */
     private suspend fun resetLink() {
+        if (com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value) {   // 0.4.3 (T1): the watch holds the link
+            Logx.d("prox", "unlock: link reset skipped - the watch holds the car link")
+            return
+        }
         Logx.d("prox", "unlock: resetting the BLE link")
         runCatching { ble.disconnect() }
         awaitState(setOf(DkBleManager.State.IDLE, DkBleManager.State.ERROR), RESET_SETTLE_MS)
@@ -3091,7 +3163,7 @@ class ProximityController internal constructor(
      *  an unlock's own reset retry, and guarded so only one reconnect runs at a time. */
     @Volatile private var reconnecting = false
     private fun forceReconnect() {
-        if (actionInFlight || reconnecting) return
+        if (actionInFlight || reconnecting || com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value) return
         reconnecting = true
         Logx.w("prox", "forcing reconnect to the known car (no rescan)")
         scope.launch {
@@ -3300,6 +3372,8 @@ class ProximityController internal constructor(
         /** Plan K8: steps after a near-car link loss that mean "walking away", watched for this long. */
         private const val NEAR_LOSS_WALK_STEPS = 20L
         private const val NEAR_LOSS_STEP_WATCH_MS = 5 * 60_000L
+        /** 0.4.3 (T3): the CPU is held for the watch's lease plus this, so the 45 s fail-safe is evaluated on time. */
+        private const val HAND_OVER_WAKE_SLACK_MS = 10_000L
         /** Plan H8: longest wakelock for one Lock loop (BLE attempts, GNSS check, cloud, status). */
         private const val LOCK_LOOP_WAKE_MS = 3 * 60_000L
         /** A running Lock or departure check may hold the link-loss alert back at most this long. */

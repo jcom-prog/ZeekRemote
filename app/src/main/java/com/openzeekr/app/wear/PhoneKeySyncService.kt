@@ -49,11 +49,7 @@ class PhoneKeySyncService : WearableListenerService() {
             WearKeyProtocol.PATH_REQUEST -> sendKey(event.sourceNodeId)
             WearKeyProtocol.PATH_STATUS_QUERY -> sendStatus(event.sourceNodeId)
             WearKeyProtocol.PATH_PAUSE -> pauseForWatch(event.sourceNodeId)
-            WearKeyProtocol.PATH_RESUME -> {
-                Log.i(TAG, "watch resumed — reclaiming car link")
-                Logx.d("prox", "watch: link resumed")
-                WearLinkArbiter.resume()
-            }
+            WearKeyProtocol.PATH_RESUME -> watchResume(String(event.data, Charsets.UTF_8))
             WearKeyProtocol.PATH_SNAPSHOT_QUERY -> sendSnapshot(event.sourceNodeId)
             WearKeyProtocol.PATH_DONE -> watchDone(String(event.data, Charsets.UTF_8))
             WearKeyProtocol.PATH_CONTROL -> runControl(event.sourceNodeId, String(event.data, Charsets.UTF_8))
@@ -68,12 +64,39 @@ class PhoneKeySyncService : WearableListenerService() {
         val parts = body.split("|")
         val what = parts.getOrNull(0)?.trim().orEmpty()
         val ok = parts.getOrNull(1)?.trim() == "ok"
-        if (what != "LOCK" && what != "UNLOCK") { Logx.w("prox", "watch: done message not understood"); return }
+        val id = parts.getOrNull(2)?.trim()?.takeIf { it.isNotEmpty() }?.toLongOrNull()
+        if (what != "LOCK" && what != "UNLOCK") { Logx.w("prox", "watch: control UNKNOWN ignored (done message not understood)"); return }
+        val deps = (application as? DepsHolder)?.deps
+        // 0.4.3 (T6/T8): a report counts only for the hand-over it belongs to (its id, while it runs or for 60 s after it
+        // ended - a report that arrives after the fail-safe took the link back), or - from the watch's standalone branch,
+        // without an id - while this phone provably holds no link. Anything else cannot be the car's truth from this phone's
+        // point of view: it would clear a sounding alarm or rebase the departure epoch on a stale or a stray message.
+        val state = deps?.ble?.state?.value
+        val phoneHoldsLink = state == DkBleManager.State.SESSION_READY || state == DkBleManager.State.CONNECTED
+        val accepted = if (id != null) WearLinkArbiter.acceptsReport(id) else !phoneHoldsLink
+        if (!accepted) {
+            Logx.w("prox", "watch: control $what ignored (${if (id != null) "stale hand-over" else "phone holds the link"})")
+            return
+        }
+        if (id != null && !appliedReports.add("$id:$what")) { Logx.d("prox", "watch: control $what ignored (duplicate)"); return }
         Logx.d("prox", "watch: control $what ${if (ok) "ok" else "err"}")
-        if (!ok) return
-        val deps = (application as? DepsHolder)?.deps ?: return
+        if (!ok || deps == null) return
         if (what == "LOCK") deps.proximity.onWatchLockConfirmed()
         else deps.proximity.onExternalUnlockConfirmed("watch Unlock")
+    }
+
+    /** 0.4.3 (T4/T6): RESUME carries the hand-over id ("<id>", older watches: empty) and may carry the outcome
+     *  ("<id>|LOCK|ok") so a RESUME that overtakes or replaces DONE still delivers it (once, see [appliedReports]).
+     *  A resume for another hand-over than the running one is ignored; so is one without any hand-over. */
+    private fun watchResume(body: String) {
+        val parts = body.split("|")
+        val id = parts.getOrNull(0)?.trim()?.takeIf { it.isNotEmpty() }?.toLongOrNull()
+        if (parts.size >= 3) watchDone("${parts[1]}|${parts[2]}|${id ?: ""}")
+        if (!WearLinkArbiter.linkSuspended.value && id == null) { Logx.w("prox", "watch: link resume ignored (no hand-over)"); return }
+        if (WearLinkArbiter.resume(id)) {
+            Log.i(TAG, "watch resumed — reclaiming car link")
+            Logx.d("prox", "watch: link resumed")
+        } else Logx.w("prox", "watch: link resume ignored (stale hand-over)")
     }
 
     /** Relay a cloud-only control the watch asked for. Runs BLE-first / cloud-fallback via
@@ -125,7 +148,11 @@ class PhoneKeySyncService : WearableListenerService() {
     /** Push the current vehicle snapshot. If the phone has no status yet (app not in foreground,
      *  so the poll loop never ran), fetch once first — otherwise the watch shows a blank battery. */
     private fun sendSnapshot(nodeId: String) {
-        val deps = (application as? DepsHolder)?.deps ?: return
+        val deps = (application as? DepsHolder)?.deps
+        if (deps == null) {   // 0.4.3 (T9): the watch never waits in vain - an empty snapshot says "nothing known"
+            send(nodeId, WearKeyProtocol.PATH_SNAPSHOT, WearVehicleSnapshot().encode().toByteArray(Charsets.UTF_8))
+            return
+        }
         deps.appScope.launch {
             if (deps.vehicleState.state.value == null) runCatching { deps.vehicleState.refresh() }
             val snap = WearVehicleSnapshot.from(deps.vehicleState.state.value,
@@ -151,15 +178,19 @@ class PhoneKeySyncService : WearableListenerService() {
         send(nodeId, WearKeyProtocol.PATH_KEY, json.toByteArray(Charsets.UTF_8))
     }
 
-    /** Tell the watch whether we're holding the car link and whether proximity is running. */
+    /** Tell the watch whether we're holding the car link (a READY session, 0.4.3 T10), whether proximity is running
+     *  (the setting on AND the engine running) and whether the owner shares the key ("key", 0.4.3 T7: a provisioned
+     *  watch that reads 0 wipes its copy, so the switch also reaches a watch that was out of range when it was flipped). */
     private fun sendStatus(nodeId: String) {
         val deps = (application as? DepsHolder)?.deps
         val state = deps?.ble?.state?.value
-        val connected = !WearLinkArbiter.linkSuspended.value &&
-            (state == DkBleManager.State.CONNECTED || state == DkBleManager.State.SESSION_READY)
-        val prox = deps?.config?.config?.value?.proximityEnabled == true
-        val json = Json.encodeToString(mapOf("connected" to if (connected) "1" else "0", "prox" to if (prox) "1" else "0"))
-        Log.i(TAG, "status → watch connected=$connected prox=$prox")
+        val connected = !WearLinkArbiter.linkSuspended.value && state == DkBleManager.State.SESSION_READY
+        val cfg = deps?.config?.config?.value
+        val prox = cfg?.proximityEnabled == true && deps.proximity.state.value.running
+        val key = cfg?.watchKeyEnabled != false
+        val json = Json.encodeToString(mapOf("connected" to if (connected) "1" else "0", "prox" to if (prox) "1" else "0",
+            "key" to if (key) "1" else "0"))
+        Log.i(TAG, "status → watch connected=$connected prox=$prox key=$key")
         send(nodeId, WearKeyProtocol.PATH_STATUS, json.toByteArray(Charsets.UTF_8))
     }
 
@@ -168,8 +199,8 @@ class PhoneKeySyncService : WearableListenerService() {
     private fun pauseForWatch(nodeId: String) {
         val deps = (application as? DepsHolder)?.deps
         Logx.d("prox", "watch: link paused for the watch")
-        WearLinkArbiter.suspendForWatch()
-        if (deps == null) { send(nodeId, WearKeyProtocol.PATH_PAUSED, ByteArray(0)); return }
+        val id = WearLinkArbiter.suspendForWatch()   // the engine's hand-over hook stands its loops down on this edge
+        if (deps == null) { ackPaused(nodeId, id); return }
         deps.appScope.launch(Dispatchers.Main) {
             runCatching { deps.ble.disconnect() }
             // Wait until we're actually disconnected (IDLE), THEN let the car free its single
@@ -182,17 +213,32 @@ class PhoneKeySyncService : WearableListenerService() {
             }
             delay(CAR_SLOT_SETTLE_MS)
             Log.i(TAG, "link released for watch (state=${deps.ble.state.value}) — acking")
-            send(nodeId, WearKeyProtocol.PATH_PAUSED, ByteArray(0))
+            ackPaused(nodeId, id)
         }
     }
 
+    /** 0.4.3 (T5/T6): the ack carries the hand-over id and starts the 45 s lease (the release took the time before it);
+     *  an ack that cannot be delivered ends the hand-over at once instead of muting the engine for the whole lease. */
+    private fun ackPaused(nodeId: String, id: Long) {
+        WearLinkArbiter.markAcked()
+        Wearable.getMessageClient(applicationContext).sendMessage(nodeId, WearKeyProtocol.PATH_PAUSED, id.toString().toByteArray(Charsets.UTF_8))
+            .addOnSuccessListener { Log.i(TAG, "sent ${WearKeyProtocol.PATH_PAUSED} to $nodeId") }
+            .addOnFailureListener { e ->
+                Log.w(TAG, "pause ack failed", e)
+                if (WearLinkArbiter.resume(id)) Logx.w("prox", "watch: link resumed (pause ack failed)")
+            }
+    }
+
     private fun send(nodeId: String, path: String, data: ByteArray) {
-        Wearable.getMessageClient(this).sendMessage(nodeId, path, data)
+        // 0.4.3 (T9): the application context - the Service instance may be destroyed before an async reply goes out.
+        Wearable.getMessageClient(applicationContext).sendMessage(nodeId, path, data)
             .addOnSuccessListener { Log.i(TAG, "sent $path (${data.size}B) to $nodeId") }
             .addOnFailureListener { e -> Log.w(TAG, "send $path failed", e) }
     }
 
     private companion object {
         const val CAR_SLOT_SETTLE_MS = 1000L
+        /** 0.4.3 (T6): "<hand-over id>:<LOCK|UNLOCK>" of every report applied in this process (DONE and RESUME both carry it). */
+        val appliedReports: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
     }
 }

@@ -35,6 +35,36 @@ class WearLinkArbiterTest {
         assertEquals(t, WearLinkArbiter.handOverEndedAtMs)
     }
 
+    @Test fun handOverIdsBindReportsAndResumesToTheirHandOver() {
+        var t = 2_000_000L
+        WearLinkArbiter.reset { t }
+        val first = WearLinkArbiter.suspendForWatch()
+        assertEquals(1L, first)
+        assertEquals(first, WearLinkArbiter.suspendForWatch())          // a repeated PAUSE keeps the running hand-over
+        assertTrue(WearLinkArbiter.acceptsReport(first))
+        assertFalse(WearLinkArbiter.acceptsReport(first + 1))
+        assertFalse(WearLinkArbiter.acceptsReport(0L))
+        assertFalse(WearLinkArbiter.resume(first + 1))                   // a stale resume is ignored
+        assertTrue(WearLinkArbiter.linkSuspended.value)
+        t += 10_000L; assertTrue(WearLinkArbiter.resume(first))
+        assertFalse(WearLinkArbiter.linkSuspended.value)
+        t += 59_000L; assertTrue(WearLinkArbiter.acceptsReport(first))   // a report after the end still counts for 60 s
+        t += 2_000L; assertFalse(WearLinkArbiter.acceptsReport(first))
+        val second = WearLinkArbiter.suspendForWatch()
+        assertEquals(2L, second)
+        assertFalse(WearLinkArbiter.acceptsReport(first))
+        assertTrue(WearLinkArbiter.resume(null))                         // an older watch without an id
+    }
+
+    @Test fun theLeaseCountsFromTheAck() {
+        var t = 3_000_000L
+        WearLinkArbiter.reset { t }
+        WearLinkArbiter.suspendForWatch()
+        t += 4_000L; WearLinkArbiter.markAcked()
+        t += WearLinkArbiter.AUTO_RESUME_MS - 1L; assertFalse(WearLinkArbiter.expired())
+        t += 1L; assertTrue(WearLinkArbiter.expired())
+    }
+
     @Test fun aResumeWithoutAPauseIsNotAHandOver() {
         WearLinkArbiter.reset { 9_000_000L }
         WearLinkArbiter.resume()

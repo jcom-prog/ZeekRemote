@@ -324,6 +324,20 @@ class ProximityDiagnosticJournalTest {
         assertEquals("WATCH_CONTROL UNLOCK err", ProximityDiagnosticJournal.event("prox", "watch: control UNLOCK err"))
         assertEquals("WATCH_LINK reclaimed_open", ProximityDiagnosticJournal.event("prox",
             "watch: link reclaimed with the car open and no session - treated as a fresh link loss"))
+        // 0.4.3: the engine's stand-down, the fail-safe reclaim, ignored reports and resumes, the key push and purge.
+        assertEquals("WATCH_LINK stood_down", ProximityDiagnosticJournal.event("prox", "watch: link stood down (lock loop and departure check cancelled)"))
+        assertEquals("WATCH_LINK stood_down", ProximityDiagnosticJournal.event("prox", "watch: link stood down (no cloud lock ble-departure)"))
+        assertEquals("WATCH_LINK stood_down", ProximityDiagnosticJournal.event("prox", "watch: link stood down"))
+        assertEquals("WATCH_LINK stood_down", ProximityDiagnosticJournal.event("prox",
+            "watch: link stood down (lock loop and unlock loop and departure check cancelled)"))
+        assertEquals("WATCH_LINK resumed", ProximityDiagnosticJournal.event("prox", "watch: link resumed (fail-safe)"))
+        assertEquals("WATCH_LINK resumed", ProximityDiagnosticJournal.event("prox", "watch: link resumed (pause ack failed)"))
+        assertEquals("WATCH_LINK resume_ignored", ProximityDiagnosticJournal.event("prox", "watch: link resume ignored (stale hand-over)"))
+        assertEquals("WATCH_CONTROL UNLOCK ignored", ProximityDiagnosticJournal.event("prox", "watch: control UNLOCK ignored (phone holds the link)"))
+        assertEquals("WATCH_CONTROL LOCK ignored", ProximityDiagnosticJournal.event("prox", "watch: control LOCK ignored (duplicate)"))
+        assertEquals("WATCH_CONTROL UNKNOWN ignored", ProximityDiagnosticJournal.event("prox", "watch: control UNKNOWN ignored (done message not understood)"))
+        assertEquals("WATCH_KEY pushed", ProximityDiagnosticJournal.event("prox", "watch: key pushed"))
+        assertEquals("WATCH_KEY purge_sent", ProximityDiagnosticJournal.event("prox", "watch: key purge sent"))
         assertNull(ProximityDiagnosticJournal.event("prox", "watch: control CLIMATE_ON ok token=private"))
         assertNull(ProximityDiagnosticJournal.event("ble", "watch: key sent"))
     }

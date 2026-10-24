@@ -182,6 +182,8 @@ class DkBleManager(base: Context) : DkTransport, ProximityLink {
 
     /** Provide provisioned key material (from cloud provisioning / import). */
     fun setCredential(cred: DkCredential) { credential = cred }
+    /** 0.4.3 (watch H9): forget the credential in memory too - a purged key must not complete a handshake until the process dies. */
+    fun clearCredential() { credential = null }
 
     /** True once a provisioned key is loaded, i.e. a DK session can be established. */
     val hasCredential: Boolean get() = credential != null

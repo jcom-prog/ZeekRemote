@@ -27,9 +27,9 @@ android {
         // The phone + watch AABs go into ONE Play release (shared applicationId), so each artifact
         // needs a DISTINCT versionCode. Convention here: watch = phone + 1 (bump both each release).
         // ZeekRemote: the watch tracks the phone version and may run ahead for watch-only changes; versionCode stays
-        // above the phone's (phone 0.4.1 = 162; watch 0.4.2 = 164, icon only).
-        versionCode = 164
-        versionName = "0.4.2"
+        // above the phone's (phone 0.4.3 = 165; watch 0.4.3 = 166).
+        versionCode = 166
+        versionName = "0.4.3"
     }
 
     signingConfigs {

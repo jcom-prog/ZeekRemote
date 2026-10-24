@@ -3,7 +3,9 @@ package com.openzeekr.app.wear
 import android.content.Context
 import android.util.Log
 import com.google.android.gms.wearable.Wearable
+import com.openzeekr.app.DepsHolder
 import com.openzeekr.app.ble.DkIdentity
+import com.openzeekr.app.util.Logx
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -28,8 +30,8 @@ object PhoneKeyPush {
                 val mc = Wearable.getMessageClient(ctx)
                 nodes.forEach { node ->
                     mc.sendMessage(node.id, WearKeyProtocol.PATH_PURGE, ByteArray(0))
-                        .addOnSuccessListener { Log.i(TAG, "purge sent to ${node.displayName}") }
-                        .addOnFailureListener { e -> Log.w(TAG, "purge to ${node.displayName} failed", e) }
+                        .addOnSuccessListener { Log.i(TAG, "purge sent to ${node.id}"); Logx.d("prox", "watch: key purge sent") }
+                        .addOnFailureListener { e -> Log.w(TAG, "purge to ${node.id} failed", e) }
                 }
             }
             .addOnFailureListener { e -> Log.w(TAG, "purge: connectedNodes failed", e) }
@@ -37,6 +39,10 @@ object PhoneKeyPush {
 
     fun pushToWatches(context: Context) {
         val ctx = context.applicationContext
+        // 0.4.3 (T7): the owner's "Watch key" switch gates the push as it gates the request path.
+        if ((ctx as? DepsHolder)?.deps?.config?.config?.value?.watchKeyEnabled == false) {
+            Log.i(TAG, "push skipped — key sharing is off"); Logx.d("prox", "watch: key refused (sharing off)"); return
+        }
         val blob = DkIdentity.get(ctx).exportCredentialBlob() ?: run {
             Log.i(TAG, "push skipped — phone not provisioned yet"); return
         }
@@ -47,8 +53,8 @@ object PhoneKeyPush {
                 val mc = Wearable.getMessageClient(ctx)
                 nodes.forEach { node ->
                     mc.sendMessage(node.id, WearKeyProtocol.PATH_KEY, json)
-                        .addOnSuccessListener { Log.i(TAG, "pushed key to ${node.displayName} (${json.size}B)") }
-                        .addOnFailureListener { e -> Log.w(TAG, "push to ${node.displayName} failed", e) }
+                        .addOnSuccessListener { Log.i(TAG, "pushed key to ${node.id} (${json.size}B)"); Logx.d("prox", "watch: key pushed") }
+                        .addOnFailureListener { e -> Log.w(TAG, "push to ${node.id} failed", e) }
                 }
             }
             .addOnFailureListener { e -> Log.w(TAG, "push: connectedNodes failed", e) }

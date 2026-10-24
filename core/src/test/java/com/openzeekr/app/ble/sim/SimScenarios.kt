@@ -277,6 +277,20 @@ internal object SimScenarios {
         Scenario("W-5 watch Unlock from inside, later to the car", "20 min inside at 30 m (the key sleeps); Unlock with the watch; 10 min; to the car; in", 30.0,
             listOf(Mark("-"), Stand(1_200_000, Facing.AWAY, -10.0, indoor = true), Leg.WatchUnlock(), Stand(600_000, Facing.AWAY, -10.0, indoor = true),
                 Mark("expect-unlock"), Walk(1.0), Stand(4_000), OpenDoor, Stand(20_000, shadowDb = -6.0))),
+        // 0.4.3 (review T1): the owner walks away with the car open, the phone's Lock loop starts, and right then the watch is
+        // tapped to Unlock (he turns back): the loop must stand down - no reconnect fight, no cloud Lock behind the watch's back.
+        Scenario("W-6 watch Unlock while the phone's Lock loop runs, back to the car", "open (phone); away; tap Unlock the moment the Lock loop runs; back to the door; in", 30.0,
+            approachAndOpen() + listOf(Mark("expect-lock-loop"), Leg.WatchUnlock(whenLooping = true, walkToM = 30.0), Mark("expect-open"),
+                Walk(1.0), Stand(4_000), OpenDoor, Stand(30_000, shadowDb = -6.0))),
+        // The mirror case: a watch Lock the moment the phone's Lock loop runs (both want the car locked - once, by the watch).
+        Scenario("W-7 watch Lock while the phone's Lock loop runs", "open (phone); away; tap Lock the moment the Lock loop runs; on to 30 m", 30.0,
+            approachAndOpen() + listOf(Mark("expect-lock"), Leg.WatchLock(whenLooping = true, walkToM = 30.0), Walk(30.0), Stand(150_000, Facing.AWAY))),
+        // 0.4.3 (H5/T5): the watch asks for the link and gives up (no usable ack): the link comes back at once, nothing else happens.
+        Scenario("W-8 watch asks for the link and gives up", "car locked, 4 m, the key asleep; pause; no action; resume after 10 s; stand", 4.0,
+            listOf(Mark("-"), Stand(2_100_000, Facing.SIDE), Leg.WatchAbort(10_000L), Stand(120_000, Facing.SIDE))),
+        // 0.4.3 (T6): a hand-over that outruns the 45 s fail-safe: the phone takes the link back first, the watch's Unlock lands after it.
+        Scenario("W-9 watch Unlock after the fail-safe reclaimed the link", "as W-2, the watch needs 50 s", 4.0,
+            listOf(Mark("-"), Stand(2_100_000, Facing.SIDE), Leg.WatchUnlock(actMs = 50_000L), OpenDoor, Stand(5_000), Mark("expect-lock"), Walk(30.0), Stand(150_000, Facing.AWAY))),
     )
 
     /** Every field incident and the families that reproduce it (incident history, 14/10). */

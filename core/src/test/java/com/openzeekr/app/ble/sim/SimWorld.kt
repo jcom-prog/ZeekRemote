@@ -279,8 +279,13 @@ internal sealed class Leg {
     object CarUnlocksItself : Leg()
     /** W2: the watch locks or unlocks the car with its own key: pause (the phone stands down), act, report, resume.
      *  [resume] false: the watch app died after acting - the phone's fail-safe reclaims the link after 45 s. */
-    data class WatchLock(val resume: Boolean = true) : Leg()
-    data class WatchUnlock(val resume: Boolean = true) : Leg()
+    /** 0.4.3: [whenLooping] walks on toward [walkToM] and taps the watch the moment the phone's own Lock or Unlock loop runs
+     *  (review T1: a hand-over mid-loop); [actMs] is what the watch needs for connect + action (50 s outruns the 45 s
+     *  fail-safe: the phone takes the link back before the watch reports). */
+    data class WatchLock(val resume: Boolean = true, val whenLooping: Boolean = false, val walkToM: Double = 30.0, val actMs: Long = 1_500L) : Leg()
+    data class WatchUnlock(val resume: Boolean = true, val whenLooping: Boolean = false, val walkToM: Double = 30.0, val actMs: Long = 1_500L) : Leg()
+    /** 0.4.3 (H5/T5): the watch asks for the link, gets no usable ack or gives up, and hands it back after [afterMs] without acting. */
+    data class WatchAbort(val afterMs: Long = 10_000L) : Leg()
     /** The app process dies (update, One UI, crash); START_STICKY restarts it after [downMs]. */
     data class ProcessRestart(val downMs: Long = 4_000L) : Leg()
     /** Bluetooth is switched off for [ms] (airplane mode, user, BT stack restart). */
@@ -1046,6 +1051,12 @@ internal class SimWorld(
         }
 
         private fun keepConnected() {
+            // 0.4.3 (T3): as ProximityService - the fail-safe is checked every round, also while the key sleeps.
+            if (com.openzeekr.app.wear.WearLinkArbiter.expired()) {
+                log('D', "svc", "keep-alive: watch link-borrow expired — reclaiming")
+                log('D', "prox", "watch: link resumed (fail-safe)")
+                com.openzeekr.app.wear.WearLinkArbiter.resume()
+            }
             if (keySleeping) {
                 nextKeepAliveMs = now() + KEY_SLEEP_POLL_MS
                 if (!com.openzeekr.app.ble.EarlyPresencePolicy.mayRetain(keySleeping, moving, earlyUntilMs, now())) {
@@ -1059,14 +1070,9 @@ internal class SimWorld(
             // W2: the watch is borrowing the car link (WearLinkArbiter): release ours and do not reconnect until it
             // resumes us or the fail-safe deadline passes - as ProximityService does (WATCH_YIELD_POLL_MS).
             if (com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value) {
-                if (com.openzeekr.app.wear.WearLinkArbiter.expired()) {
-                    log('D', "svc", "keep-alive: watch link-borrow expired — reclaiming")
-                    com.openzeekr.app.wear.WearLinkArbiter.resume()
-                } else {
-                    if (link.state.value != DkBleManager.State.IDLE) { log('D', "svc", "keep-alive: releasing link for watch"); link.disconnect() }
-                    nextKeepAliveMs = now() + 1_000L
-                    return
-                }
+                if (link.state.value != DkBleManager.State.IDLE) { log('D', "svc", "keep-alive: releasing link for watch"); link.disconnect() }
+                nextKeepAliveMs = now() + 1_000L
+                return
             }
             if (link.state.value == DkBleManager.State.IDLE) {
                 val recentlyEngaged = lastEngagedMs >= 0 && now() - lastEngagedMs < AGGRESSIVE_RECONNECT_MS
@@ -1381,16 +1387,35 @@ internal class SimWorld(
     /** W2: the watch companion takes the car over its own key, played as the phone's PhoneKeySyncService and
      *  WearLinkArbiter see it: PAUSE (the phone releases the link and stands down) -> the watch connects and acts
      *  (~1.5 s) -> it reports the outcome (R1) -> RESUME, unless the watch app died ([resume] false). */
-    private fun watchActs(lock: Boolean, resume: Boolean) {
+    private fun watchActs(lock: Boolean, resume: Boolean, whenLooping: Boolean = false, walkToM: Double = 30.0, actMs: Long = 1_500L) {
+        if (whenLooping) {
+            // 0.4.3 (T1): walk on until the phone's own loop runs (or the target is reached): the tap comes mid-loop.
+            walking = true; walkSpeed = 1.3; walkTarget = walkToM; extraShadowDb = 0.0
+            facing = if (walkToM < distanceM) Facing.TOWARD else Facing.AWAY
+            var waited = 0L
+            while (!(controller.lockLoopActive || controller.unlockLoopActive) && waited < 60_000L &&
+                kotlin.math.abs(walkToM - distanceM) > 0.05) { run(TICK_MS); waited += TICK_MS }
+            walking = false
+            record("WATCH_TAP", when { controller.lockLoopActive -> "lock loop running"; controller.unlockLoopActive -> "unlock loop running"; else -> "no loop" })
+        }
         record("WATCH_PAUSE")
         com.openzeekr.app.wear.WearLinkArbiter.suspendForWatch()
         link.disconnect()
-        run(1_500)
+        run(actMs)
         if (car.locked != lock) car.actuate(lock, "watch")
         record(if (lock) "WATCH_LOCK" else "WATCH_UNLOCK")
         if (appAlive) { if (lock) controller.onWatchLockConfirmed() else controller.onExternalUnlockConfirmed("watch Unlock") }
         run(600)
         if (resume) { com.openzeekr.app.wear.WearLinkArbiter.resume(); record("WATCH_RESUME") }
+    }
+
+    /** 0.4.3 (H5/T5): a hand-over without an action - the watch gives the link back after [afterMs]. */
+    private fun watchAborts(afterMs: Long) {
+        record("WATCH_PAUSE")
+        com.openzeekr.app.wear.WearLinkArbiter.suspendForWatch()
+        link.disconnect()
+        run(afterMs)
+        com.openzeekr.app.wear.WearLinkArbiter.resume(); record("WATCH_RESUME", "abort")
     }
 
     private fun killApp() {
@@ -1566,8 +1591,9 @@ internal class SimWorld(
                     run(600)
                 }
                 Leg.LockByOther -> { record("USER_LOCK_OTHER"); if (!car.locked) car.actuate(true, "by hand"); run(100) }
-                is Leg.WatchLock -> watchActs(lock = true, resume = leg.resume)
-                is Leg.WatchUnlock -> watchActs(lock = false, resume = leg.resume)
+                is Leg.WatchLock -> watchActs(lock = true, resume = leg.resume, whenLooping = leg.whenLooping, walkToM = leg.walkToM, actMs = leg.actMs)
+                is Leg.WatchUnlock -> watchActs(lock = false, resume = leg.resume, whenLooping = leg.whenLooping, walkToM = leg.walkToM, actMs = leg.actMs)
+                is Leg.WatchAbort -> watchAborts(leg.afterMs)
                 Leg.CarUnlocksItself -> { if (car.locked) car.actuate(false, "car itself"); run(100) }
                 is Leg.ProcessRestart -> { killApp(); run(leg.downMs); startApp() }
                 is Leg.BluetoothOff -> {

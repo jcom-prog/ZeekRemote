@@ -334,6 +334,13 @@ class ProximityService : Service() {
      */
     private suspend fun keepConnected(deps: Deps) {
         while (scope.isActive) {
+            // 0.4.3 (T3): the fail-safe of a watch hand-over is checked every round - also while the key sleeps (the
+            // sleep branch below never reached it) - and journaled in "prox" so an export shows the reclaim (T12).
+            if (com.openzeekr.app.wear.WearLinkArbiter.expired()) {
+                Logx.d("svc", "keep-alive: watch link-borrow expired — reclaiming")
+                Logx.d("prox", "watch: link resumed (fail-safe)")
+                com.openzeekr.app.wear.WearLinkArbiter.resume()
+            }
             if (keySleeping && !deps.ble.driveAuthorizationActive) {
                 // During the short grace window the proximity controller may complete a pending
                 // walk-away lock. After that, enforce a genuinely silent key.
@@ -356,17 +363,12 @@ class ProximityService : Service() {
             // release our session and don't reconnect until it resumes us (or the fail-safe
             // deadline passes, in case the watch app died mid-handover).
             if (com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value) {
-                if (com.openzeekr.app.wear.WearLinkArbiter.expired()) {
-                    Logx.d("svc", "keep-alive: watch link-borrow expired — reclaiming")
-                    com.openzeekr.app.wear.WearLinkArbiter.resume()
-                } else {
-                    when (deps.ble.state.value) {
-                        DkBleManager.State.IDLE, DkBleManager.State.ERROR -> {}
-                        else -> { Logx.d("svc", "keep-alive: releasing link for watch"); runCatching { deps.ble.disconnect() } }
-                    }
-                    delay(WATCH_YIELD_POLL_MS)
-                    continue
+                when (deps.ble.state.value) {
+                    DkBleManager.State.IDLE, DkBleManager.State.ERROR -> {}
+                    else -> { Logx.d("svc", "keep-alive: releasing link for watch"); runCatching { deps.ble.disconnect() } }
                 }
+                delay(WATCH_YIELD_POLL_MS)
+                continue
             }
             var nextDelayMs = RECONNECT_INTERVAL_MS
             // Measurement version: one fuel-gauge sample per keep-alive round (CPU already awake);
