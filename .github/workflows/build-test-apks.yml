@@ -87,6 +87,7 @@ on:
       - zeekremote-0.4.0c-gnss-shadow
       - zeekremote-0.4.0d-gnss-approach
       - zeekremote-0.4.0e-car-map
+      - zeekremote-0.4.0f-map-detail
 
 permissions:
   contents: read
@@ -561,12 +562,24 @@ jobs:
           grep -Fq '## 0.4.0d' CHANGELOG.md
           # 0.4.0e (owner request 24/10): the where's-my-car map - a tap opens the fullscreen zoomable map, the pin follows the car through the projection, the position's age under the preview
           grep -Fq 'fun CarMap(' app/src/main/java/com/openzeekr/app/ui/LocationMap.kt
-          grep -Fq 'private fun CarMapDialog(lat: Double, lng: Double, ageText: String?, onClose: () -> Unit, onNavigate: () -> Unit)' app/src/main/java/com/openzeekr/app/ui/LocationMap.kt
+          grep -Fq 'private fun CarMapDialog(lat: Double, lng: Double, ageText: String?, addressText: String?, onClose: () -> Unit, onNavigate: () -> Unit)' app/src/main/java/com/openzeekr/app/ui/LocationMap.kt
           grep -Fq 'val place = { val p = m.projection.toScreenLocation(car); pin = Offset(p.x, p.y) }' app/src/main/java/com/openzeekr/app/ui/LocationMap.kt
           grep -Fq 'Tik op de kaart om te vergroten en in te zoomen.' app/src/main/java/com/openzeekr/app/ui/LocationMap.kt
           grep -Fq 'fun positionAgeText(updateTimeMs: Long?, nowMs: Long): String?' core/src/main/java/com/openzeekr/app/util/CarMapSupport.kt
           grep -Fq 'class CarMapSupportTest' core/src/test/java/com/openzeekr/app/util/CarMapSupportTest.kt
           grep -Fq '## 0.4.0e' CHANGELOG.md
+          # 0.4.0f (owner comparison with the stock app 24/10): zoom 18 + tilt, road names 20 % larger, the car-icon pin, the car's street address (phone geocoder, never logged)
+          grep -Fq 'private const val FULL_ZOOM = 18.0' app/src/main/java/com/openzeekr/app/ui/LocationMap.kt
+          grep -Fq 'private const val FULL_TILT = 45.0' app/src/main/java/com/openzeekr/app/ui/LocationMap.kt
+          grep -Fq 'fun enlargeRoadLabels(style: Style, scale: Float)' app/src/main/java/com/openzeekr/app/ui/LocationMap.kt
+          grep -Fq 'private suspend fun fetchCarAddress(context: Context, lat: Double, lng: Double): String? = withContext(Dispatchers.IO)' app/src/main/java/com/openzeekr/app/ui/LocationMap.kt
+          grep -Fq 'Icons.Filled.DirectionsCar' app/src/main/java/com/openzeekr/app/ui/LocationMap.kt
+          grep -Fq 'fun isRoadLabelLayer(id: String): Boolean' core/src/main/java/com/openzeekr/app/util/CarMapSupport.kt
+          grep -Fq 'fun addressLine(lines: List<String?>): String?' core/src/main/java/com/openzeekr/app/util/CarMapSupport.kt
+          grep -Fq 'fun theAddressLineIsTheFirstUsableLineCleaned' core/src/test/java/com/openzeekr/app/util/CarMapSupportTest.kt
+          grep -Fq 'private const val PDOK_LUCHTFOTO_TILES' app/src/main/java/com/openzeekr/app/ui/LocationMap.kt
+          grep -Fq 'fun setAerial(style: Style, on: Boolean)' app/src/main/java/com/openzeekr/app/ui/LocationMap.kt
+          grep -Fq '## 0.4.0f' CHANGELOG.md
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -588,7 +601,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='159' versionName='0.4.0e-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='160' versionName='0.4.0f-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

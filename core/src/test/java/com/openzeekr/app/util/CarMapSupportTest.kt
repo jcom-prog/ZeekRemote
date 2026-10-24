@@ -20,4 +20,19 @@ class CarMapSupportTest {
         assertEquals("3 uur geleden", CarMapSupport.positionAgeText(now - 3L * 3_600_000L - 10L * 60_000L, now))
         assertEquals("meer dan een dag geleden", CarMapSupport.positionAgeText(now - 26L * 3_600_000L, now))
     }
+
+    @Test fun theRoadNameLayersAreRecognisedByTheirIds() {
+        assertEquals(true, CarMapSupport.isRoadLabelLayer("highway_name_other"))
+        assertEquals(true, CarMapSupport.isRoadLabelLayer("road_label"))
+        assertEquals(false, CarMapSupport.isRoadLabelLayer("highway_shield"))
+        assertEquals(false, CarMapSupport.isRoadLabelLayer("road_oneway"))
+        assertEquals(false, CarMapSupport.isRoadLabelLayer("poi_z14"))
+        assertEquals(false, CarMapSupport.isRoadLabelLayer("building-3d"))
+    }
+
+    @Test fun theAddressLineIsTheFirstUsableLineCleaned() {
+        assertEquals("Straat 1, 1234 AB Plaats, Nederland", CarMapSupport.addressLine(listOf(" ", null, "  Straat 1,  1234 AB Plaats,\n Nederland ")))
+        assertNull(CarMapSupport.addressLine(emptyList()))
+        assertNull(CarMapSupport.addressLine(listOf(null, "")))
+    }
 }

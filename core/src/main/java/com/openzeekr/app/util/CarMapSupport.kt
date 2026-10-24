@@ -21,4 +21,14 @@ object CarMapSupport {
             else -> "meer dan een dag geleden"
         }
     }
+
+    /** 0.4.0f: the style's road-name layers (OSM Liberty "highway_name_*", OSM Bright "road_label"); shields and arrows stay. */
+    fun isRoadLabelLayer(id: String): Boolean {
+        val l = id.lowercase()
+        return (l.contains("highway") || l.contains("road") || l.contains("street")) && !l.contains("shield") && !l.contains("oneway")
+    }
+
+    /** 0.4.0f: the first usable address line from the geocoder, whitespace collapsed; null when there is none. */
+    fun addressLine(lines: List<String?>): String? =
+        lines.firstOrNull { !it.isNullOrBlank() }?.trim()?.replace(Regex("\\s+"), " ")
 }
