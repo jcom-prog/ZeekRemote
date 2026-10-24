@@ -86,6 +86,7 @@ on:
       - zeekremote-0.4.0b-own-rules-measurement
       - zeekremote-0.4.0c-gnss-shadow
       - zeekremote-0.4.0d-gnss-approach
+      - zeekremote-0.4.0e-car-map
 
 permissions:
   contents: read
@@ -558,6 +559,14 @@ jobs:
           grep -Fq 'fun theGnssApproachOpensOnTheSecondNearReadingInsideTheBand' core/src/test/java/com/openzeekr/app/ble/GnssGatePolicyTest.kt
           grep -Fq 'fun theTrendAndTheFreshCountFollowTheAcceptedFixes' core/src/test/java/com/openzeekr/app/ble/GnssGateSupportTest.kt
           grep -Fq '## 0.4.0d' CHANGELOG.md
+          # 0.4.0e (owner request 24/10): the where's-my-car map - a tap opens the fullscreen zoomable map, the pin follows the car through the projection, the position's age under the preview
+          grep -Fq 'fun CarMap(' app/src/main/java/com/openzeekr/app/ui/LocationMap.kt
+          grep -Fq 'private fun CarMapDialog(lat: Double, lng: Double, ageText: String?, onClose: () -> Unit, onNavigate: () -> Unit)' app/src/main/java/com/openzeekr/app/ui/LocationMap.kt
+          grep -Fq 'val place = { val p = m.projection.toScreenLocation(car); pin = Offset(p.x, p.y) }' app/src/main/java/com/openzeekr/app/ui/LocationMap.kt
+          grep -Fq 'Tik op de kaart om te vergroten en in te zoomen.' app/src/main/java/com/openzeekr/app/ui/LocationMap.kt
+          grep -Fq 'fun positionAgeText(updateTimeMs: Long?, nowMs: Long): String?' core/src/main/java/com/openzeekr/app/util/CarMapSupport.kt
+          grep -Fq 'class CarMapSupportTest' core/src/test/java/com/openzeekr/app/util/CarMapSupportTest.kt
+          grep -Fq '## 0.4.0e' CHANGELOG.md
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -579,7 +588,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='158' versionName='0.4.0d-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='159' versionName='0.4.0e-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

@@ -2,6 +2,10 @@
 
 Wat je per versie merkt, in gewone taal. ZeekRemote is een privé-afsplitsing van [OpenZeekr](https://github.com/borconi/openzeekr) (splitpunt: OpenZeekr 0.1.4) voor één telefoon en één auto; de nadruk ligt op betrouwbaar openen bij het naderen en sluiten bij het weglopen, met een simulator en een regressiepoort als bewaker. Dit logboek bevat geen meetwaarden, tijden, plaatsen of persoonsgegevens; technische details staan in de commits.
 
+## 0.4.0e
+
+- **Waar staat mijn auto: een kaart die je echt kunt gebruiken.** Tik op het kaartje in het tabblad Location om het schermvullend te openen; daar kun je knijpen of de knoppen gebruiken om in en uit te zoomen, de kaart verschuiven en met één tik weer op de auto centreren. De speld blijft op de plek van de auto staan, ook bij zoomen en schuiven (voorheen stond hij vast in het midden van het kaartje). De kaart meldt het als de kaartgegevens nog laden of niet te laden zijn, en onder het kaartje staat hoe oud de positie is. "Navigate to car" is ongewijzigd.
+
 ## 0.4.0d (meetversie)
 
 - **De plaats van de auto mag het openen nu ook aankondigen, maar beslist nog niet.** Komt de telefoon volgens de positiepeiling tot binnen zes meter van de onthouden plek van de auto, neemt die afstand af terwijl je loopt en zit het signaal al vlak onder het openniveau, dan noteert de app (bij twee peilingen op rij) dat het portier nu open zou kunnen. In deze meetversie staat dat alleen in het logboek en in het dagboek; de beslissing blijft die van 0.4.0c. Na een waargenomen vertrek doet de regel niets.
