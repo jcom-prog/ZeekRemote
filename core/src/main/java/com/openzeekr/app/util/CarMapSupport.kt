@@ -28,6 +28,9 @@ object CarMapSupport {
         return (l.contains("highway") || l.contains("road") || l.contains("street")) && !l.contains("shield") && !l.contains("oneway")
     }
 
+    /** 0.4.0g: the style's building layers (OSM Liberty "building", "building-3d"; OSM Bright "building", "building-top"). */
+    fun isBuildingLayer(id: String): Boolean = id.lowercase().contains("building")
+
     /** 0.4.0f: the first usable address line from the geocoder, whitespace collapsed; null when there is none. */
     fun addressLine(lines: List<String?>): String? =
         lines.firstOrNull { !it.isNullOrBlank() }?.trim()?.replace(Regex("\\s+"), " ")

@@ -88,6 +88,7 @@ on:
       - zeekremote-0.4.0d-gnss-approach
       - zeekremote-0.4.0e-car-map
       - zeekremote-0.4.0f-map-detail
+      - zeekremote-0.4.0g-aerial-buildings
 
 permissions:
   contents: read
@@ -580,6 +581,11 @@ jobs:
           grep -Fq 'private const val PDOK_LUCHTFOTO_TILES' app/src/main/java/com/openzeekr/app/ui/LocationMap.kt
           grep -Fq 'fun setAerial(style: Style, on: Boolean)' app/src/main/java/com/openzeekr/app/ui/LocationMap.kt
           grep -Fq '## 0.4.0f' CHANGELOG.md
+          # 0.4.0g (owner screenshot 24/10): the building layers are hidden while the aerial photo is on (extrusions draw over the raster)
+          grep -Fq 'fun isBuildingLayer(id: String): Boolean' core/src/main/java/com/openzeekr/app/util/CarMapSupport.kt
+          grep -Fq 'layer.setProperties(PropertyFactory.visibility(if (on) Property.NONE else Property.VISIBLE))' app/src/main/java/com/openzeekr/app/ui/LocationMap.kt
+          grep -Fq 'fun theBuildingLayersAreRecognisedByTheirIds' core/src/test/java/com/openzeekr/app/util/CarMapSupportTest.kt
+          grep -Fq '## 0.4.0g' CHANGELOG.md
 
       - name: Verify read-only diagnostic entry point
         run: |
@@ -601,7 +607,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='160' versionName='0.4.0f-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='161' versionName='0.4.0g-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

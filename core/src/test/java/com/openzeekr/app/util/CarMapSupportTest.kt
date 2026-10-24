@@ -30,6 +30,14 @@ class CarMapSupportTest {
         assertEquals(false, CarMapSupport.isRoadLabelLayer("building-3d"))
     }
 
+    @Test fun theBuildingLayersAreRecognisedByTheirIds() {
+        assertEquals(true, CarMapSupport.isBuildingLayer("building"))
+        assertEquals(true, CarMapSupport.isBuildingLayer("building-3d"))
+        assertEquals(true, CarMapSupport.isBuildingLayer("building-top"))
+        assertEquals(false, CarMapSupport.isBuildingLayer("housenumber"))
+        assertEquals(false, CarMapSupport.isBuildingLayer("road_label"))
+    }
+
     @Test fun theAddressLineIsTheFirstUsableLineCleaned() {
         assertEquals("Straat 1, 1234 AB Plaats, Nederland", CarMapSupport.addressLine(listOf(" ", null, "  Straat 1,  1234 AB Plaats,\n Nederland ")))
         assertNull(CarMapSupport.addressLine(emptyList()))

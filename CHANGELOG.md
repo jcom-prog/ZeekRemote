@@ -2,6 +2,10 @@
 
 Wat je per versie merkt, in gewone taal. ZeekRemote is een privé-afsplitsing van [OpenZeekr](https://github.com/borconi/openzeekr) (splitpunt: OpenZeekr 0.1.4) voor één telefoon en één auto; de nadruk ligt op betrouwbaar openen bij het naderen en sluiten bij het weglopen, met een simulator en een regressiepoort als bewaker. Dit logboek bevat geen meetwaarden, tijden, plaatsen of persoonsgegevens; technische details staan in de commits.
 
+## 0.4.0g
+
+- **Luchtfoto zonder grijze blokken.** Met de luchtfoto aan worden de gebouwlagen van de kaartstijl verborgen (de kaartmotor tekende de 3D-blokken dwars door de foto heen); u ziet nu de echte daken, met straatnamen en de speld erbovenop. Luchtfoto uit: de gebouwen komen terug.
+
 ## 0.4.0f
 
 - **Kaart met meer detail.** De grote kaart opent dichterbij (zoom 18) en licht gekanteld, zodat gebouwen als blokken zichtbaar zijn; straatnamen zijn 20 % groter; de auto staat op een donkere speld met auto-icoon. Onder het kaartje en in de grote kaart staat het adres waar de auto volgens de cloud staat, opgehaald via de adresdienst van de telefoon; het adres wordt nergens opgeslagen of gelogd. In de grote kaart zet de knop met het satellietje de luchtfoto van PDOK (Nederlandse overheid, open data, zonder sleutel) onder de straatnamen; die keuze wordt onthouden. Buiten Nederland blijft de gewone kaart. "Navigate to car" is ongewijzigd.

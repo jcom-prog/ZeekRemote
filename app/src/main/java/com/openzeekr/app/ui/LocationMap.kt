@@ -63,6 +63,7 @@ import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.expressions.Expression
+import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.layers.PropertyFactory
 import org.maplibre.android.style.layers.RasterLayer
 import org.maplibre.android.style.layers.SymbolLayer
@@ -283,6 +284,13 @@ private object CarMapStyle {
         } else if (!on && present) {
             style.removeLayer(AERIAL_ID)
             style.removeSource(AERIAL_ID)
+        }
+        // 0.4.0g: the style's building layers (footprints and the 3D blocks) draw over the photo - MapLibre renders
+        // extrusions in their own pass, whatever the layer order (owner screenshot 24/10) - so they are hidden while
+        // the photo is on; the photo shows the real roofs. Restored when the photo goes off.
+        style.layers.forEach { layer ->
+            if (CarMapSupport.isBuildingLayer(layer.id))
+                layer.setProperties(PropertyFactory.visibility(if (on) Property.NONE else Property.VISIBLE))
         }
     }
 
