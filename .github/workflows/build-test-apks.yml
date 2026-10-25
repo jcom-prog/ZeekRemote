@@ -593,6 +593,10 @@ jobs:
           grep -Fq '## 0.4.2' CHANGELOG.md
           # 0.4.3 (review 24/10): the engine stands down during a watch hand-over, hand-over ids, the watch's key wipe
           grep -Fq '## 0.4.3' CHANGELOG.md
+          # 0.4.4: the send-to-car share target is visible and journaled content-free (area nav)
+          grep -Fq '## 0.4.4' CHANGELOG.md
+          grep -Fq '"nav"' core/src/main/java/com/openzeekr/app/util/DiagnosticExport.kt
+          grep -Fq 'showProgress("Reading the shared place…")' app/src/main/java/com/openzeekr/app/SendToCarActivity.kt
           grep -Fq 'fun acceptsReport(id: Long' core/src/main/java/com/openzeekr/app/wear/WearLinkArbiter.kt
           grep -Fq 'private fun onWatchHandOverStarted()' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'fun clearCredential()' core/src/main/java/com/openzeekr/app/ble/DkBleManager.kt
@@ -635,7 +639,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='165' versionName='0.4.3-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='167' versionName='0.4.4-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

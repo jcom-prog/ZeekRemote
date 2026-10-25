@@ -1,14 +1,20 @@
 package com.openzeekr.app
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.location.Geocoder
 import android.net.Uri
 import android.os.Bundle
+import android.view.Gravity
+import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.TextView
 import android.widget.Toast
 import com.openzeekr.app.remote.CallResult
 import com.openzeekr.app.util.Logx
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -17,56 +23,123 @@ import kotlinx.coroutines.withContext
  * map pin's share sheet, a `geo:` link, or a "navigate with" chooser, we parse the destination
  * and push it to the car's built-in nav (cloud [com.openzeekr.app.remote.NavRepository.sendToCar]).
  *
- * No UI: it parses, fires the (application-scoped) send so it survives this Activity finishing,
- * shows a toast, and closes immediately. Coordinates are raw WGS-84 — the server converts for the
- * car, so we never shift to GCJ02 here.
+ * 0.4.4: visible from the first moment. A progress dialog while the shared place is read (a Maps
+ * short link is resolved over the network, which takes seconds), a confirmation with the full
+ * place name (the share sheet's title or the first line of the shared text - Google Maps hands the
+ * house number alone as the place name), then a dialog that stays: sent, or failed with the reason
+ * and a retry. The send itself is application-scoped so it survives this screen; the steps go to the
+ * diagnostic export as content-free lines (area "nav": no name, no address, no link). Coordinates
+ * are raw WGS-84 — the server converts for the car, so we never shift to GCJ02 here.
  */
 class SendToCarActivity : Activity() {
 
     private data class Destination(val lat: Double, val lon: Double, val name: String, val address: String, val city: String)
+    /** What the picker's payload yielded, and how (a content-free reason for the export). */
+    private class Parsed(val dest: Destination?, val how: String)
+
+    private var dialog: AlertDialog? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val deps = (application as App).deps
+        // 0.4.4: what the picker handed us - presence only, never content (the export must stay free of places).
+        Logx.d("nav", "sendToCar: received (" + listOf(
+            "title" to intent.hasExtra(Intent.EXTRA_TITLE), "text" to intent.hasExtra(Intent.EXTRA_TEXT),
+            "subject" to intent.hasExtra(Intent.EXTRA_SUBJECT), "uri" to (intent.data != null),
+        ).joinToString(" ") { (k, v) -> "$k=${if (v) "yes" else "no"}" } + ")")
+        showProgress("Reading the shared place…")
 
         // Parse first, then ALWAYS ask for confirmation before pushing anything to the car — this
         // activity is exported, so without a prompt any app could fire a POI at the car silently.
         deps.appScope.launch {
-            val dest = withContext(Dispatchers.IO) { parseDestination(intent) }
+            val parsed = withContext(Dispatchers.IO) { parseDestination(intent) }
             withContext(Dispatchers.Main) {
+                if (gone()) return@withContext
+                val dest = parsed.dest
                 if (dest == null) {
-                    val preview = (intent.getStringExtra(Intent.EXTRA_TEXT) ?: intent.dataString ?: "").take(48)
-                    Toast.makeText(applicationContext,
-                        if (preview.isBlank()) "Couldn't read a location to send" else "Couldn't read location from: $preview",
-                        Toast.LENGTH_SHORT).show()
-                    finish(); return@withContext
+                    Logx.w("nav", "sendToCar: no location (${parsed.how})")
+                    showFinal("Couldn't read a location",
+                        "ZeekRemote found no place in what was shared (${parsed.how}). Share the place from Google Maps " +
+                            "(open the place card, then Share), or share a geo: link.")
+                    return@withContext
                 }
-                if (isFinishing || isDestroyed) return@withContext
-                android.app.AlertDialog.Builder(this@SendToCarActivity)
+                Logx.d("nav", "sendToCar: ${parsed.how}")
+                show(AlertDialog.Builder(this@SendToCarActivity)
                     .setTitle("Send to your Zeekr?")
                     .setMessage("Send “${dest.name}” to the car's navigation?")
-                    .setPositiveButton("Send") { _, _ ->
-                        deps.appScope.launch {
-                            when (val r = deps.nav.sendToCar(dest.lat, dest.lon, dest.name, dest.address, dest.city)) {
-                                is CallResult.Ok -> toast("Sent to Zeekr ✓")
-                                is CallResult.Err -> toast("Send failed: ${r.message}")
-                            }
-                        }
-                        finish()
-                    }
-                    .setNegativeButton("Cancel") { _, _ -> finish() }
-                    .setOnCancelListener { finish() }
-                    .show()
+                    .setPositiveButton("Send") { _, _ -> send(dest) }
+                    .setNegativeButton("Cancel") { _, _ -> Logx.d("nav", "sendToCar: cancelled"); finish() }
+                    .setOnCancelListener { Logx.d("nav", "sendToCar: cancelled"); finish() }
+                    .create())
             }
         }
     }
 
-    private suspend fun toast(msg: String) = withContext(Dispatchers.Main) {
-        Toast.makeText(applicationContext, msg, Toast.LENGTH_SHORT).show()
+    /** The send is application-scoped (it survives this screen); the screen stays until the result is known. */
+    private fun send(dest: Destination) {
+        val deps = (application as App).deps
+        Logx.d("nav", "sendToCar: confirmed by the user")
+        showProgress("Sending to your Zeekr…")
+        deps.appScope.launch {
+            val r = deps.nav.sendToCar(dest.lat, dest.lon, dest.name, dest.address, dest.city)
+            withContext(Dispatchers.Main) {
+                when (r) {
+                    is CallResult.Ok -> {
+                        Logx.d("nav", "sendToCar: sent ok")
+                        if (gone()) { toast("Sent to Zeekr ✓"); return@withContext }
+                        showFinal("Sent to Zeekr ✓", "“${dest.name}” is on its way to the car's navigation.", autoCloseMs = 3_000L)
+                    }
+                    is CallResult.Err -> {
+                        Logx.w("nav", "sendToCar: send failed (${r.message.replace(Regex("[0-9]"), "#").take(40)})")
+                        if (gone()) { toast("Send failed: ${r.message}"); return@withContext }
+                        show(AlertDialog.Builder(this@SendToCarActivity)
+                            .setTitle("Send failed")
+                            .setMessage(r.message.take(200) + "\n\nOpen ZeekRemote, wait until Cloud is blue, then try again.")
+                            .setPositiveButton("Retry") { _, _ -> send(dest) }
+                            .setNegativeButton("Close") { _, _ -> finish() }
+                            .setOnCancelListener { finish() }
+                            .create())
+                    }
+                }
+            }
+        }
     }
 
+    private fun gone() = isFinishing || isDestroyed
+
+    private fun show(d: AlertDialog) {
+        dialog?.dismiss(); dialog = d
+        runCatching { d.show() }.onFailure { finish() }
+    }
+
+    private fun showProgress(text: String) {
+        val pad = (16 * resources.displayMetrics.density).toInt()
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            setPadding(pad, pad, pad, pad)
+            addView(ProgressBar(context), LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+            addView(TextView(context).apply { this.text = text; setPadding(pad, 0, 0, 0) })
+        }
+        show(AlertDialog.Builder(this).setView(row).setCancelable(false)
+            .setNegativeButton("Cancel") { _, _ -> Logx.d("nav", "sendToCar: cancelled"); finish() }.create())
+    }
+
+    private fun showFinal(title: String, text: String, autoCloseMs: Long = 0L) {
+        show(AlertDialog.Builder(this).setTitle(title).setMessage(text)
+            .setPositiveButton("OK") { _, _ -> finish() }.setOnCancelListener { finish() }.create())
+        if (autoCloseMs > 0L) (application as App).deps.appScope.launch {
+            delay(autoCloseMs)
+            withContext(Dispatchers.Main) { if (!gone()) finish() }
+        }
+    }
+
+    private fun toast(msg: String) = Toast.makeText(applicationContext, msg, Toast.LENGTH_LONG).show()
+
+    override fun onDestroy() { dialog?.dismiss(); dialog = null; super.onDestroy() }
+
     /** Best-effort: pull WGS-84 lat/lon (+ optional label) out of whatever the picker handed us. */
-    private fun parseDestination(intent: Intent): Destination? {
+    private fun parseDestination(intent: Intent): Parsed {
         // Candidate strings from the URI (geo:/google.navigation:) and/or the shared text (Maps
         // shares a place as multi-line text, often just a short link). Split text into lines/tokens
         // too, so a bare address line or an embedded URL can be picked out individually.
@@ -82,6 +155,7 @@ class SendToCarActivity : Activity() {
             intent.dataString?.let { add(it) }
             intent.getStringExtra(Intent.EXTRA_TEXT)?.let { add(it) }
             intent.getStringExtra(Intent.EXTRA_SUBJECT)?.let { add(it) }
+            intent.getStringExtra(Intent.EXTRA_TITLE)?.let { add(it) }   // 0.4.4: the share sheet's title
             intent.clipData?.let { cd ->
                 for (i in 0 until cd.itemCount) cd.getItemAt(i)?.coerceToText(this@SendToCarActivity)?.toString()?.let { add(it) }
             }
@@ -99,17 +173,28 @@ class SendToCarActivity : Activity() {
             }
         }.distinct()
 
+        // 0.4.4: the name the user sees in the dialog and in the car - the share sheet's title (Google Maps:
+        // "street number"), else the first line of the shared text that is neither a link nor a coordinate,
+        // else the subject (Maps hands the house number alone as the place name), else the old heuristic.
+        fun usable(s: String) = s.isNotBlank() && !s.startsWith("http") && !hasCoord(s) && s.length in 2..80
+        val name = intent.getStringExtra(Intent.EXTRA_TITLE)?.trim()?.takeIf(::usable)
+            ?: intent.getStringExtra(Intent.EXTRA_TEXT).orEmpty().split('\n').map { it.trim() }.firstOrNull(::usable)
+            ?: intent.getStringExtra(Intent.EXTRA_SUBJECT)?.trim()?.takeIf(::usable)
+            ?: label(candidates)
+
         // 1) Coordinates already present (geo:lat,lng, ?q=lat,lng, or @lat,lng inside a full maps URL).
-        coordsIn(candidates)?.let { (lat, lon) -> return Destination(lat, lon, label(candidates), "", "") }
+        coordsIn(candidates)?.let { (lat, lon) -> return Parsed(Destination(lat, lon, name, "", ""), "numbers in the shared text") }
 
         // 2) A Google Maps link — usually a SHORT maps.app.goo.gl with no coords in the text. Follow
         //    its redirects and scan the resolved URL(s)/body for the place coordinates.
+        var linkTried = false
         candidates.firstOrNull {
             it.startsWith("http") && ("goo.gl" in it || "google." in it || "maps." in it || "/maps" in it)
         }?.let { link ->
+            linkTried = true
             val expanded = expandUrl(link)
             Logx.d("sendToCar", "expanded ${link.take(90)} -> ${expanded.length} chars")
-            coordsInText(expanded)?.let { (lat, lon) -> return Destination(lat, lon, label(candidates), "", "") }
+            coordsInText(expanded)?.let { (lat, lon) -> return Parsed(Destination(lat, lon, name, "", ""), "resolved via the shared link") }
         }
 
         // 3) Fall back to geocoding a plain address line (skip URLs and coordinate strings).
@@ -119,14 +204,14 @@ class SendToCarActivity : Activity() {
                 @Suppress("DEPRECATION")
                 Geocoder(this).getFromLocationName(addr, 1)?.firstOrNull()
             }.getOrNull()?.let { a ->
-                return Destination(
-                    a.latitude, a.longitude, a.featureName ?: a.thoroughfare ?: addr,
+                return Parsed(Destination(
+                    a.latitude, a.longitude, name.takeIf { it != "Destination" } ?: a.featureName ?: a.thoroughfare ?: addr,
                     a.getAddressLine(0) ?: addr, a.locality ?: a.subAdminArea ?: "",
-                )
+                ), "resolved via geocoding")
             }
         }
         Logx.w("sendToCar", "no location parsed; candidates=${candidates.take(8)}")
-        return null
+        return Parsed(null, if (linkTried) "the shared link could not be resolved - no network?" else "nothing usable in the shared text")
     }
 
     private fun coordsIn(candidates: List<String>): Pair<Double, Double>? {

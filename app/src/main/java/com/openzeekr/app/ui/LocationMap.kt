@@ -381,7 +381,8 @@ fun CarLocationSection(deps: Deps, modifier: Modifier = Modifier) {
     // is no button for it). Moved here from Security, where its English one-liner was unclear (12/10).
     CockpitCard(Modifier.fillMaxWidth()) {
         SectionHeader("Bestemming naar de auto sturen")
-        Text("Open een plek in Google Maps, tik op Delen en kies \"Send to Zeekr\". Na bevestigen " +
-            "staat de bestemming in de navigatie van de auto.", color = Brand.muted, fontSize = 12.sp)
+        Text("Open een plek in Google Maps, tik op Delen en kies \"Send to Zeekr\". ZeekRemote leest de plek, " +
+            "vraagt om bevestiging en meldt of de bestemming is verzonden; daarna staat hij in de navigatie van de auto.",
+            color = Brand.muted, fontSize = 12.sp)
     }
 }

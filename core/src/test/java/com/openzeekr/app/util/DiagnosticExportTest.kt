@@ -43,6 +43,10 @@ class DiagnosticExportTest {
             l("prox", "pending departure corroborated by position; sending Lock"),
             l("prox", "lock state uncertain after reconnect -> cloud check"),
             l("svc", "driving: IN_VEHICLE -> keep-alive paused"),
+            // 0.4.4: the send-to-car steps (area "nav") carry no place, name or link.
+            l("nav", "sendToCar: received (title=yes text=yes subject=no uri=no)"),
+            l("nav", "sendToCar: resolved via the shared link"),
+            l("nav", "sendToCar: sent ok"),
         )
         assertEquals(decision, DiagnosticExport.filterAppLog(decision))
         // ...while identifiers in any spelling still drop the line.
