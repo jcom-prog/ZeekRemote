@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -124,11 +125,13 @@ fun SecurityScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
             // 0.4.5: the switch shows the car's flag; the automaton sends the command and polls the car until it
             // confirms (about a minute), so the row can no longer stand still at a stale "Armed".
             SecRow(Icons.Filled.Shield, "Sentry guard", guard.status) {
-                Switch(checked = guard.flag == true, enabled = !guard.pending && guard.mode != GuardMode.OFF,
+                // 0.4.6: while a command is pending the switch shows the owner's hand (it springs back when the car
+                // does not confirm within the polls); the line below keeps saying what the car last reported.
+                Switch(checked = guard.wanted ?: (guard.flag == true), enabled = guard.mode != GuardMode.OFF,
                     onCheckedChange = { on -> deps.guard.onManualSwitch(on) },
                     colors = brandSwitchColors(Brand.good))
             }
-            GuardSettingsRows(deps, guard.mode, cfg.guardSocThresholdPct, guard.flag, guard.flagReadAtMs, guard.lastSocPct)
+            GuardSettingsRows(deps, cfg, guard, snackbar)
             // Owner-only (shared accounts are refused server-side). Both need the user's PIN.
             if (owner) {
                 SecRow(Icons.Filled.Inventory2, "Glovebox lock",
@@ -174,18 +177,26 @@ fun SecurityScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
     }
 }
 
-/** 0.4.5: the guard mode (Off / Manual / Auto), the battery threshold and what the car last said. */
+/** 0.4.5/0.4.6: the guard mode (Off / Manual / Auto), the battery threshold, the quiet zones, the daily check, the
+ *  window warning and what the car last said. Zones stay on this phone (encrypted settings); nothing of them is logged. */
 @Composable
-private fun GuardSettingsRows(deps: Deps, mode: GuardMode, thresholdPct: Int, flag: Boolean?, flagReadAtMs: Long, lastSocPct: Int?) {
+private fun GuardSettingsRows(deps: Deps, cfg: com.openzeekr.app.config.SecretsConfig, guard: com.openzeekr.app.guard.GuardView, snackbar: (String) -> Unit) {
+    val scope = rememberCoroutineScope()
+    val mode = guard.mode
+    val thresholdPct = cfg.guardSocThresholdPct
     var threshold by remember(thresholdPct) { mutableStateOf(thresholdPct.toString()) }
+    val dailyHour = cfg.guardDailyCheckHour
+    var daily by remember(dailyHour) { mutableStateOf(if (dailyHour in 0..23) dailyHour.toString() else "") }
+    var adding by remember { mutableStateOf(false) }
+    fun change(transform: (com.openzeekr.app.config.SecretsConfig) -> com.openzeekr.app.config.SecretsConfig) {
+        deps.config.update(transform); deps.guard.onSettingsChanged()
+    }
     Column(Modifier.padding(start = 46.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for (m in GuardMode.values()) {
                 FilterChip(
                     selected = mode == m,
-                    onClick = {
-                        if (mode != m) { deps.config.update { it.copy(guardMode = m.key) }; deps.guard.onSettingsChanged() }
-                    },
+                    onClick = { if (mode != m) change { it.copy(guardMode = m.key) } },
                     label = { Text(when (m) { GuardMode.OFF -> "Off"; GuardMode.MANUAL -> "Manual"; GuardMode.AUTO -> "Auto" }) },
                 )
             }
@@ -196,9 +207,7 @@ private fun GuardSettingsRows(deps: Deps, mode: GuardMode, thresholdPct: Int, fl
                 onValueChange = { s ->
                     if (s.length <= 3 && s.all(Char::isDigit)) {
                         threshold = s
-                        s.toIntOrNull()?.takeIf { it in 0..100 }?.let { pct ->
-                            if (pct != thresholdPct) { deps.config.update { it.copy(guardSocThresholdPct = pct) }; deps.guard.onSettingsChanged() }
-                        }
+                        s.toIntOrNull()?.takeIf { it in 0..100 }?.let { pct -> if (pct != thresholdPct) change { it.copy(guardSocThresholdPct = pct) } }
                     }
                 },
                 label = { Text("Battery threshold (%)") },
@@ -206,13 +215,91 @@ private fun GuardSettingsRows(deps: Deps, mode: GuardMode, thresholdPct: Int, fl
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth(),
             )
-            Text("Auto: ${GuardAutomaton.ARM_DELAY_MS / 60_000} min after a lock, with every door, the hood and the tailgate " +
+            Text("Auto: ${GuardAutomaton.ARM_DELAY_MS / 60_000} min after a lock, with every door, the bonnet and the tailgate " +
                 "closed and the battery above $thresholdPct%, the guard is switched on and the car is asked to confirm. " +
                 "Below $thresholdPct% it is switched off again (back on above ${thresholdPct + GuardAutomaton.HYSTERESIS_PCT}% " +
                 "or while charging). Your own switch, here or on the car's screen, wins until the next lock.",
                 color = Brand.muted, fontSize = 11.sp)
+            // 0.4.6: quiet zones - up to three places where the automaton leaves the guard off.
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Quiet zones (max ${GuardAutomaton.MAX_ZONES})", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Text("Skip in zones", color = Brand.muted, fontSize = 11.sp)
+                Switch(checked = cfg.guardSkipInZones, onCheckedChange = { on -> change { it.copy(guardSkipInZones = on) } },
+                    colors = brandSwitchColors(Brand.good))
+            }
+            cfg.guardZones.forEachIndexed { i, zone ->
+                var label by remember(i, zone.label) { mutableStateOf(zone.label) }
+                var radius by remember(i, zone.radiusM) { mutableStateOf(zone.radiusM.toString()) }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedTextField(
+                        value = label,
+                        onValueChange = { s ->
+                            if (s.length <= 20) {
+                                label = s
+                                // Labels and radii are read at arm time; no settings line per keystroke.
+                                deps.config.update { c -> c.copy(guardZones = c.guardZones.mapIndexed { j, z -> if (j == i) z.copy(label = s) else z }) }
+                            }
+                        },
+                        label = { Text("Zone ${i + 1}") }, singleLine = true, modifier = Modifier.weight(1f),
+                    )
+                    OutlinedTextField(
+                        value = radius,
+                        onValueChange = { s ->
+                            if (s.length <= 4 && s.all(Char::isDigit)) {
+                                radius = s
+                                s.toIntOrNull()?.takeIf { it in 10..2000 }?.let { r ->
+                                    deps.config.update { c -> c.copy(guardZones = c.guardZones.mapIndexed { j, z -> if (j == i) z.copy(radiusM = r) else z }) }
+                                }
+                            }
+                        },
+                        label = { Text("m") }, singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.width(84.dp),
+                    )
+                    TextButton(onClick = { change { c -> c.copy(guardZones = c.guardZones.filterIndexed { j, _ -> j != i }) } }) { Text("Clear") }
+                }
+            }
+            TextButton(
+                enabled = cfg.guardZones.size < GuardAutomaton.MAX_ZONES && !adding,
+                onClick = {
+                    adding = true
+                    scope.launch {
+                        try {
+                            val p = (deps.control.status() as? CallResult.Ok)?.value?.basicVehicleStatus?.position
+                            val la = p?.latitude; val lo = p?.longitude
+                            if (la == null || lo == null || p.posCanBeTrusted == false) snackbar("Car position unknown · try again later")
+                            else {
+                                change { c -> c.copy(guardZones = (c.guardZones + com.openzeekr.app.guard.GuardZone(la, lo)).take(GuardAutomaton.MAX_ZONES)) }
+                                snackbar("Zone added (where the car is now)")
+                            }
+                        } finally { adding = false }
+                    }
+                },
+            ) { Text(if (adding) "Reading the car's position…" else "Add zone here") }
+            Text("Inside a zone the guard is left off after a lock; slide the switch to switch it on anyway for that parking. " +
+                "Zones are kept on this phone only.", color = Brand.muted, fontSize = 11.sp)
         }
-        Text(guardCarLine(flag, flagReadAtMs, lastSocPct), color = Brand.muted, fontSize = 11.sp)
+        // 0.4.6: the daily check and the window warning apply in every mode.
+        OutlinedTextField(
+            value = daily,
+            onValueChange = { s ->
+                if (s.length <= 2 && s.all(Char::isDigit)) {
+                    daily = s
+                    val h = s.toIntOrNull()
+                    if (s.isEmpty()) { if (dailyHour != -1) change { it.copy(guardDailyCheckHour = -1) } }
+                    else if (h != null && h in 0..23 && h != dailyHour) change { it.copy(guardDailyCheckHour = h) }
+                }
+            },
+            label = { Text("Daily check at (hour 0-23, empty = off)") }, singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Warn when a window or the sunroof is open", color = Brand.muted, fontSize = 11.sp, modifier = Modifier.weight(1f))
+            Switch(checked = cfg.guardWindowWarning, onCheckedChange = { on -> change { it.copy(guardWindowWarning = on) } },
+                colors = brandSwitchColors(Brand.good))
+        }
+        Text(guardCarLine(guard.flag, guard.flagReadAtMs, guard.lastSocPct), color = Brand.muted, fontSize = 11.sp)
     }
 }
 

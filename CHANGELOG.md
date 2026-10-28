@@ -2,6 +2,14 @@
 
 Wat je per versie merkt, in gewone taal. ZeekRemote is een privé-afsplitsing van [OpenZeekr](https://github.com/borconi/openzeekr) (splitpunt: OpenZeekr 0.1.4) voor één telefoon en één auto; de nadruk ligt op betrouwbaar openen bij het naderen en sluiten bij het weglopen, met een simulator en een regressiepoort als bewaker. Dit logboek bevat geen meetwaarden, tijden, plaatsen of persoonsgegevens; technische details staan in de commits.
 
+## 0.4.6 (alleen telefoon)
+
+- **Stille zones.** In de Security-tab kun je tot drie plekken vastleggen (knop "Add zone here" terwijl de auto er staat; straal en naam per zone aanpasbaar) waar de automaat de bewaking na het sluiten uit laat. Je eigen schakelaar werkt daar gewoon: naar rechts schuiven zet de bewaking voor die parkering toch aan. Met "Skip in zones" uit gelden de zones tijdelijk niet. Is de positie van de auto onbekend of niet te vertrouwen, dan schakelt de automaat voor de zekerheid wél in. De zones blijven alleen op de telefoon; in de export staat hooguit een zonenummer.
+- **Dagelijkse stille controle.** Op een door jou gekozen uur leest de app de auto één keer uit. Staat de bewaking uit terwijl de auto gesloten staat en niets de automaat tegenhield, dan wordt hij ingeschakeld; een open deur, motorkap, achterklep, raam of dak en een accu onder je grens worden gemeld; is alles in orde, dan hoor je niets.
+- **Open raam of dak bij het inschakelen.** De app meldt het met een knop "Close windows" (telefoon ontgrendeld); sluiten doet hij nooit uit zichzelf, en de bewaking gaat gewoon aan. Uit te zetten met "Warn when a window or the sunroof is open".
+- **De schakelaar volgt je hand.** Na het schuiven staat de schakelaar meteen in de nieuwe stand terwijl de auto wordt gevraagd; bevestigt de auto niet binnen de wachttijd, dan springt hij terug en staat eronder waarom. De auto wordt sneller teruggelezen (na tien seconden, daarna elke twintig).
+- **Woordkeuze.** "Hood" heet nu "bonnet" (motorkap), zodat het niet als open dak gelezen kan worden. De horloge-app verandert niet en blijft 0.4.3.
+
 ## 0.4.5 (alleen telefoon)
 
 - **Sentry guard automatisch aan na het sluiten.** De auto zet zijn bewaking nooit zelf aan; tot nu toe moest dat na elke parkering met de hand. In de stand *Auto* (Security-tab) doet ZeekRemote het: twee minuten na een bevestigde sluiting, als de auto gesloten is met alle deuren, de motorkap en de achterklep dicht en de accu boven de door jou gekozen grens, stuurt de app de opdracht en leest hij terug of de auto het bevestigt (de cloud doet daar ongeveer een minuut over); na één herhaling zonder bevestiging krijg je een melding. Je eigen schakelaar, in de app of op het scherm van de auto, wint tot de volgende sluiting. *Handmatig* laat alles aan de schakelaar; *Uit* houdt de app bij de bewaking vandaan.

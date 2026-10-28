@@ -159,10 +159,16 @@ class Deps(context: Context) {
                     locked = safety?.centralLockingStatus?.let { it == "1" },
                     doorsClosed = closed(safety?.doorOpenStatusDriver, safety?.doorOpenStatusDriverRear,
                         safety?.doorOpenStatusPassenger, safety?.doorOpenStatusPassengerRear),
-                    hoodClosed = closed(safety?.engineHoodOpenStatus),
+                    bonnetClosed = closed(safety?.engineHoodOpenStatus),
                     trunkClosed = closed(safety?.trunkOpenStatus),
                     socPct = soc,
                     charging = ev?.chargingActive == true,
+                    // 0.4.6: the position for the quiet zones and the window state for the open-window notice.
+                    lat = status.basicVehicleStatus?.position?.latitude,
+                    lon = status.basicVehicleStatus?.position?.longitude,
+                    positionTrusted = status.basicVehicleStatus?.position?.posCanBeTrusted,
+                    windowsOpen = status.additionalVehicleStatus?.climateStatus?.windowsOpen,
+                    sunroofOpen = status.additionalVehicleStatus?.climateStatus?.sunroofOpen,
                 )
             }
             override suspend fun send(on: Boolean): Boolean {
@@ -170,8 +176,12 @@ class Deps(context: Context) {
                 val cmd = if (on) com.openzeekr.app.remote.Command.SENTINEL_ON else com.openzeekr.app.remote.Command.SENTINEL_OFF
                 return control.send(cmd) is com.openzeekr.app.remote.CallResult.Ok
             }
-            override fun notify(title: String, text: String) =
-                com.openzeekr.app.guard.GuardNotifier.show(appCtx, title, text)
+            override suspend fun closeWindows(): Boolean {
+                if (config.current().accessToken.isBlank()) return false
+                return control.send(com.openzeekr.app.remote.Command.WINDOW_CLOSE) is com.openzeekr.app.remote.CallResult.Ok
+            }
+            override fun notify(title: String, text: String, action: com.openzeekr.app.guard.GuardAction?) =
+                com.openzeekr.app.guard.GuardNotifier.show(appCtx, title, text, action)
             override fun hold(active: Boolean) {
                 if (active) { if (held == null) held = wakeLocks.acquire(6 * 60_000L) }
                 else { wakeLocks.release(held); held = null }
@@ -180,7 +190,10 @@ class Deps(context: Context) {
         settings = {
             val c = config.current()
             com.openzeekr.app.guard.GuardSettings(
-                com.openzeekr.app.guard.GuardMode.parse(c.guardMode), c.guardSocThresholdPct.coerceIn(0, 100))
+                com.openzeekr.app.guard.GuardMode.parse(c.guardMode), c.guardSocThresholdPct.coerceIn(0, 100),
+                zones = c.guardZones.take(com.openzeekr.app.guard.GuardAutomaton.MAX_ZONES),
+                skipInZones = c.guardSkipInZones, dailyCheckHour = c.guardDailyCheckHour,
+                windowWarning = c.guardWindowWarning)
         },
         log = { com.openzeekr.app.util.Logx.d("guard", it) },
     ).also { guard ->

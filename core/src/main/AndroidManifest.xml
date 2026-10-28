@@ -66,5 +66,9 @@
         <receiver
             android:name="com.openzeekr.app.ble.NotificationLockReceiver"
             android:exported="false" />
+        <!-- 0.4.6: the "Close windows" button on the guard's open-window notice (our own PendingIntent). -->
+        <receiver
+            android:name="com.openzeekr.app.guard.GuardActionReceiver"
+            android:exported="false" />
     </application>
 </manifest>

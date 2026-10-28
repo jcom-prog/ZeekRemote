@@ -124,6 +124,16 @@ data class SecretsConfig(
     /** 0.4.5: below this battery percentage the automaton switches the guard off and skips arming; the owner
      *  types any value 0-100 in the Security tab. */
     val guardSocThresholdPct: Int = 20,
+    /** 0.4.6: quiet zones (up to 3) where the automaton leaves the guard off - the car's position from the cloud
+     *  status with a radius and an optional label; kept on this phone only (encrypted settings), never in a log
+     *  or an export. */
+    val guardZones: List<com.openzeekr.app.guard.GuardZone> = emptyList(),
+    /** 0.4.6: off = the zones are ignored (the guard is switched on everywhere). */
+    val guardSkipInZones: Boolean = true,
+    /** 0.4.6: hour (0-23) of the daily check; -1 = off. */
+    val guardDailyCheckHour: Int = 8,
+    /** 0.4.6: report an open window or sunroof at arm time, with a close button. */
+    val guardWindowWarning: Boolean = true,
     /** Share the digital key with a paired Wear OS watch (Settings "Watch key"). Off: a watch asking for the
      *  key is told to purge its copy instead. Anyone wearing a provisioned watch has a working key to the car. */
     val watchKeyEnabled: Boolean = true,

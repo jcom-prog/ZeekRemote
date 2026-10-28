@@ -8,19 +8,29 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
 /**
  * 0.4.5: the Sentry guard automaton (owner request 28/10). The car never switches its guard on by itself: after
  * every parking the owner had to do it by hand. In AUTO the app does it: [ARM_DELAY_MS] after a confirmed Lock,
- * when the car is locked with every door, the hood and the tailgate closed and the battery above the owner's
+ * when the car is locked with every door, the bonnet and the tailgate closed and the battery above the owner's
  * threshold, it sends the guard-on command and reads the car's flag back until the car confirms (the cloud takes
  * about a minute). The owner's own switch - in the app or on the car's screen - always wins until the next Lock.
  * Below the threshold the guard is switched off (and back on [HYSTERESIS_PCT] points higher); MANUAL leaves
- * everything to the switch; OFF makes the app leave the guard alone. Pure logic: the reads, commands and
- * notifications come through [GuardIo]; every step goes to the log as a content-free "guard:" line.
+ * everything to the switch; OFF makes the app leave the guard alone.
+ *
+ * 0.4.6: quiet zones (up to [MAX_ZONES] places, kept on the phone only) where the automaton does not switch the
+ * guard on by itself - the owner's switch still does, for that parking; an unknown car position arms on the safe
+ * side. A daily check at the owner's hour: a guard that is off while it should be on is armed, an open door,
+ * bonnet, tailgate, window or sunroof and a low battery are reported, otherwise nothing. At arm time an open window
+ * or sunroof is reported with a "Close windows" action (never closed by itself). The switch follows the owner's
+ * hand while a command is pending ([GuardView.wanted]) and the car is polled after [FIRST_POLL_MS], then every
+ * [POLL_STEP_MS]. Pure logic: the reads, commands and notifications come through [GuardIo]; every step goes to
+ * the log as a content-free "guard:" line (never a position or a zone label).
  */
 enum class GuardMode {
     OFF, MANUAL, AUTO;
@@ -33,17 +43,37 @@ enum class GuardMode {
     }
 }
 
+/** 0.4.6: a quiet zone - a place where the automaton leaves the guard off. Stored on the phone only. */
+@Serializable
+data class GuardZone(val lat: Double, val lon: Double, val radiusM: Int = 50, val label: String = "")
+
 /** What the automaton needs to know about the car (null = unknown). */
 data class GuardCar(
     val locked: Boolean?,
     val doorsClosed: Boolean?,
-    val hoodClosed: Boolean?,
+    val bonnetClosed: Boolean?,
     val trunkClosed: Boolean?,
     val socPct: Int?,
     val charging: Boolean,
+    /** 0.4.6: the car's position from the cloud status, for the quiet zones; null = unknown. */
+    val lat: Double? = null,
+    val lon: Double? = null,
+    val positionTrusted: Boolean? = null,
+    /** 0.4.6: any side window / the sunroof not fully closed; null = not reported. */
+    val windowsOpen: Boolean? = null,
+    val sunroofOpen: Boolean? = null,
 )
 
-data class GuardSettings(val mode: GuardMode, val socThresholdPct: Int)
+data class GuardSettings(
+    val mode: GuardMode,
+    val socThresholdPct: Int,
+    /** 0.4.6 */
+    val zones: List<GuardZone> = emptyList(),
+    val skipInZones: Boolean = true,
+    /** Hour of the daily check (0-23); anything else = off. */
+    val dailyCheckHour: Int = 8,
+    val windowWarning: Boolean = true,
+)
 
 /** What the Security tab shows. */
 data class GuardView(
@@ -53,10 +83,15 @@ data class GuardView(
     val flagReadAtMs: Long = 0L,
     /** A command is on its way and not yet confirmed by the car. */
     val pending: Boolean = false,
+    /** 0.4.6: the owner's hand while a manual command is pending (the switch shows this, not the stale flag). */
+    val wanted: Boolean? = null,
     /** One line for the owner. */
     val status: String = "",
     val lastSocPct: Int? = null,
 )
+
+/** 0.4.6: a button on a notification. */
+enum class GuardAction { CLOSE_WINDOWS }
 
 /** The car, the cloud and the phone as the automaton sees them (implemented in Deps on the repositories). */
 interface GuardIo {
@@ -66,8 +101,10 @@ interface GuardIo {
     suspend fun readCar(): GuardCar?
     /** Sends the guard on/off command; true when the cloud accepted it. */
     suspend fun send(on: Boolean): Boolean
-    /** A notification to the owner. */
-    fun notify(title: String, text: String)
+    /** 0.4.6: sends the close-windows command; true when the cloud accepted it. */
+    suspend fun closeWindows(): Boolean = false
+    /** A notification to the owner, with an optional button. */
+    fun notify(title: String, text: String, action: GuardAction? = null)
     /** Holds (true) or releases (false) the CPU while the automaton has timed work to do. */
     fun hold(active: Boolean) {}
 }
@@ -79,8 +116,11 @@ class GuardAutomaton(
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val log: (String) -> Unit = {},
     private val armDelayMs: Long = ARM_DELAY_MS,
-    private val confirmStepMs: Long = CONFIRM_STEP_MS,
+    private val firstPollMs: Long = FIRST_POLL_MS,
+    private val pollStepMs: Long = POLL_STEP_MS,
     private val socCheckMs: Long = SOC_CHECK_MS,
+    /** The next moment (wall ms) the daily check runs, given now and the owner's hour; default = local clock. */
+    private val nextDaily: (nowMs: Long, hour: Int) -> Long = ::nextLocalHour,
 ) {
     private val _view = MutableStateFlow(GuardView(mode = settings().mode, status = initialStatus(settings().mode)))
     val view: StateFlow<GuardView> = _view.asStateFlow()
@@ -89,22 +129,33 @@ class GuardAutomaton(
     private var parked = false
     /** The owner switched the guard off (app or car) in this episode: the automaton stays away until the next Lock. */
     private var ownerOffThisEpisode = false
+    /** 0.4.6: the automaton stood down for a quiet zone in this episode. */
+    private var zoneSkippedThisEpisode = false
+    /** 0.4.6: the open-window notice went out in this episode. */
+    private var windowsWarnedThisEpisode = false
     /** Our picture of the car: the guard is on. */
     private var believedOn = false
     /** We switched it off for the battery; back on above threshold + hysteresis. */
     private var lowSocOff = false
     private var armAttempts = 0
     private var lastSocCheckMs = 0L
+    private var lastCarReadOkMs = 0L
+    private var dailyDueMs = 0L
     private var episodeJob: Job? = null
     private var socJob: Job? = null
     private var commandJob: Job? = null
-    private var holding = false
+    private var dailyJob: Job? = null
+    private var windowsJob: Job? = null
+    private var episodeHold = false
+    private var dailyHold = false
+    private var ioHeld = false
 
     // ---- events ----
 
     /** The engine confirmed a Lock (key, car self-lock, walk-away, cloud). */
     fun onLockConfirmed(source: String) {
-        parked = true; ownerOffThisEpisode = false; lowSocOff = false; armAttempts = 0
+        parked = true; ownerOffThisEpisode = false; zoneSkippedThisEpisode = false; windowsWarnedThisEpisode = false
+        lowSocOff = false; armAttempts = 0
         log("guard: episode started (${clean(source)})")
         episodeJob?.cancel(); episodeJob = null; socJob?.cancel(); socJob = null
         val s = settings()
@@ -133,8 +184,8 @@ class GuardAutomaton(
     fun onManualSwitch(on: Boolean) {
         commandJob?.cancel()
         commandJob = scope.launch {
-            _view.update { it.copy(pending = true) }
-            status(if (on) "Switching on…" else "Switching off…")
+            _view.update { it.copy(pending = true, wanted = on) }
+            status(if (on) "Switching on… waiting for the car" else "Switching off… waiting for the car")
             if (!on) {
                 ownerOffThisEpisode = true
                 episodeJob?.cancel(); episodeJob = null; socJob?.cancel(); socJob = null; hold(false)
@@ -142,13 +193,13 @@ class GuardAutomaton(
             val ok = io.send(on)
             log("guard: manual ${if (on) "on" else "off"} sent")
             if (!ok) {
-                _view.update { it.copy(pending = false) }
+                _view.update { it.copy(pending = false, wanted = null) }
                 status("The cloud refused the command · try again")
                 log("guard: manual command refused")
                 return@launch
             }
-            val confirmed = awaitFlag(on, polls = CONFIRM_POLLS)
-            _view.update { it.copy(pending = false) }
+            val confirmed = awaitFlag(on)
+            _view.update { it.copy(pending = false, wanted = null) }
             when {
                 confirmed && on -> onConfirmedOn(byUs = false, how = "manual")
                 confirmed -> {
@@ -157,7 +208,7 @@ class GuardAutomaton(
                     log("guard: manual off confirmed")
                 }
                 else -> {
-                    status("Not confirmed by the car yet · read again later")
+                    status("Not confirmed by the car within ${totalPollMs() / 1000} s · read again later")
                     log("guard: manual ${if (on) "on" else "off"} not confirmed")
                 }
             }
@@ -188,18 +239,31 @@ class GuardAutomaton(
     /** Re-read the flag (the Security tab coming to the front). */
     fun refresh() { scope.launch { onFlagRead(io.readFlag()) } }
 
-    /** A cheap hint from the service's keep-alive round: the hourly battery check when it is due. */
+    /** A cheap hint from the service's keep-alive round: the hourly battery check and the daily check when due. */
     fun onKeepAliveRound() {
-        if (!parked || settings().mode != GuardMode.AUTO || socJob == null) return
-        if (clock() - lastSocCheckMs < socCheckMs) return
+        val now = clock()
+        val s = settings()
+        if (s.dailyCheckHour in 0..23) {
+            if (dailyDueMs == 0L) dailyDueMs = nextDaily(now, s.dailyCheckHour)
+            if (now >= dailyDueMs && dailyJob?.isActive != true) {
+                dailyDueMs = nextDaily(now, s.dailyCheckHour)
+                dailyJob = scope.launch { holdDaily(true); try { dailyCheck() } finally { holdDaily(false) } }
+            }
+        } else dailyDueMs = 0L
+        if (!parked || s.mode != GuardMode.AUTO || socJob == null) return
+        if (now - lastSocCheckMs < socCheckMs) return
         scope.launch { checkSoc() }
     }
 
-    /** Mode or threshold changed in the Security tab. */
+    /** Mode, threshold, zones or the daily hour changed in the Security tab. */
     fun onSettingsChanged() {
         val s = settings()
         _view.update { it.copy(mode = s.mode) }
-        log("guard: mode ${s.mode.key} threshold ${s.socThresholdPct}%")
+        dailyDueMs = 0L
+        log("guard: mode ${s.mode.key} threshold ${s.socThresholdPct}% zones ${s.zones.size.coerceAtMost(9)}" +
+            (if (s.skipInZones) "" else " (zones ignored)") +
+            (if (s.dailyCheckHour in 0..23) " daily ${s.dailyCheckHour}h" else " daily off") +
+            (if (s.windowWarning) "" else " (no window warning)"))
         when (s.mode) {
             GuardMode.OFF, GuardMode.MANUAL -> {
                 episodeJob?.cancel(); episodeJob = null; socJob?.cancel(); socJob = null; hold(false)
@@ -208,12 +272,28 @@ class GuardAutomaton(
             GuardMode.AUTO -> when {
                 parked && believedOn -> { status("Auto · on since ${hhmm()}"); startSocWatch() }
                 parked && !ownerOffThisEpisode && episodeJob == null -> {
+                    zoneSkippedThisEpisode = false
                     status("Auto · switching on…")
                     episodeJob = scope.launch { hold(true); try { arm() } finally { hold(false) } }
                 }
                 parked -> status("Off by hand until the next lock")
                 else -> status("Auto · from the next lock on")
             }
+        }
+    }
+
+    /** 0.4.6: the "Close windows" button on the open-window notice. */
+    fun closeWindowsFromNotification() {
+        windowsJob?.cancel()
+        windowsJob = scope.launch {
+            val ok = io.closeWindows()
+            log(if (ok) "guard: windows close sent" else "guard: windows close refused")
+            if (!ok) { io.notify("Windows", "The cloud refused the close command · try the Vehicle tab."); return@launch }
+            delay(WINDOWS_CHECK_MS)
+            val car = io.readCar()
+            val open = car?.windowsOpen == true || car?.sunroofOpen == true
+            log("guard: windows ${if (open) "still open" else "closed"}")
+            io.notify("Windows", if (open) "A window or the sunroof is still open · check the car." else "Windows and sunroof closed.")
         }
     }
 
@@ -225,15 +305,22 @@ class GuardAutomaton(
         val s = settings()
         val car = io.readCar()
         if (car == null) { skip("the car's status could not be read", "status unavailable"); return }
+        lastCarReadOkMs = clock()
         if (car.locked == false) { skip("the car is not locked", "car not locked"); return }
         car.socPct?.let { soc -> _view.update { it.copy(lastSocPct = soc) } }
-        if (car.doorsClosed == false || car.hoodClosed == false || car.trunkClosed == false) {
+        warnWindows(car, s)
+        if (car.doorsClosed == false || car.bonnetClosed == false || car.trunkClosed == false) {
             if (armAttempts < 2) {
-                status("Auto · a door, the hood or the tailgate is open · checking again in ${armDelayMs / 60_000} min")
-                log("guard: postponed (door hood or tailgate open)")
+                status("Auto · a door, the bonnet or the tailgate is open · checking again in ${armDelayMs / 60_000} min")
+                log("guard: postponed (door bonnet or tailgate open)")
                 delay(armDelayMs); arm(); return
             }
-            skip("a door, the hood or the tailgate is open", "door hood or tailgate open"); return
+            skip("a door, the bonnet or the tailgate is open", "door bonnet or tailgate open"); return
+        }
+        zoneOf(car, s)?.let { n ->
+            zoneSkippedThisEpisode = true
+            val label = s.zones[n - 1].label.trim().ifBlank { "zone $n" }
+            skip("in quiet zone $label · slide the switch to switch on anyway", "zone $n"); return
         }
         if (car.socPct != null && !car.charging && car.socPct < s.socThresholdPct) {
             lowSocOff = true
@@ -246,6 +333,28 @@ class GuardAutomaton(
         switchOn()
     }
 
+    /** 0.4.6: the quiet zone the car stands in (1-based), or null; an unknown position never counts as inside. */
+    private fun zoneOf(car: GuardCar, s: GuardSettings): Int? {
+        if (!s.skipInZones || s.zones.isEmpty()) return null
+        val lat = car.lat; val lon = car.lon
+        if (lat == null || lon == null || car.positionTrusted == false) { log("guard: position unknown -> arming"); return null }
+        s.zones.take(MAX_ZONES).forEachIndexed { i, z ->
+            if (distanceM(lat, lon, z.lat, z.lon) <= z.radiusM.coerceIn(10, 2000)) return i + 1
+        }
+        return null
+    }
+
+    /** 0.4.6: an open window or sunroof at arm time - reported once per episode, with a close button. */
+    private fun warnWindows(car: GuardCar, s: GuardSettings) {
+        if (!s.windowWarning || windowsWarnedThisEpisode) return
+        if (car.windowsOpen != true && car.sunroofOpen != true) return
+        windowsWarnedThisEpisode = true
+        io.notify("Sentry guard: a window is open",
+            if (car.sunroofOpen == true && car.windowsOpen != true) "The sunroof is open while the car is parked."
+            else "A window is open while the car is parked.", GuardAction.CLOSE_WINDOWS)
+        log("guard: windows open -> notified")
+    }
+
     private suspend fun switchOn() {
         _view.update { it.copy(pending = true) }
         status("Auto · switching on…")
@@ -254,9 +363,9 @@ class GuardAutomaton(
             val ok = io.send(true)
             log("guard: on sent (attempt $attempt)")
             if (!ok) { log("guard: on refused"); break }
-            confirmed = awaitFlag(true, polls = CONFIRM_POLLS)
+            confirmed = awaitFlag(true)
             if (confirmed) break
-            log("guard: not confirmed after ${CONFIRM_POLLS * confirmStepMs / 1000} s")
+            log("guard: not confirmed after ${totalPollMs() / 1000} s")
         }
         _view.update { it.copy(pending = false) }
         if (confirmed) { onConfirmedOn(byUs = true, how = "confirmed"); return }
@@ -266,11 +375,12 @@ class GuardAutomaton(
         log("guard: not confirmed -> notified")
     }
 
-    /** Reads the flag every [confirmStepMs] until it equals [want]; the view follows every read. */
-    private suspend fun awaitFlag(want: Boolean, polls: Int): Boolean {
+    /** Reads the flag after [firstPollMs], then every [pollStepMs], [CONFIRM_POLLS] times, until it equals [want]. */
+    private suspend fun awaitFlag(want: Boolean): Boolean {
         var waited = 0L
-        repeat(polls) {
-            delay(confirmStepMs); waited += confirmStepMs
+        repeat(CONFIRM_POLLS) { i ->
+            val step = if (i == 0) firstPollMs else pollStepMs
+            delay(step); waited += step
             val f = io.readFlag()
             _view.update { it.copy(flag = f ?: it.flag, flagReadAtMs = clock()) }
             if (f == want) { log("guard: ${if (want) "on" else "off"} confirmed after ${waited / 1000} s"); return true }
@@ -278,9 +388,11 @@ class GuardAutomaton(
         return false
     }
 
+    private fun totalPollMs(): Long = firstPollMs + (CONFIRM_POLLS - 1) * pollStepMs
+
     private fun onConfirmedOn(byUs: Boolean, how: String) {
         believedOn = true; lowSocOff = false
-        _view.update { it.copy(flag = true, flagReadAtMs = clock(), pending = false) }
+        _view.update { it.copy(flag = true, flagReadAtMs = clock(), pending = false, wanted = null) }
         val auto = settings().mode == GuardMode.AUTO
         status((if (auto) "Auto · " else "") + "on since ${hhmm()}" + (if (byUs) "" else " (by hand)"))
         log("guard: on ($how)")
@@ -296,6 +408,7 @@ class GuardAutomaton(
         if (!parked || settings().mode != GuardMode.AUTO) return
         lastSocCheckMs = clock()
         val car = io.readCar() ?: return
+        lastCarReadOkMs = clock()
         val s = settings()
         car.socPct?.let { soc -> _view.update { it.copy(lastSocPct = soc) } }
         val soc = car.socPct ?: return
@@ -314,6 +427,46 @@ class GuardAutomaton(
         }
     }
 
+    /**
+     * 0.4.6: the daily check. Reads the car and the flag once. In AUTO a guard that is off while the car is locked
+     * (and nothing stood the automaton down) is switched on through the normal arm path; an open door, bonnet,
+     * tailgate, window or sunroof and a battery below the threshold are reported; a day without a readable status
+     * is reported; otherwise only a log line.
+     */
+    private suspend fun dailyCheck() {
+        log("guard: daily check")
+        val s = settings()
+        val car = io.readCar()
+        if (car == null) {
+            log("guard: daily check status unavailable")
+            if (lastCarReadOkMs > 0L && clock() - lastCarReadOkMs >= DAY_MS)
+                io.notify("Sentry guard daily check", "The car's status could not be read for a day. Check the sign-in and the car.")
+            return
+        }
+        lastCarReadOkMs = clock()
+        car.socPct?.let { soc -> _view.update { it.copy(lastSocPct = soc) } }
+        val issues = mutableListOf<String>()
+        if (car.doorsClosed == false || car.bonnetClosed == false || car.trunkClosed == false) issues += "a door, the bonnet or the tailgate is open"
+        if (s.windowWarning && (car.windowsOpen == true || car.sunroofOpen == true)) issues += "a window or the sunroof is open"
+        val soc = car.socPct
+        if (soc != null && !car.charging && soc < s.socThresholdPct) issues += "the battery (${soc}%) is below your ${s.socThresholdPct}% threshold"
+        val flag = io.readFlag()
+        if (flag != null) _view.update { it.copy(flag = flag, flagReadAtMs = clock()) }
+        if (issues.isNotEmpty()) {
+            io.notify("Sentry guard daily check", issues.joinToString("; ").replaceFirstChar { it.uppercase() } + ".")
+            log("guard: daily check issues ${issues.size}")
+        }
+        val armable = s.mode == GuardMode.AUTO && car.locked == true && flag == false &&
+            !ownerOffThisEpisode && !_view.value.pending && issues.isEmpty()
+        if (armable) {
+            log("guard: daily check -> arming")
+            parked = true; believedOn = false; armAttempts = 1
+            arm()
+        } else if (issues.isEmpty()) {
+            log("guard: daily check ok (${when (flag) { true -> "on"; false -> "off"; null -> "flag unknown" }})")
+        }
+    }
+
     private fun skip(statusText: String, logText: String) {
         status("Auto · skipped: $statusText")
         log("guard: skipped ($logText)")
@@ -321,10 +474,14 @@ class GuardAutomaton(
 
     private fun status(text: String) { _view.update { it.copy(status = text) } }
 
-    private fun hold(active: Boolean) {
-        if (holding == active) return
-        holding = active
-        runCatching { io.hold(active) }
+    /** The episode's hold (the arm delay, the polls); the daily check has its own, so neither releases the other's. */
+    private fun hold(active: Boolean) { episodeHold = active; applyHold() }
+    private fun holdDaily(active: Boolean) { dailyHold = active; applyHold() }
+    private fun applyHold() {
+        val want = episodeHold || dailyHold
+        if (ioHeld == want) return
+        ioHeld = want
+        runCatching { io.hold(want) }
     }
 
     private fun hhmm(): String = SimpleDateFormat("HH:mm", Locale.US).format(Date(clock()))
@@ -335,15 +492,39 @@ class GuardAutomaton(
 
     companion object {
         const val ARM_DELAY_MS = 120_000L
-        const val CONFIRM_STEP_MS = 30_000L
-        const val CONFIRM_POLLS = 3
+        /** 0.4.6: the car is polled after 10 s, then every 20 s, five times (90 s in all). */
+        const val FIRST_POLL_MS = 10_000L
+        const val POLL_STEP_MS = 20_000L
+        const val CONFIRM_POLLS = 5
         const val SOC_CHECK_MS = 3_600_000L
         const val HYSTERESIS_PCT = 5
+        const val MAX_ZONES = 3
+        const val WINDOWS_CHECK_MS = 20_000L
+        const val DAY_MS = 24 * 3_600_000L
 
         fun initialStatus(mode: GuardMode): String = when (mode) {
             GuardMode.OFF -> "Off · the app leaves the guard alone"
             GuardMode.MANUAL -> "Manual · use the switch"
             GuardMode.AUTO -> "Auto · from the next lock on"
+        }
+
+        /** Great-circle distance in metres (haversine); good to a metre at zone scale. */
+        fun distanceM(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+            val r = 6_371_000.0
+            val dLat = Math.toRadians(lat2 - lat1); val dLon = Math.toRadians(lon2 - lon1)
+            val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2)
+            return 2 * r * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+        }
+
+        /** The next [hour]:00 in the device's time zone strictly after [nowMs]. */
+        fun nextLocalHour(nowMs: Long, hour: Int): Long {
+            val c = Calendar.getInstance().apply {
+                timeInMillis = nowMs
+                set(Calendar.HOUR_OF_DAY, hour.coerceIn(0, 23)); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+            }
+            if (c.timeInMillis <= nowMs) c.add(Calendar.DAY_OF_MONTH, 1)
+            return c.timeInMillis
         }
     }
 }

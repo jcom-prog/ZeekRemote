@@ -353,6 +353,14 @@ class ProximityDiagnosticJournalTest {
         assertEquals("GUARD not confirmed -> notified", ProximityDiagnosticJournal.event("guard", "guard: not confirmed -> notified"))
         assertEquals("GUARD mode auto threshold 20%", ProximityDiagnosticJournal.event("guard", "guard: mode auto threshold 20%"))
         assertEquals("GUARD off detected", ProximityDiagnosticJournal.event("guard", "guard: off detected"))
+        // 0.4.6: the zones (a number, never a label or a position), the daily check and the window notice.
+        assertEquals("GUARD skipped (zone 2)", ProximityDiagnosticJournal.event("guard", "guard: skipped (zone 2)"))
+        assertEquals("GUARD position unknown -> arming", ProximityDiagnosticJournal.event("guard", "guard: position unknown -> arming"))
+        assertEquals("GUARD daily check ok (on)", ProximityDiagnosticJournal.event("guard", "guard: daily check ok (on)"))
+        assertEquals("GUARD daily check -> arming", ProximityDiagnosticJournal.event("guard", "guard: daily check -> arming"))
+        assertEquals("GUARD windows open -> notified", ProximityDiagnosticJournal.event("guard", "guard: windows open -> notified"))
+        assertEquals("GUARD mode auto threshold 20% zones 2 daily 8h", ProximityDiagnosticJournal.event("guard", "guard: mode auto threshold 20% zones 2 daily 8h"))
+        assertNull(ProximityDiagnosticJournal.event("guard", "guard: skipped (zone home)".replace("home", "Home")))
         // Anything that could carry a value or an identifier is refused whole.
         assertNull(ProximityDiagnosticJournal.event("guard", "guard: on sent vin=LTESTVIN000000001"))
         assertNull(ProximityDiagnosticJournal.event("guard", "guard: Episode started"))

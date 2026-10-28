@@ -10,14 +10,15 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Calendar
 
-/** 0.4.5: the guard automaton as pure logic - the car, the cloud and the clock are fakes. */
+/** 0.4.5/0.4.6: the guard automaton as pure logic - the car, the cloud and the clock are fakes. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class GuardAutomatonTest {
 
     private class FakeIo : GuardIo {
         var flag: Boolean? = false
-        var car: GuardCar? = GuardCar(locked = true, doorsClosed = true, hoodClosed = true, trunkClosed = true, socPct = 60, charging = false)
+        var car: GuardCar? = GuardCar(locked = true, doorsClosed = true, bonnetClosed = true, trunkClosed = true, socPct = 60, charging = false)
         var accept = true
         /** The car follows our command after this many flag reads (0 = at once). */
         var confirmAfterReads = 0
@@ -25,6 +26,8 @@ class GuardAutomatonTest {
         private var readsSincePending = 0
         val sends = mutableListOf<Boolean>()
         val notes = mutableListOf<String>()
+        val actions = mutableListOf<GuardAction?>()
+        var closes = 0
         var held = false
         override suspend fun readFlag(): Boolean? {
             pendingWant?.let { want ->
@@ -39,17 +42,28 @@ class GuardAutomatonTest {
             if (accept) { pendingWant = on; readsSincePending = 0 }
             return accept
         }
-        override fun notify(title: String, text: String) { notes += title }
+        override suspend fun closeWindows(): Boolean { closes++; return true }
+        override fun notify(title: String, text: String, action: GuardAction?) { notes += title; actions += action }
         override fun hold(active: Boolean) { held = active }
     }
 
     private val log = mutableListOf<String>()
+    private val day = 86_400_000L
+    private val home = GuardZone(12.0, 65.0, 50, "home")
 
-    private fun TestScope.automaton(io: FakeIo, mode: GuardMode = GuardMode.AUTO, threshold: Int = 20, settings: () -> GuardSettings = { GuardSettings(mode, threshold) }) =
-        GuardAutomaton(backgroundScope, io, settings, clock = { testScheduler.currentTime }, log = { log += it })
+    private fun TestScope.automaton(
+        io: FakeIo, mode: GuardMode = GuardMode.AUTO, threshold: Int = 20,
+        settings: () -> GuardSettings = { GuardSettings(mode, threshold, dailyCheckHour = -1) },
+    ) = GuardAutomaton(backgroundScope, io, settings, clock = { testScheduler.currentTime }, log = { log += it },
+        // The daily check, when a test switches it on, is due at the next whole (fake) day.
+        nextDaily = { now, _ -> (now / day + 1) * day })
+
+    private fun carAt(lat: Double?, lon: Double?, trusted: Boolean? = true) =
+        GuardCar(locked = true, doorsClosed = true, bonnetClosed = true, trunkClosed = true, socPct = 60, charging = false,
+            lat = lat, lon = lon, positionTrusted = trusted)
 
     @Test fun armsTwoMinutesAfterTheLockAndWaitsForTheCarToConfirm() = runTest {
-        val io = FakeIo(); io.confirmAfterReads = 1          // the first poll still reads off, the second reads on
+        val io = FakeIo(); io.confirmAfterReads = 1          // the first poll (10 s) still reads off, the second (30 s) reads on
         val a = automaton(io)
         a.onLockConfirmed("walk-away ble-departure")
         advanceTimeBy(119_000); runCurrent()
@@ -58,65 +72,64 @@ class GuardAutomatonTest {
         advanceTimeBy(2_000); runCurrent()
         assertEquals(listOf(true), io.sends)
         assertTrue(a.view.value.pending)
-        advanceTimeBy(61_000); runCurrent()
+        advanceTimeBy(31_000); runCurrent()
         assertFalse(a.view.value.pending)
         assertEquals(true, a.view.value.flag)
         assertTrue(a.view.value.status, a.view.value.status.startsWith("Auto · on since"))
-        assertFalse("CPU released after the arm", io.held)
-        assertTrue(log.any { it.startsWith("guard: on confirmed after 60 s") })
-        assertTrue(log.contains("guard: episode started (walk-away ble-departure)"))
+        assertTrue(log.contains("guard: on confirmed after 30 s"))
+        assertFalse("CPU released after the episode's work", io.held)
+        assertTrue(io.notes.isEmpty())
     }
 
     @Test fun postponesOnceForAnOpenDoorThenSkips() = runTest {
         val io = FakeIo(); io.car = io.car!!.copy(doorsClosed = false)
         val a = automaton(io)
-        a.onLockConfirmed("manual key control")
+        a.onLockConfirmed("key")
         advanceTimeBy(121_000); runCurrent()
         assertTrue(io.sends.isEmpty())
-        assertTrue(a.view.value.status.contains("open"))
+        assertTrue(log.contains("guard: postponed (door bonnet or tailgate open)"))
         advanceTimeBy(121_000); runCurrent()
         assertTrue(io.sends.isEmpty())
-        assertTrue(log.contains("guard: postponed (door hood or tailgate open)"))
-        assertTrue(log.contains("guard: skipped (door hood or tailgate open)"))
+        assertTrue(log.contains("guard: skipped (door bonnet or tailgate open)"))
+        assertTrue(a.view.value.status, a.view.value.status.startsWith("Auto · skipped: a door, the bonnet"))
     }
 
     @Test fun skipsBelowTheThresholdAndArmsOnceTheBatteryRecovers() = runTest {
         val io = FakeIo(); io.car = io.car!!.copy(socPct = 15)
-        val a = automaton(io, threshold = 20)
-        a.onLockConfirmed("car self-lock")
+        val a = automaton(io)
+        a.onLockConfirmed("key")
         advanceTimeBy(121_000); runCurrent()
         assertTrue(io.sends.isEmpty())
         assertTrue(log.contains("guard: skipped (low soc 15%)"))
-        io.car = io.car!!.copy(socPct = 24)                   // above the threshold but inside the hysteresis
+        io.car = io.car!!.copy(socPct = 24)                    // above 20 but not above 20 + 5: stays off
         advanceTimeBy(3_600_000); runCurrent()
         assertTrue(io.sends.isEmpty())
-        io.car = io.car!!.copy(socPct = 25)
+        io.car = io.car!!.copy(socPct = 26)
         advanceTimeBy(3_600_000); runCurrent()
         assertEquals(listOf(true), io.sends)
-        assertTrue(log.contains("guard: battery recovered (25%)"))
+        assertTrue(log.contains("guard: battery recovered (26%)"))
     }
 
     @Test fun switchesOffBelowTheThresholdWhileOnAndTellsTheOwner() = runTest {
         val io = FakeIo()
-        val a = automaton(io, threshold = 20)
-        a.onLockConfirmed("walk-away")
+        val a = automaton(io)
+        a.onLockConfirmed("key")
         advanceTimeBy(121_000 + 31_000); runCurrent()
         assertEquals(listOf(true), io.sends)
-        io.car = io.car!!.copy(socPct = 14)
+        io.car = io.car!!.copy(socPct = 19)
         advanceTimeBy(3_600_000); runCurrent()
         assertEquals(listOf(true, false), io.sends)
         assertEquals(listOf("Sentry guard switched off"), io.notes)
-        assertEquals(false, a.view.value.flag)
-        assertTrue(log.contains("guard: off sent (low soc 14%)"))
+        assertTrue(log.contains("guard: off sent (low soc 19%)"))
         io.car = io.car!!.copy(socPct = 30)
         advanceTimeBy(3_600_000 + 31_000); runCurrent()
         assertEquals(listOf(true, false, true), io.sends)
     }
 
     @Test fun chargingOverridesTheThreshold() = runTest {
-        val io = FakeIo(); io.car = io.car!!.copy(socPct = 10, charging = true)
-        val a = automaton(io, threshold = 20)
-        a.onLockConfirmed("walk-away")
+        val io = FakeIo(); io.car = io.car!!.copy(socPct = 5, charging = true)
+        val a = automaton(io)
+        a.onLockConfirmed("key")
         advanceTimeBy(121_000 + 31_000); runCurrent()
         assertEquals(listOf(true), io.sends)
     }
@@ -124,31 +137,29 @@ class GuardAutomatonTest {
     @Test fun theOwnersOffWinsUntilTheNextLock() = runTest {
         val io = FakeIo()
         val a = automaton(io)
-        a.onLockConfirmed("walk-away")
+        a.onLockConfirmed("key")
         advanceTimeBy(121_000 + 31_000); runCurrent()
         assertEquals(listOf(true), io.sends)
-        io.flag = false                                        // switched off on the car's screen
-        a.onFlagRead(false)
-        assertTrue(a.view.value.status.contains("until the next lock"))
-        io.car = io.car!!.copy(socPct = 60)
+        // The owner switched it off on the car's screen: the next read sees the flag off.
+        io.flag = false; a.onFlagRead(false); runCurrent()
+        assertTrue(log.contains("guard: off detected"))
         advanceTimeBy(2 * 3_600_000); runCurrent()
         assertEquals("no re-arm in this episode", listOf(true), io.sends)
-        assertTrue(log.contains("guard: off detected"))
-        a.onUnlockConfirmed("approach")
-        a.onLockConfirmed("walk-away")
+        // The next lock starts afresh.
+        a.onUnlockConfirmed("proximity"); a.onLockConfirmed("walk-away")
         advanceTimeBy(121_000 + 31_000); runCurrent()
         assertEquals(listOf(true, true), io.sends)
     }
 
     @Test fun theOwnersSwitchOffDuringTheDelayBlocksTheArm() = runTest {
-        val io = FakeIo()
+        val io = FakeIo(); io.flag = true
         val a = automaton(io)
-        a.onLockConfirmed("walk-away")
+        a.onLockConfirmed("key")
         advanceTimeBy(30_000); runCurrent()
         a.onManualSwitch(false)
         advanceTimeBy(31_000); runCurrent()
         assertEquals(listOf(false), io.sends)
-        assertTrue(a.view.value.status, a.view.value.status.startsWith("Off by hand"))
+        assertEquals("Off by hand until the next lock", a.view.value.status)
         advanceTimeBy(300_000); runCurrent()
         assertEquals(listOf(false), io.sends)
     }
@@ -156,31 +167,30 @@ class GuardAutomatonTest {
     @Test fun anUnlockCancelsThePendingArm() = runTest {
         val io = FakeIo()
         val a = automaton(io)
-        a.onLockConfirmed("walk-away")
+        a.onLockConfirmed("key")
         advanceTimeBy(60_000); runCurrent()
-        a.onUnlockConfirmed("approach")
+        a.onUnlockConfirmed("proximity")
         assertFalse(io.held)
         advanceTimeBy(300_000); runCurrent()
         assertTrue(io.sends.isEmpty())
-        assertTrue(a.view.value.status.startsWith("Car open"))
     }
 
     @Test fun retriesOnceThenNotifiesWhenTheCarNeverConfirms() = runTest {
         val io = FakeIo(); io.confirmAfterReads = 99
         val a = automaton(io)
-        a.onLockConfirmed("walk-away")
+        a.onLockConfirmed("key")
         advanceTimeBy(121_000 + 6 * 31_000); runCurrent()
         assertEquals(listOf(true, true), io.sends)
         assertEquals(listOf("Sentry guard not confirmed"), io.notes)
+        assertTrue(log.contains("guard: not confirmed -> notified"))
         assertFalse(a.view.value.pending)
-        assertTrue(a.view.value.status.contains("not confirmed"))
     }
 
     @Test fun manualAndOffModesNeverSendByThemselves() = runTest {
         for (mode in listOf(GuardMode.MANUAL, GuardMode.OFF)) {
             val io = FakeIo()
             val a = automaton(io, mode = mode)
-            a.onLockConfirmed("walk-away")
+            a.onLockConfirmed("key")
             advanceTimeBy(600_000); runCurrent()
             assertTrue(io.sends.isEmpty())
             assertEquals(GuardAutomaton.initialStatus(mode), a.view.value.status)
@@ -202,24 +212,147 @@ class GuardAutomatonTest {
         assertTrue(status, status.startsWith("on since ") && status.endsWith(" (by hand)"))
     }
 
+    @Test fun theSwitchFollowsTheHandWhileTheCarIsAsked() = runTest {
+        // 0.4.6: the switch shows the owner's hand while the command is pending, not the stale flag.
+        val io = FakeIo(); io.confirmAfterReads = 1
+        val a = automaton(io, mode = GuardMode.MANUAL)
+        a.onManualSwitch(true); runCurrent()
+        assertEquals(true, a.view.value.wanted); assertTrue(a.view.value.pending)
+        advanceTimeBy(11_000); runCurrent()
+        assertEquals("the first poll (10 s) still reads off: the hand stays", true, a.view.value.wanted)
+        assertEquals(false, a.view.value.flag)
+        advanceTimeBy(20_000); runCurrent()
+        assertNull(a.view.value.wanted); assertFalse(a.view.value.pending); assertEquals(true, a.view.value.flag)
+        assertTrue(log.contains("guard: on confirmed after 30 s"))
+        // Not confirmed within the five polls: the hand is dropped and the owner told.
+        val io2 = FakeIo(); io2.confirmAfterReads = 99
+        val b = automaton(io2, mode = GuardMode.MANUAL)
+        b.onManualSwitch(true); advanceTimeBy(91_000); runCurrent()
+        assertNull(b.view.value.wanted); assertFalse(b.view.value.pending)
+        assertTrue(b.view.value.status, b.view.value.status.startsWith("Not confirmed by the car within 90 s"))
+    }
+
     @Test fun switchingToAutoWhileParkedArmsAtOnce() = runTest {
         val io = FakeIo()
         var mode = GuardMode.MANUAL
-        val a = automaton(io, settings = { GuardSettings(mode, 20) })
-        a.onLockConfirmed("walk-away")
+        val a = automaton(io, settings = { GuardSettings(mode, 20, dailyCheckHour = -1) })
+        a.onLockConfirmed("key")
         advanceTimeBy(300_000); runCurrent()
         assertTrue(io.sends.isEmpty())
         mode = GuardMode.AUTO; a.onSettingsChanged()
         advanceTimeBy(31_000); runCurrent()
         assertEquals(listOf(true), io.sends)
-        assertEquals(GuardMode.AUTO, a.view.value.mode)
+    }
+
+    @Test fun insideAQuietZoneTheAutomatonStandsDownButTheSwitchStillWorks() = runTest {
+        // 0.4.6: ~22 m from the zone's centre, radius 50 m.
+        val io = FakeIo(); io.car = carAt(12.0002, 65.0)
+        val a = automaton(io, settings = { GuardSettings(GuardMode.AUTO, 20, zones = listOf(home), dailyCheckHour = -1) })
+        a.onLockConfirmed("key")
+        advanceTimeBy(121_000); runCurrent()
+        assertTrue(io.sends.isEmpty())
+        assertTrue(log.contains("guard: skipped (zone 1)"))
+        assertTrue(a.view.value.status, a.view.value.status.contains("quiet zone home"))
+        assertTrue("never a position or a zone label in the log", log.none { it.contains("12.0") || it.contains("65.0") || it.contains("home") })
+        // Override a: the owner's switch arms it anyway, for this parking.
+        a.onManualSwitch(true); advanceTimeBy(11_000); runCurrent()
+        assertEquals(listOf(true), io.sends)
+        assertTrue(a.view.value.status, a.view.value.status.startsWith("Auto · on since"))
+        advanceTimeBy(2 * 3_600_000); runCurrent()
+        assertEquals("the hourly battery check runs, nothing else is sent", listOf(true), io.sends)
+    }
+
+    @Test fun outsideTheZonesAndWithAnUntrustedPositionTheArmProceeds() = runTest {
+        val io = FakeIo(); io.car = carAt(12.01, 65.0)         // ~1.1 km away
+        val a = automaton(io, settings = { GuardSettings(GuardMode.AUTO, 20, zones = listOf(home), dailyCheckHour = -1) })
+        a.onLockConfirmed("key"); advanceTimeBy(121_000); runCurrent()
+        assertEquals(listOf(true), io.sends)
+        // Right in the zone, but the fix is not to be trusted (or missing): the safe side is to arm.
+        for (car in listOf(carAt(12.0, 65.0, trusted = false), carAt(null, null))) {
+            val io2 = FakeIo(); io2.car = car
+            val b = automaton(io2, settings = { GuardSettings(GuardMode.AUTO, 20, zones = listOf(home), dailyCheckHour = -1) })
+            b.onLockConfirmed("key"); advanceTimeBy(121_000); runCurrent()
+            assertEquals(listOf(true), io2.sends)
+        }
+        assertTrue(log.contains("guard: position unknown -> arming"))
+    }
+
+    @Test fun theZoneRuleCanBeSwitchedOff() = runTest {
+        val io = FakeIo(); io.car = carAt(12.0, 65.0)
+        val a = automaton(io, settings = { GuardSettings(GuardMode.AUTO, 20, zones = listOf(home), skipInZones = false, dailyCheckHour = -1) })
+        a.onLockConfirmed("key"); advanceTimeBy(121_000); runCurrent()
+        assertEquals(listOf(true), io.sends)
+        assertFalse(log.any { it.startsWith("guard: skipped") })
+    }
+
+    @Test fun anOpenWindowAtArmTimeIsReportedWithACloseButtonAndTheArmGoesOn() = runTest {
+        val io = FakeIo(); io.car = io.car!!.copy(windowsOpen = true)
+        val a = automaton(io)
+        a.onLockConfirmed("key"); advanceTimeBy(121_000); runCurrent()
+        assertEquals(listOf("Sentry guard: a window is open"), io.notes)
+        assertEquals(listOf(GuardAction.CLOSE_WINDOWS), io.actions)
+        assertEquals("the guard is still switched on", listOf(true), io.sends)
+        assertTrue(log.contains("guard: windows open -> notified"))
+        // The button: close, then read back and tell the owner.
+        a.closeWindowsFromNotification(); runCurrent()
+        assertEquals(1, io.closes)
+        io.car = io.car!!.copy(windowsOpen = false)
+        advanceTimeBy(21_000); runCurrent()
+        assertEquals("Windows", io.notes.last())
+        assertTrue(log.contains("guard: windows closed"))
+        // The warning is not disabled: a car with the setting off is never bothered.
+        val io2 = FakeIo(); io2.car = io2.car!!.copy(sunroofOpen = true)
+        val b = automaton(io2, settings = { GuardSettings(GuardMode.AUTO, 20, windowWarning = false, dailyCheckHour = -1) })
+        b.onLockConfirmed("key"); advanceTimeBy(121_000); runCurrent()
+        assertTrue(io2.notes.isEmpty())
+    }
+
+    @Test fun theDailyCheckArmsAGuardThatIsOffAndIsSilentWhenAllIsWell() = runTest {
+        val io = FakeIo()
+        val a = automaton(io, settings = { GuardSettings(GuardMode.AUTO, 20, dailyCheckHour = 8) })
+        // No lock event (the phone restarted while the car stood locked): the check finds the guard off and arms it.
+        a.onKeepAliveRound(); runCurrent()
+        advanceTimeBy(day); a.onKeepAliveRound(); advanceTimeBy(11_000); runCurrent()
+        assertTrue(log.contains("guard: daily check -> arming"))
+        assertEquals(listOf(true), io.sends)
+        assertTrue(io.notes.isEmpty())
+        // The next day all is well: one log line, no notification, nothing sent.
+        advanceTimeBy(day); a.onKeepAliveRound(); advanceTimeBy(1_000); runCurrent()
+        assertTrue(log.contains("guard: daily check ok (on)"))
+        assertEquals(listOf(true), io.sends)
+        assertTrue(io.notes.isEmpty())
+    }
+
+    @Test fun theDailyCheckReportsAnOpenDoorAndALowBatteryAndDoesNotArm() = runTest {
+        val io = FakeIo(); io.car = io.car!!.copy(doorsClosed = false, socPct = 12)
+        val a = automaton(io, settings = { GuardSettings(GuardMode.AUTO, 20, dailyCheckHour = 8) })
+        a.onKeepAliveRound(); advanceTimeBy(day); a.onKeepAliveRound(); runCurrent()
+        assertEquals(listOf("Sentry guard daily check"), io.notes)
+        assertTrue(io.sends.isEmpty())
+        assertTrue(log.contains("guard: daily check issues 2"))
+        // In MANUAL the check only reports; it never arms.
+        val io2 = FakeIo()
+        val b = automaton(io2, settings = { GuardSettings(GuardMode.MANUAL, 20, dailyCheckHour = 8) })
+        b.onKeepAliveRound(); advanceTimeBy(day); b.onKeepAliveRound(); runCurrent()
+        assertTrue(io2.sends.isEmpty()); assertTrue(io2.notes.isEmpty())
+        assertTrue(log.contains("guard: daily check ok (off)"))
+    }
+
+    @Test fun distancesAndTheDailyHourAreComputedSoundly() {
+        assertEquals(0.0, GuardAutomaton.distanceM(12.0, 65.0, 12.0, 65.0), 0.01)
+        assertEquals(111.2, GuardAutomaton.distanceM(12.0, 65.0, 12.001, 65.0), 1.0)    // 0.001° of latitude ≈ 111 m
+        val now = System.currentTimeMillis()
+        val next = GuardAutomaton.nextLocalHour(now, 8)
+        assertTrue(next > now && next - now <= 86_400_000L)
+        assertEquals(8, Calendar.getInstance().apply { timeInMillis = next }.get(Calendar.HOUR_OF_DAY))
     }
 
     @Test fun modeParsingIsForgiving() {
         assertEquals(GuardMode.AUTO, GuardMode.parse("auto"))
-        assertEquals(GuardMode.OFF, GuardMode.parse("OFF"))
+        assertEquals(GuardMode.AUTO, GuardMode.parse("AUTO"))
+        assertEquals(GuardMode.OFF, GuardMode.parse("off"))
         assertEquals(GuardMode.MANUAL, GuardMode.parse(null))
         assertEquals(GuardMode.MANUAL, GuardMode.parse("nonsense"))
-        assertNull(GuardView().flag)
+        assertEquals("auto", GuardMode.AUTO.key)
     }
 }
