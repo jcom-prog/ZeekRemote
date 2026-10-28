@@ -47,6 +47,10 @@ class DiagnosticExportTest {
             l("nav", "sendToCar: received (title=yes text=yes subject=no uri=no)"),
             l("nav", "sendToCar: resolved via the shared link"),
             l("nav", "sendToCar: sent ok"),
+            // 0.4.5: the guard automaton's steps (area "guard") carry no place, name or token.
+            l("guard", "guard: episode started (walk-away ble-departure)"),
+            l("guard", "guard: on sent (attempt 1)"),
+            l("guard", "guard: on confirmed after 60 s"),
         )
         assertEquals(decision, DiagnosticExport.filterAppLog(decision))
         // ...while identifiers in any spelling still drop the line.

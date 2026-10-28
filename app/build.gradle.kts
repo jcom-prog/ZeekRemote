@@ -20,8 +20,8 @@ android {
         applicationId = "com.openzeekr.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 167
-        versionName = "0.4.4"
+        versionCode = 168
+        versionName = "0.4.5"
         // App-global secrets are baked in :core (SecretsConfig + BuildConfig live there).
     }
 

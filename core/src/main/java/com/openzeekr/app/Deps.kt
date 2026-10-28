@@ -133,6 +133,61 @@ class Deps(context: Context) {
             }
         },
     )
+    /** 0.4.5: the Sentry guard automaton - reads the car's guard flag and status from the cloud, sends the guard
+     *  command, notifies the owner; fed by the engine's confirmed Locks and Unlocks (see [ProximityController.lockEvents]). */
+    val guard: com.openzeekr.app.guard.GuardAutomaton = com.openzeekr.app.guard.GuardAutomaton(
+        appScope,
+        io = object : com.openzeekr.app.guard.GuardIo {
+            private val wakeLocks = com.openzeekr.app.ble.AndroidSafetyWakeLocks(appCtx)
+            private var held: Any? = null
+            override suspend fun readFlag(): Boolean? {
+                if (config.current().accessToken.isBlank()) return null
+                return (control.controlState() as? com.openzeekr.app.remote.CallResult.Ok)?.value
+                    ?.get("vstdModeState")?.let { it == "1" }
+            }
+            override suspend fun readCar(): com.openzeekr.app.guard.GuardCar? {
+                if (config.current().accessToken.isBlank()) return null
+                val status = (control.status() as? com.openzeekr.app.remote.CallResult.Ok)?.value ?: return null
+                val safety = status.additionalVehicleStatus?.drivingSafetyStatus
+                val ev = status.additionalVehicleStatus?.electricVehicleStatus
+                // Door, hood and tailgate flags: "0" = closed, anything else open; unknown (null) is not "open".
+                fun closed(vararg flags: String?): Boolean? =
+                    if (flags.all { it == null }) null else flags.all { it == null || it == "0" }
+                val soc = (ev?.stateOfCharge?.toDoubleOrNull() ?: ev?.chargeLevel?.toDoubleOrNull())
+                    ?.let { kotlin.math.round(it).toInt() }?.takeIf { it in 0..100 }
+                return com.openzeekr.app.guard.GuardCar(
+                    locked = safety?.centralLockingStatus?.let { it == "1" },
+                    doorsClosed = closed(safety?.doorOpenStatusDriver, safety?.doorOpenStatusDriverRear,
+                        safety?.doorOpenStatusPassenger, safety?.doorOpenStatusPassengerRear),
+                    hoodClosed = closed(safety?.engineHoodOpenStatus),
+                    trunkClosed = closed(safety?.trunkOpenStatus),
+                    socPct = soc,
+                    charging = ev?.chargingActive == true,
+                )
+            }
+            override suspend fun send(on: Boolean): Boolean {
+                if (config.current().accessToken.isBlank()) return false
+                val cmd = if (on) com.openzeekr.app.remote.Command.SENTINEL_ON else com.openzeekr.app.remote.Command.SENTINEL_OFF
+                return control.send(cmd) is com.openzeekr.app.remote.CallResult.Ok
+            }
+            override fun notify(title: String, text: String) =
+                com.openzeekr.app.guard.GuardNotifier.show(appCtx, title, text)
+            override fun hold(active: Boolean) {
+                if (active) { if (held == null) held = wakeLocks.acquire(6 * 60_000L) }
+                else { wakeLocks.release(held); held = null }
+            }
+        },
+        settings = {
+            val c = config.current()
+            com.openzeekr.app.guard.GuardSettings(
+                com.openzeekr.app.guard.GuardMode.parse(c.guardMode), c.guardSocThresholdPct.coerceIn(0, 100))
+        },
+        log = { com.openzeekr.app.util.Logx.d("guard", it) },
+    ).also { guard ->
+        proximity.lockEvents = { locked, source ->
+            if (locked) guard.onLockConfirmed(source) else guard.onUnlockConfirmed(source)
+        }
+    }
     /** BLE-first, cloud-fallback dispatcher; confirmed unlocks centrally arm walk-away monitoring. */
     val vehicleControl = com.openzeekr.app.remote.VehicleControl(
         ble,

@@ -374,6 +374,7 @@ class ProximityService : Service() {
             // Measurement version: one fuel-gauge sample per keep-alive round (CPU already awake);
             // the meter itself rate-bounds to one per minute.
             runCatching { deps.batteryMeter.sample("keep-alive") }
+            runCatching { deps.guard.onKeepAliveRound() }   // 0.4.5: the guard's hourly battery check, when due
             if (deps.ble.hasCredential && deps.ble.bluetoothAvailable) {
                 val offload = deps.config.config.value.presenceOffloadEnabled
                 when (deps.ble.state.value) {

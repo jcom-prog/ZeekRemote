@@ -39,6 +39,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FilterChip
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import com.openzeekr.app.guard.GuardAutomaton
+import com.openzeekr.app.guard.GuardMode
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.foundation.text.KeyboardOptions
@@ -51,9 +61,9 @@ import com.openzeekr.app.ui.theme.Brand
 import kotlinx.coroutines.launch
 
 /**
- * Security & access: sentry guard (with "auto-arm on lock"), glovebox PIN, visitor
- * mode, vehicle location, journey log. Sentry is wired to SENTINEL_ON/OFF; the rest
- * are placeholders pending their serviceId wiring (ZAD/ZAG/ms-vehicle-trail).
+ * Security & access: sentry guard (0.4.5: the switch follows the car's flag, re-read every time the tab comes
+ * to the front; the automaton in Deps.guard sends the command, polls the car until it confirms and, in Auto,
+ * switches the guard on after every lock), glovebox PIN, visitor mode, journey log.
  */
 @Composable
 fun SecurityScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = Modifier) {
@@ -62,9 +72,8 @@ fun SecurityScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
     // Visitor mode + glovebox PIN are owner-only server-side (a shared/Friend account gets 403), so
     // only surface them when we're logged in as the vehicle owner (vehicle-list `isOwner`).
     val owner = cfg.isOwner
-    // Seeded below from getVehicleState `vstdModeState` (the sentry/guard armed flag). Starts off
-    // until that first read lands.
-    var sentry by remember { mutableStateOf(false) }
+    // 0.4.5: the guard row follows the automaton - the car's flag, the mode, one status line.
+    val guard by deps.guard.view.collectAsState()
     var visitor by remember { mutableStateOf(false) }
     var gloveboxLocked by remember { mutableStateOf(false) }
     // A PIN entry is pending for one of these commands (glovebox / visitor need a code).
@@ -74,15 +83,24 @@ fun SecurityScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
 
     // Seed the real on/off state from getVehicleState (captured 2026-09-16): sentry/guard =
     // `vstdModeState` ("1"=armed), visitor = `visitorModeState`. So the toggles reflect the car,
-    // not just the last in-app action.
-    LaunchedEffect(Unit) {
+    // not just the last in-app action. 0.4.5: read again on every ON_RESUME (the tab used to read once and
+    // then show a stale "Armed"); the guard flag goes to the automaton, which notices a switch made elsewhere.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var resumes by remember { mutableStateOf(0) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) resumes++ }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(resumes) {
+        if (resumes == 0) return@LaunchedEffect   // the observer delivers ON_RESUME itself
         when (val r = deps.control.controlState()) {
             is CallResult.Ok -> {
-                sentry = r.value["vstdModeState"] == "1"
+                deps.guard.onFlagRead(r.value["vstdModeState"]?.let { it == "1" })
                 visitor = r.value["visitorModeState"] == "1"
                 gloveboxLocked = r.value["gloveboxLocked"] == "1"
             }
-            is CallResult.Err -> {}
+            is CallResult.Err -> deps.guard.onFlagRead(null)
         }
     }
 
@@ -103,13 +121,14 @@ fun SecurityScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
     Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
         Label("Security & access")
         Column(Modifier.padding(horizontal = 20.dp)) {
-            SecRow(Icons.Filled.Shield, "Sentry guard",
-                if (sentry) "Armed" else "Off") {
-                Switch(checked = sentry, onCheckedChange = { on ->
-                    sentry = on
-                    fire(if (on) "Sentry on" else "Sentry off", if (on) Command.SENTINEL_ON else Command.SENTINEL_OFF)
-                }, colors = brandSwitchColors(Brand.good))
+            // 0.4.5: the switch shows the car's flag; the automaton sends the command and polls the car until it
+            // confirms (about a minute), so the row can no longer stand still at a stale "Armed".
+            SecRow(Icons.Filled.Shield, "Sentry guard", guard.status) {
+                Switch(checked = guard.flag == true, enabled = !guard.pending && guard.mode != GuardMode.OFF,
+                    onCheckedChange = { on -> deps.guard.onManualSwitch(on) },
+                    colors = brandSwitchColors(Brand.good))
             }
+            GuardSettingsRows(deps, guard.mode, cfg.guardSocThresholdPct, guard.flag, guard.flagReadAtMs, guard.lastSocPct)
             // Owner-only (shared accounts are refused server-side). Both need the user's PIN.
             if (owner) {
                 SecRow(Icons.Filled.Inventory2, "Glovebox lock",
@@ -153,6 +172,55 @@ fun SecurityScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
             })
         }
     }
+}
+
+/** 0.4.5: the guard mode (Off / Manual / Auto), the battery threshold and what the car last said. */
+@Composable
+private fun GuardSettingsRows(deps: Deps, mode: GuardMode, thresholdPct: Int, flag: Boolean?, flagReadAtMs: Long, lastSocPct: Int?) {
+    var threshold by remember(thresholdPct) { mutableStateOf(thresholdPct.toString()) }
+    Column(Modifier.padding(start = 46.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (m in GuardMode.values()) {
+                FilterChip(
+                    selected = mode == m,
+                    onClick = {
+                        if (mode != m) { deps.config.update { it.copy(guardMode = m.key) }; deps.guard.onSettingsChanged() }
+                    },
+                    label = { Text(when (m) { GuardMode.OFF -> "Off"; GuardMode.MANUAL -> "Manual"; GuardMode.AUTO -> "Auto" }) },
+                )
+            }
+        }
+        if (mode == GuardMode.AUTO) {
+            OutlinedTextField(
+                value = threshold,
+                onValueChange = { s ->
+                    if (s.length <= 3 && s.all(Char::isDigit)) {
+                        threshold = s
+                        s.toIntOrNull()?.takeIf { it in 0..100 }?.let { pct ->
+                            if (pct != thresholdPct) { deps.config.update { it.copy(guardSocThresholdPct = pct) }; deps.guard.onSettingsChanged() }
+                        }
+                    }
+                },
+                label = { Text("Battery threshold (%)") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text("Auto: ${GuardAutomaton.ARM_DELAY_MS / 60_000} min after a lock, with every door, the hood and the tailgate " +
+                "closed and the battery above $thresholdPct%, the guard is switched on and the car is asked to confirm. " +
+                "Below $thresholdPct% it is switched off again (back on above ${thresholdPct + GuardAutomaton.HYSTERESIS_PCT}% " +
+                "or while charging). Your own switch, here or on the car's screen, wins until the next lock.",
+                color = Brand.muted, fontSize = 11.sp)
+        }
+        Text(guardCarLine(flag, flagReadAtMs, lastSocPct), color = Brand.muted, fontSize = 11.sp)
+    }
+}
+
+private fun guardCarLine(flag: Boolean?, readAtMs: Long, soc: Int?): String {
+    val says = when (flag) { true -> "on"; false -> "off"; null -> "not read yet" }
+    val read = if (readAtMs > 0L) " · read " + SimpleDateFormat("HH:mm", Locale.US).format(Date(readAtMs)) else ""
+    val battery = soc?.let { " · battery $it%" } ?: ""
+    return "Car says $says$read$battery"
 }
 
 @Composable

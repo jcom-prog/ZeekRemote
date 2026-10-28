@@ -12,7 +12,7 @@ package com.openzeekr.app.util
  */
 object DiagnosticExport {
     /** Decision areas kept in full (still subject to [DENY] and [redact]). */
-    private val AREAS = setOf("prox", "svc", "motion", "lock", "charge", "nav")   // 0.4.4: "nav" = send-to-car steps, content-free
+    private val AREAS = setOf("prox", "svc", "motion", "lock", "charge", "nav", "guard")   // 0.4.4: "nav" = send-to-car steps; 0.4.5: "guard" = the guard automaton; both content-free
     /** Key-session lines worth keeping: status, session start, handshake progress. */
     private val DK_SAFE = listOf("vehicle status observed", "status pushed during the handshake",
         "=== DK session established", "handshake ")

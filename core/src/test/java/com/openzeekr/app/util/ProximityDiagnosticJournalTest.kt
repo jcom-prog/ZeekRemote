@@ -341,4 +341,23 @@ class ProximityDiagnosticJournalTest {
         assertNull(ProximityDiagnosticJournal.event("prox", "watch: control CLIMATE_ON ok token=private"))
         assertNull(ProximityDiagnosticJournal.event("ble", "watch: key sent"))
     }
+
+    @Test fun theGuardAutomatonIsJournaledAsContentFreeSteps() {
+        // 0.4.5: every "guard:" step - words, counts, percentages and the lock source in brackets; nothing else.
+        assertEquals("GUARD episode started (walk-away ble-departure)",
+            ProximityDiagnosticJournal.event("guard", "guard: episode started (walk-away ble-departure)"))
+        assertEquals("GUARD on sent (attempt 1)", ProximityDiagnosticJournal.event("guard", "guard: on sent (attempt 1)"))
+        assertEquals("GUARD on confirmed after 60 s", ProximityDiagnosticJournal.event("guard", "guard: on confirmed after 60 s"))
+        assertEquals("GUARD skipped (low soc 15%)", ProximityDiagnosticJournal.event("guard", "guard: skipped (low soc 15%)"))
+        assertEquals("GUARD off sent (low soc 14%)", ProximityDiagnosticJournal.event("guard", "guard: off sent (low soc 14%)"))
+        assertEquals("GUARD not confirmed -> notified", ProximityDiagnosticJournal.event("guard", "guard: not confirmed -> notified"))
+        assertEquals("GUARD mode auto threshold 20%", ProximityDiagnosticJournal.event("guard", "guard: mode auto threshold 20%"))
+        assertEquals("GUARD off detected", ProximityDiagnosticJournal.event("guard", "guard: off detected"))
+        // Anything that could carry a value or an identifier is refused whole.
+        assertNull(ProximityDiagnosticJournal.event("guard", "guard: on sent vin=LTESTVIN000000001"))
+        assertNull(ProximityDiagnosticJournal.event("guard", "guard: Episode started"))
+        assertNull(ProximityDiagnosticJournal.event("guard", "guard: on at 12.3456,65.4321"))
+        assertNull(ProximityDiagnosticJournal.event("guard", "on sent (attempt 1)"))
+        assertNull(ProximityDiagnosticJournal.event("prox", "guard: on sent (attempt 1)"))
+    }
 }

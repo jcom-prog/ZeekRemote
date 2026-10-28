@@ -2,6 +2,12 @@
 
 Wat je per versie merkt, in gewone taal. ZeekRemote is een privé-afsplitsing van [OpenZeekr](https://github.com/borconi/openzeekr) (splitpunt: OpenZeekr 0.1.4) voor één telefoon en één auto; de nadruk ligt op betrouwbaar openen bij het naderen en sluiten bij het weglopen, met een simulator en een regressiepoort als bewaker. Dit logboek bevat geen meetwaarden, tijden, plaatsen of persoonsgegevens; technische details staan in de commits.
 
+## 0.4.5 (alleen telefoon)
+
+- **Sentry guard automatisch aan na het sluiten.** De auto zet zijn bewaking nooit zelf aan; tot nu toe moest dat na elke parkering met de hand. In de stand *Auto* (Security-tab) doet ZeekRemote het: twee minuten na een bevestigde sluiting, als de auto gesloten is met alle deuren, de motorkap en de achterklep dicht en de accu boven de door jou gekozen grens, stuurt de app de opdracht en leest hij terug of de auto het bevestigt (de cloud doet daar ongeveer een minuut over); na één herhaling zonder bevestiging krijg je een melding. Je eigen schakelaar, in de app of op het scherm van de auto, wint tot de volgende sluiting. *Handmatig* laat alles aan de schakelaar; *Uit* houdt de app bij de bewaking vandaan.
+- **Accugrens die je zelf typt.** Onder het percentage dat je in de Security-tab invult, zet de automaat de bewaking uit (met een melding) en slaat hij het inschakelen over; hij komt terug zodra de accu vijf punten boven de grens staat of de auto laadt. De controle loopt elk uur mee met de bestaande verbindingsronde van de app.
+- **De schakelaar toont wat de auto zegt.** De stand van de bewaking wordt elke keer opnieuw gelezen als de Security-tab naar voren komt (voorheen één keer, waarna de tab bleef staan op een verouderd "Armed"); onder de rij staat wat de auto het laatst meldde, met het tijdstip en de accustand. Elke stap van de automaat staat zonder plaats, naam of waarde in de diagnose-export. De horloge-app verandert niet en blijft 0.4.3.
+
 ## 0.4.4 (alleen telefoon)
 
 - **Bestemming naar de auto sturen is nu zichtbaar.** Na "Send to Zeekr" in het deelmenu van Google Maps toont ZeekRemote meteen dat hij de gedeelde plek leest (een korte Maps-koppeling wordt via het netwerk opgelost), vraagt om bevestiging met de volledige naam van de plek (straat en nummer, niet alleen het huisnummer) en meldt in een venster dat blijft staan of de bestemming is verzonden, of waarom niet, met een knop om het opnieuw te proberen. De stappen staan zonder plaats, naam of koppeling in de diagnose-export. De horloge-app verandert niet en blijft 0.4.3.

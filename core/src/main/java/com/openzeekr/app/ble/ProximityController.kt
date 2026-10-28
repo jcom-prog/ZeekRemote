@@ -127,6 +127,9 @@ class ProximityController internal constructor(
 
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state
+    /** 0.4.5: every confirmed Lock (true) and Unlock (false) with its source, for the guard automaton (Deps wires it;
+     *  null in the simulator). Called on the engine's scope; never throws into the engine. */
+    var lockEvents: ((locked: Boolean, source: String) -> Unit)? = null
 
     /**
      * Self-calibration per phone (0.3.1): learns from this phone's RAW readings at known moments;
@@ -883,11 +886,13 @@ class ProximityController internal constructor(
             } else {
                 Logx.d("prox", "lock ${if (bleConfirmed) "confirmed" else "requested"} ($source); proximity disabled/stopped")
             }
+            runCatching { lockEvents?.invoke(true, source) }   // 0.4.5: the guard automaton's parking episode
         }
     }
 
     private fun recordUnlockConfirmed(source: String, restored: Boolean = false) {
         if (!restored) lastUnlockSource = source
+        if (!restored) runCatching { lockEvents?.invoke(false, source) }   // 0.4.5: the guard automaton's episode ends
         manualCloudLockCheck?.cancel(); manualCloudLockCheck = null
         resetLinkedWatch()
         val now = clock.wallMs()
@@ -2864,6 +2869,7 @@ class ProximityController internal constructor(
                 if (r == ControlResult.CONFIRMED) {
                     confirmed = true
                     Logx.d("prox", "auto lock confirmed ($reason): the car reports locked")
+                    runCatching { lockEvents?.invoke(true, "walk-away $reason") }   // 0.4.5: the guard automaton
                     // The guard of the walk-back return starts at the confirmed Lock (review 0.1.63).
                     policies("onAutomaticLockProvenDeparture") { it.onAutomaticLockProvenDeparture(clock.wallMs()) }
                     // The car acknowledged: stop any alarm now, not after the cloud catches up.
@@ -3097,7 +3103,10 @@ class ProximityController internal constructor(
                     Logx.d("prox", "$reason: cloud lock vehicle state=" +
                         when (state) { true -> "LOCKED"; false -> "UNLOCKED"; null -> "unknown" })
                     if (state == true) {
-                        if (++consecutiveLocked >= 2) return true
+                        if (++consecutiveLocked >= 2) {
+                            runCatching { lockEvents?.invoke(true, "walk-away cloud $reason") }   // 0.4.5: the guard automaton
+                            return true
+                        }
                     } else consecutiveLocked = 0
                 }
             }

@@ -118,6 +118,12 @@ data class SecretsConfig(
 
     // ---- proximity (RSSI-based approach-unlock / walk-away-lock) ----
     val proximityEnabled: Boolean = false,
+    /** 0.4.5: the Sentry guard automaton - "off" (the app leaves the guard alone), "manual" (the switch in the
+     *  Security tab only) or "auto" (switched on after every confirmed Lock; see GuardAutomaton). */
+    val guardMode: String = "manual",
+    /** 0.4.5: below this battery percentage the automaton switches the guard off and skips arming; the owner
+     *  types any value 0-100 in the Security tab. */
+    val guardSocThresholdPct: Int = 20,
     /** Share the digital key with a paired Wear OS watch (Settings "Watch key"). Off: a watch asking for the
      *  key is told to purge its copy instead. Anyone wearing a provisioned watch has a working key to the car. */
     val watchKeyEnabled: Boolean = true,
