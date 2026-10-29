@@ -158,7 +158,8 @@ jobs:
       # more worst cases (quick STILL, hand wobble, the field of 16/10), about 17 min. 0.3.13: the strong spot also
       # while walking and F45 (to and fro after the Lock), about 19 min.
       - name: Simulation safety gate
-        run: SIM_GATE=1 SIM_LEARN_VISITS=20 SIM_PLATEAU_P=0.15 ./gradlew :core:testDebugUnitTest --tests "com.openzeekr.app.ble.sim.SimGateTest" --stacktrace
+        # 0.4.8b: the gate runs the mode the phone runs (LIVE); the baseline is the LIVE baseline of 29/10.
+        run: SIM_OWN_MODE=live SIM_GATE=1 SIM_LEARN_VISITS=20 SIM_PLATEAU_P=0.15 ./gradlew :core:testDebugUnitTest --tests "com.openzeekr.app.ble.sim.SimGateTest" --stacktrace
 
       - name: Upload simulation gate report
         if: always()
@@ -528,7 +529,8 @@ jobs:
           grep -Fq 'fun dcFastChargePowerIsReadFromTheStatusAndSigned()' core/src/test/java/com/openzeekr/app/net/model/UpstreamPortsTest.kt
           grep -Fq '## 0.3.30' CHANGELOG.md
           # 0.4.0b (owner decision 23/10): the own step counter's rules (walk evidence, 2 dB rise hold, walk credit) as fixed code in SHADOW mode - the live decisions stay 0.3.30, a second policy logs what the rules would do.
-          grep -Fq 'val mode: Mode = when (System.getenv("SIM_OWN_MODE")) { "off" -> Mode.OFF; "live" -> Mode.LIVE; else -> Mode.SHADOW }' core/src/main/java/com/openzeekr/app/ble/OwnRules.kt
+          # 0.4.8b: the phone runs LIVE (measurement step, owner decision 29/10); the unit tests get SHADOW through the property
+          grep -Fq '"off" -> Mode.OFF; "shadow" -> Mode.SHADOW; "live" -> Mode.LIVE; else -> Mode.LIVE' core/src/main/java/com/openzeekr/app/ble/OwnRules.kt
           grep -Fq 'val creditSteps: Long = envLong("SIM_OWN_RISE_WALK", 12L)' core/src/main/java/com/openzeekr/app/ble/OwnRules.kt
           grep -Fq 'val creditFarDb: Int = envInt("SIM_OWN_RISE_FAR_DB", 8)' core/src/main/java/com/openzeekr/app/ble/OwnRules.kt
           grep -Fq 'private val riseHoldOn = ownRules && OwnRules.riseHold' core/src/main/java/com/openzeekr/app/ble/ProximityDecisionPolicy.kt
@@ -608,6 +610,12 @@ jobs:
           grep -Fq '## 0.4.7' CHANGELOG.md
           # 0.4.8: the parking rule (wait until the phone has left the car), 5+5 min of patience, the notice withdrawn on a late confirmation
           grep -Fq '## 0.4.8' CHANGELOG.md
+          # 0.4.8b: the own rules LIVE on the phone, the deep GNSS route, the 20 s anchor median (measurement step)
+          grep -Fq '## 0.4.8b' CHANGELOG.md
+          grep -Fq 'val gnssOpenDeep' core/src/main/java/com/openzeekr/app/ble/OwnRules.kt
+          grep -Fq 'val anchorAvgMs' core/src/main/java/com/openzeekr/app/ble/OwnRules.kt
+          grep -Fq 'departure near anchor median' core/src/main/java/com/openzeekr/app/ble/DepartureLocationSource.kt
+          grep -Fq 'zeekremote.ownRulesMode' core/build.gradle.kts
           grep -Fq 'fun atCar(): Boolean?' core/src/main/java/com/openzeekr/app/guard/GuardAutomaton.kt
           grep -Fq 'waiting until the car is parked and you have left' core/src/main/java/com/openzeekr/app/guard/GuardAutomaton.kt
           grep -Fq 'guard: on confirmed late' core/src/main/java/com/openzeekr/app/guard/GuardAutomaton.kt
@@ -660,7 +668,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='171' versionName='0.4.8-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='172' versionName='0.4.8b-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

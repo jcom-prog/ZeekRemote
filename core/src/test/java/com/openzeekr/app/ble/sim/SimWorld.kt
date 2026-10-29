@@ -1302,7 +1302,27 @@ internal class SimWorld(
                     if (!enabled()) return null
                     val f = fix() ?: continue
                     // The anchor is the walker's own fix while BLE says "at the car" (real policy decides).
-                    if (policy.rejection(f, clock.elapsedMs()) == null) return f
+                    if (policy.rejection(f, clock.elapsedMs()) == null) {
+                        // 0.4.8b (study 4k): as the real locator - keep collecting accepted fixes for OwnRules.anchorAvgMs
+                        // (the walker still at the car), then hand back their component-wise median; the first fix alone
+                        // when the knob is 0. A rejected fix (the walker left) or the epoch's end stops the collection.
+                        val avgMs = OwnRules.anchorAvgMs
+                        val acc = mutableListOf(f)
+                        val stop = now() + avgMs
+                        while (avgMs > 0L && now() < stop && now() < until && enabled()) {
+                            delay(1_000L)
+                            val g = fix() ?: continue
+                            if (policy.rejection(g, clock.elapsedMs()) != null) break
+                            acc += g
+                        }
+                        fun med(v: List<Double>): Double { val s = v.sorted(); return if (s.size % 2 == 1) s[s.size / 2] else (s[s.size / 2 - 1] + s[s.size / 2]) / 2 }
+                        val anchor = if (acc.size == 1) f else DepartureFix(med(acc.map { it.latitude }), med(acc.map { it.longitude }),
+                            med(acc.map { it.accuracyM.toDouble() }).toFloat(), acc.last().elapsedAtMs)
+                        // The car sits at latitude 52.0: the anchor's error against the true car position, in metres.
+                        log('D', "sim", "anchor n=%d err=%.1f first=%.1f walker=%.1f".format(acc.size,
+                            (anchor.latitude - 52.0) * 111_000.0, (f.latitude - 52.0) * 111_000.0, distanceM))
+                        return anchor
+                    }
                 }
                 return null
             } finally { gnssActive-- }

@@ -23,7 +23,11 @@ package com.openzeekr.app.ble
 internal object OwnRules {
     enum class Mode { OFF, SHADOW, LIVE }
 
-    val mode: Mode = when (System.getenv("SIM_OWN_MODE")) { "off" -> Mode.OFF; "live" -> Mode.LIVE; else -> Mode.SHADOW }
+    /** 0.4.8b (owner decision 29/10, measurement step): the app runs LIVE. The simulator picks the mode by env as before;
+     *  the unit tests get SHADOW through a system property (core/build.gradle.kts), so they keep testing what they tested. */
+    val mode: Mode = when (System.getenv("SIM_OWN_MODE") ?: System.getProperty("zeekremote.ownRulesMode")) {
+        "off" -> Mode.OFF; "shadow" -> Mode.SHADOW; "live" -> Mode.LIVE; else -> Mode.LIVE
+    }
     /** The rules decide. */
     val live: Boolean get() = mode == Mode.LIVE
     /** The own counter is read at all: its windows, the shadow policy, the logging. */
@@ -128,10 +132,20 @@ internal object OwnRules {
      *  at a locked reset: 72.8 % against 73.1 % open before the door, otherwise alike. */
     val gnssOpenStrict: Boolean = System.getenv("SIM_OWN_GNSS_OPEN_STRICT") == "1"
 
+    // ---- 0.4.8b (study 4h "deep" + study 4k "a20", owner decision 29/10 as a measurement step) ----
+    /** The route also acts on a far reading (below unlock - 2 dB) while the fix set is near; the band knob then binds.
+     *  Field 29/10 07:12: the pocket signal hung 2-10 dB below the level for 17 s while the fixes said 3-4 m. */
+    val gnssOpenDeep: Boolean = System.getenv("SIM_OWN_GNSS_OPEN_DEEP") != "0"
+    /** The car's near anchor is the component-wise median of the fixes accepted over this long after the first one
+     *  (0 = the first fix alone, as before); only when the rules decide (LIVE), so OFF and SHADOW keep the old anchor.
+     *  Study 4k: a quarter less anchor error, the far openings of the deep route 52 -> 25. */
+    val anchorAvgMs: Long get() = if (live) envLong("SIM_ANCHOR_AVG_S", 20L) * 1_000L else 0L
+
     fun describe(): String = "own rules $mode (dr ${drMetres}m/${drDb}dB, hold ${if (riseHold) "+${riseDb}dB" else "off"}, " +
         "credit ${creditSteps} steps since -${creditFarDb}dB within ${creditWindowMs / 1000}s, " +
         "gnss ${if (gnssRules) "gate ${gnssFarM}m${if (gnssVeto) " + veto" else ""}" +
-            (if (gnssOpenM > 0.0) " + open ${gnssOpenM}m x$gnssOpenPersist" else "") else "off"})"
+            (if (gnssOpenM > 0.0) " + open ${gnssOpenM}m x$gnssOpenPersist${if (gnssOpenDeep) " deep" else ""}" else "") else "off"}, " +
+        "anchor ${anchorAvgMs / 1000}s)"
 
     private fun envInt(name: String, default: Int): Int = System.getenv(name)?.toIntOrNull() ?: default
     private fun envLong(name: String, default: Long): Long = System.getenv(name)?.toLongOrNull() ?: default

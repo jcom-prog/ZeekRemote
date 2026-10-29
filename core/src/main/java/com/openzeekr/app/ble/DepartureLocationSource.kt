@@ -50,7 +50,28 @@ internal class DepartureLocationSource(context: Context) : DepartureLocator {
                                 location.accuracy, location.elapsedRealtimeNanos / 1_000_000L)
                             val reason = policy.rejection(fix, android.os.SystemClock.elapsedRealtime())
                             Logx.d("prox", "departure near anchor outcome=${reason ?: "accepted"}")
-                            if (reason == null) continuation.resume(fix)
+                            // 0.4.8b (study 4k "a20"): keep collecting accepted fixes for OwnRules.anchorAvgMs after the
+                            // first one and hand back their component-wise median; a rejected fix (the owner left) or
+                            // the timer hands back what is there. 0 ms = the first fix alone, as before.
+                            val avgMs = OwnRules.anchorAvgMs
+                            if (reason == null) {
+                                if (avgMs <= 0L) { continuation.resume(fix); return }
+                                if (collected.isEmpty()) {
+                                    collected += fix
+                                    handler.postDelayed({ finishWithMedian() }, avgMs)
+                                } else collected += fix
+                            } else if (collected.isNotEmpty()) finishWithMedian()
+                        }
+                        private val handler = android.os.Handler(Looper.getMainLooper())
+                        private val collected = mutableListOf<DepartureFix>()
+                        private fun finishWithMedian() {
+                            if (!continuation.isActive || collected.isEmpty()) return
+                            fun med(v: List<Double>): Double { val s = v.sorted(); return if (s.size % 2 == 1) s[s.size / 2] else (s[s.size / 2 - 1] + s[s.size / 2]) / 2 }
+                            val anchor = if (collected.size == 1) collected[0] else DepartureFix(
+                                med(collected.map { it.latitude }), med(collected.map { it.longitude }),
+                                med(collected.map { it.accuracyM.toDouble() }).toFloat(), collected.last().elapsedAtMs)
+                            Logx.d("prox", "departure near anchor median n=${collected.size}")
+                            continuation.resume(anchor)
                         }
                     }
                     callback = listener

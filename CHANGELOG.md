@@ -2,6 +2,10 @@
 
 Wat je per versie merkt, in gewone taal. ZeekRemote is een privé-afsplitsing van [OpenZeekr](https://github.com/borconi/openzeekr) (splitpunt: OpenZeekr 0.1.4) voor één telefoon en één auto; de nadruk ligt op betrouwbaar openen bij het naderen en sluiten bij het weglopen, met een simulator en een regressiepoort als bewaker. Dit logboek bevat geen meetwaarden, tijden, plaatsen of persoonsgegevens; technische details staan in de commits.
 
+## 0.4.8b (alleen telefoon, meetstap)
+
+- **Eigen regels live.** De eigen stappenteller, de positiepoort en de positieroute beslissen nu zelf; tot nu toe draaiden ze alleen mee in de schaduw. Nieuw daarbij: de positieroute opent ook als het signaal nog net onder de band zit terwijl de positie zegt dat je bij de auto bent en loopt (de "diepe route" uit de studie), en de onthouden autopositie is de mediaan van twintig seconden fixes in plaats van de eerste fix. Doel: eerder openen bij een nadering met de telefoon in de voorzak. Dit is een meetstap: na een week export wordt beoordeeld of dit blijft. Geen zichtbare teksten veranderd; de horloge-app blijft 0.4.3.
+
 ## 0.4.8 (alleen telefoon)
 
 - **Pas na het uitstappen.** Een vergrendeling terwijl de telefoon nog in of bij de auto is (bijvoorbeeld de deuren die bij het wegrijden op slot gaan) telt niet meer als parkeren: de automaat wacht tot je de auto hebt verlaten en begint dan pas. In de Security-tab staat dan "Auto · waiting until the car is parked and you have left".

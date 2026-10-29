@@ -358,6 +358,22 @@ internal class ProximityDecisionPolicy(
             nearCandidateSinceMs = UNSET_MS; clearApproachReadings()
             unlockQualifiedAtMs = UNSET_MS
             if (riseBaseAtMs != UNSET_MS) { clearRiseHold(); riseHoldEvent = "dropped (far reading)" }
+            // 0.4.8b (study 4h "deep", owner decision 29/10): the GNSS route also acts on a far reading - the signal
+            // still below the far margin, but inside the band - while the fix set says the owner is at the car and
+            // walking. The pocket signal hangs just below the level in the last metres; the fixes are the second witness.
+            if (OwnRules.gnssOpenDeep && gnssOn && OwnRules.gnssOpenM > 0.0 && !departureObserved && moving && walkingConfirmed &&
+                rssi >= unlockThreshold - OwnRules.gnssOpenBandDb) {
+                val deepNear = gnssOpenNear()
+                if (deepNear != null) {
+                    gnssNearStreak++
+                    if (gnssNearStreak >= OwnRules.gnssOpenPersist) {
+                        unlockQualifiedAtMs = nowMs; unlockRoute = "approach_gnss"
+                        gnssNote("open approach_gnss at $rssi dBm: $deepNear ($gnssNearStreak readings, deep)")
+                        return true
+                    }
+                    return false
+                }
+            }
             if (OwnRules.gnssOpenStrict) gnssNearStreak = 0
             return false
         }
