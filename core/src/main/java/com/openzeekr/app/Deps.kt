@@ -167,8 +167,9 @@ class Deps(context: Context) {
                     lat = status.basicVehicleStatus?.position?.latitude,
                     lon = status.basicVehicleStatus?.position?.longitude,
                     positionTrusted = status.basicVehicleStatus?.position?.posCanBeTrusted,
-                    windowsOpen = status.additionalVehicleStatus?.climateStatus?.windowsOpen,
-                    sunroofOpen = status.additionalVehicleStatus?.climateStatus?.sunroofOpen,
+                    // 0.4.7: one answer for "a window is open"; the opening in the top counts only on a car that reports one.
+                    windowsOpen = status.additionalVehicleStatus?.climateStatus?.let { c ->
+                        c.windowsOpen || (capabilities.state.value.sunroof && c.sunroofOpen) },
                 )
             }
             override suspend fun send(on: Boolean): Boolean {

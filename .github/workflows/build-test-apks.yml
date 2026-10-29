@@ -604,6 +604,10 @@ jobs:
           grep -Fq 'var lockEvents:' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           # 0.4.6: quiet zones, the daily check, the open-window notice with its receiver, the switch that follows the hand
           grep -Fq '## 0.4.6' CHANGELOG.md
+          # 0.4.7: words only - the visible texts speak of windows, never of an opening roof (owner 28/10)
+          grep -Fq '## 0.4.7' CHANGELOG.md
+          grep -Fq '"Warn when a window is open"' app/src/main/java/com/openzeekr/app/ui/SecurityScreen.kt
+          ! grep -Fq 'sunroof is' core/src/main/java/com/openzeekr/app/guard/GuardAutomaton.kt
           grep -Fq 'data class GuardZone(' core/src/main/java/com/openzeekr/app/guard/GuardAutomaton.kt
           grep -Fq 'com.openzeekr.app.guard.GuardActionReceiver' core/src/main/AndroidManifest.xml
           grep -Fq '"Add zone here"' app/src/main/java/com/openzeekr/app/ui/SecurityScreen.kt
@@ -651,7 +655,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='169' versionName='0.4.6-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='170' versionName='0.4.7-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

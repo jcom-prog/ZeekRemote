@@ -26,8 +26,8 @@ import java.util.Locale
  * 0.4.6: quiet zones (up to [MAX_ZONES] places, kept on the phone only) where the automaton does not switch the
  * guard on by itself - the owner's switch still does, for that parking; an unknown car position arms on the safe
  * side. A daily check at the owner's hour: a guard that is off while it should be on is armed, an open door,
- * bonnet, tailgate, window or sunroof and a low battery are reported, otherwise nothing. At arm time an open window
- * or sunroof is reported with a "Close windows" action (never closed by itself). The switch follows the owner's
+ * bonnet, tailgate or window and a low battery are reported, otherwise nothing. At arm time an open window is
+ * reported with a "Close windows" action (never closed by itself). The switch follows the owner's
  * hand while a command is pending ([GuardView.wanted]) and the car is polled after [FIRST_POLL_MS], then every
  * [POLL_STEP_MS]. Pure logic: the reads, commands and notifications come through [GuardIo]; every step goes to
  * the log as a content-free "guard:" line (never a position or a zone label).
@@ -59,9 +59,8 @@ data class GuardCar(
     val lat: Double? = null,
     val lon: Double? = null,
     val positionTrusted: Boolean? = null,
-    /** 0.4.6: any side window / the sunroof not fully closed; null = not reported. */
+    /** 0.4.6: any window not fully closed (Deps folds in the opening in the top of a car that reports one); null = not reported. */
     val windowsOpen: Boolean? = null,
-    val sunroofOpen: Boolean? = null,
 )
 
 data class GuardSettings(
@@ -291,9 +290,9 @@ class GuardAutomaton(
             if (!ok) { io.notify("Windows", "The cloud refused the close command · try the Vehicle tab."); return@launch }
             delay(WINDOWS_CHECK_MS)
             val car = io.readCar()
-            val open = car?.windowsOpen == true || car?.sunroofOpen == true
+            val open = car?.windowsOpen == true
             log("guard: windows ${if (open) "still open" else "closed"}")
-            io.notify("Windows", if (open) "A window or the sunroof is still open · check the car." else "Windows and sunroof closed.")
+            io.notify("Windows", if (open) "A window is still open · check the car." else "Windows closed.")
         }
     }
 
@@ -344,14 +343,12 @@ class GuardAutomaton(
         return null
     }
 
-    /** 0.4.6: an open window or sunroof at arm time - reported once per episode, with a close button. */
+    /** 0.4.6: an open window at arm time - reported once per episode, with a close button. */
     private fun warnWindows(car: GuardCar, s: GuardSettings) {
         if (!s.windowWarning || windowsWarnedThisEpisode) return
-        if (car.windowsOpen != true && car.sunroofOpen != true) return
+        if (car.windowsOpen != true) return
         windowsWarnedThisEpisode = true
-        io.notify("Sentry guard: a window is open",
-            if (car.sunroofOpen == true && car.windowsOpen != true) "The sunroof is open while the car is parked."
-            else "A window is open while the car is parked.", GuardAction.CLOSE_WINDOWS)
+        io.notify("Sentry guard: a window is open", "A window is open while the car is parked.", GuardAction.CLOSE_WINDOWS)
         log("guard: windows open -> notified")
     }
 
@@ -430,7 +427,7 @@ class GuardAutomaton(
     /**
      * 0.4.6: the daily check. Reads the car and the flag once. In AUTO a guard that is off while the car is locked
      * (and nothing stood the automaton down) is switched on through the normal arm path; an open door, bonnet,
-     * tailgate, window or sunroof and a battery below the threshold are reported; a day without a readable status
+     * tailgate or window and a battery below the threshold are reported; a day without a readable status
      * is reported; otherwise only a log line.
      */
     private suspend fun dailyCheck() {
@@ -447,7 +444,7 @@ class GuardAutomaton(
         car.socPct?.let { soc -> _view.update { it.copy(lastSocPct = soc) } }
         val issues = mutableListOf<String>()
         if (car.doorsClosed == false || car.bonnetClosed == false || car.trunkClosed == false) issues += "a door, the bonnet or the tailgate is open"
-        if (s.windowWarning && (car.windowsOpen == true || car.sunroofOpen == true)) issues += "a window or the sunroof is open"
+        if (s.windowWarning && car.windowsOpen == true) issues += "a window is open"
         val soc = car.socPct
         if (soc != null && !car.charging && soc < s.socThresholdPct) issues += "the battery (${soc}%) is below your ${s.socThresholdPct}% threshold"
         val flag = io.readFlag()

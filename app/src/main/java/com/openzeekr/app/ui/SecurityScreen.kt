@@ -295,7 +295,7 @@ private fun GuardSettingsRows(deps: Deps, cfg: com.openzeekr.app.config.SecretsC
             modifier = Modifier.fillMaxWidth(),
         )
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Warn when a window or the sunroof is open", color = Brand.muted, fontSize = 11.sp, modifier = Modifier.weight(1f))
+            Text("Warn when a window is open", color = Brand.muted, fontSize = 11.sp, modifier = Modifier.weight(1f))
             Switch(checked = cfg.guardWindowWarning, onCheckedChange = { on -> change { it.copy(guardWindowWarning = on) } },
                 colors = brandSwitchColors(Brand.good))
         }

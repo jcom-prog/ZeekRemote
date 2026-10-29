@@ -301,7 +301,7 @@ class GuardAutomatonTest {
         assertEquals("Windows", io.notes.last())
         assertTrue(log.contains("guard: windows closed"))
         // The warning is not disabled: a car with the setting off is never bothered.
-        val io2 = FakeIo(); io2.car = io2.car!!.copy(sunroofOpen = true)
+        val io2 = FakeIo(); io2.car = io2.car!!.copy(windowsOpen = true)
         val b = automaton(io2, settings = { GuardSettings(GuardMode.AUTO, 20, windowWarning = false, dailyCheckHour = -1) })
         b.onLockConfirmed("key"); advanceTimeBy(121_000); runCurrent()
         assertTrue(io2.notes.isEmpty())
