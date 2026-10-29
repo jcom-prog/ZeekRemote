@@ -2,6 +2,11 @@
 
 Wat je per versie merkt, in gewone taal. ZeekRemote is een privé-afsplitsing van [OpenZeekr](https://github.com/borconi/openzeekr) (splitpunt: OpenZeekr 0.1.4) voor één telefoon en één auto; de nadruk ligt op betrouwbaar openen bij het naderen en sluiten bij het weglopen, met een simulator en een regressiepoort als bewaker. Dit logboek bevat geen meetwaarden, tijden, plaatsen of persoonsgegevens; technische details staan in de commits.
 
+## 0.4.8 (alleen telefoon)
+
+- **Pas na het uitstappen.** Een vergrendeling terwijl de telefoon nog in of bij de auto is (bijvoorbeeld de deuren die bij het wegrijden op slot gaan) telt niet meer als parkeren: de automaat wacht tot je de auto hebt verlaten en begint dan pas. In de Security-tab staat dan "Auto · waiting until the car is parked and you have left".
+- **Meer geduld, geen loze meldingen.** Na de opdracht leest de app de auto vijf minuten lang terug (eerst na tien seconden, daarna elke twintig), vraagt dan nog één keer en kijkt nog vijf minuten elke minuut. Pas daarna komt een melding. Bevestigt de auto later alsnog, dan wordt de melding automatisch ingetrokken en staat de rij op "on". Kon de stand niet gelezen worden (geen dataverbinding), dan zegt de melding dát, in plaats van "niet bevestigd". De schakelaar houdt zijn 90 seconden en kijkt daarna nog vijf minuten stil mee. De horloge-app blijft 0.4.3.
+
 ## 0.4.7 (alleen telefoon)
 
 - **Alleen nog ramen.** De teksten in de app spraken over een dakopening die deze auto niet heeft; de schakelaar heet nu "Warn when a window is open" en de meldingen noemen alleen ramen. Geen andere wijziging. De horloge-app blijft 0.4.3.

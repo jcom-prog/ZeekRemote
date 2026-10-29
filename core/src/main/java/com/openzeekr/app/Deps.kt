@@ -183,6 +183,19 @@ class Deps(context: Context) {
             }
             override fun notify(title: String, text: String, action: com.openzeekr.app.guard.GuardAction?) =
                 com.openzeekr.app.guard.GuardNotifier.show(appCtx, title, text, action)
+            // 0.4.8: the parking rule - the engine's zone / signal, or Activity Recognition riding in a vehicle.
+            override fun atCar(): Boolean? {
+                if (motion.inVehicle.value) return true
+                val s = proximity.state.value
+                return when (s.zone) {
+                    ProximityController.Zone.NEAR -> true
+                    ProximityController.Zone.FAR -> false
+                    ProximityController.Zone.UNKNOWN -> s.smoothedRssi?.let { it >= -80 }
+                }
+            }
+            override fun cancelNotice() {
+                runCatching { androidx.core.app.NotificationManagerCompat.from(appCtx).cancel(com.openzeekr.app.guard.GuardNotifier.NOTIFICATION_ID) }
+            }
             override fun hold(active: Boolean) {
                 if (active) { if (held == null) held = wakeLocks.acquire(6 * 60_000L) }
                 else { wakeLocks.release(held); held = null }

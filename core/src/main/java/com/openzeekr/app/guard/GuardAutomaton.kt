@@ -98,6 +98,10 @@ interface GuardIo {
     suspend fun readFlag(): Boolean?
     /** The car's state from the cloud status; null when the read failed. */
     suspend fun readCar(): GuardCar?
+    /** 0.4.8: the phone is in or at the car (strong signal, or riding in a vehicle); null = unknown, which counts as away. */
+    fun atCar(): Boolean? = null
+    /** 0.4.8: withdraws the automaton's notice (the car confirmed after all). */
+    fun cancelNotice() {}
     /** Sends the guard on/off command; true when the cloud accepted it. */
     suspend fun send(on: Boolean): Boolean
     /** 0.4.6: sends the close-windows command; true when the cloud accepted it. */
@@ -117,6 +121,8 @@ class GuardAutomaton(
     private val armDelayMs: Long = ARM_DELAY_MS,
     private val firstPollMs: Long = FIRST_POLL_MS,
     private val pollStepMs: Long = POLL_STEP_MS,
+    private val atCarPollMs: Long = AT_CAR_POLL_MS,
+    private val lateStepMs: Long = LATE_STEP_MS,
     private val socCheckMs: Long = SOC_CHECK_MS,
     /** The next moment (wall ms) the daily check runs, given now and the owner's hour; default = local clock. */
     private val nextDaily: (nowMs: Long, hour: Int) -> Long = ::nextLocalHour,
@@ -164,11 +170,23 @@ class GuardAutomaton(
             GuardMode.MANUAL -> { status("Manual · use the switch"); return }
             GuardMode.AUTO -> {}
         }
-        status("Auto · switching on ${armDelayMs / 60_000} min after the lock")
         episodeJob = scope.launch {
-            hold(true)
-            try { delay(armDelayMs); arm() } finally { hold(false) }
+            try { awaitParked(); hold(true); delay(armDelayMs); arm() } finally { hold(false) }
         }
+    }
+
+    /**
+     * 0.4.8: a lock with the phone still in or at the car - the doors locking at drive-off, the owner still inside - is
+     * not a parking yet (field 29/10: the guard command went out while driving). Wait until the phone has left, looking
+     * every [atCarPollMs]; an unknown position counts as left.
+     */
+    private suspend fun awaitParked() {
+        if (io.atCar() != true) { status("Auto · switching on ${armDelayMs / 60_000} min after the lock"); return }
+        status("Auto · waiting until the car is parked and you have left")
+        log("guard: waiting (phone at the car)")
+        while (io.atCar() == true) delay(atCarPollMs)
+        log("guard: phone away -> arm delay")
+        status("Auto · switching on ${armDelayMs / 60_000} min after you left")
     }
 
     /** The engine confirmed an Unlock: the episode ends; the car ends its own guard session when opened. */
@@ -197,7 +215,7 @@ class GuardAutomaton(
                 log("guard: manual command refused")
                 return@launch
             }
-            val confirmed = awaitFlag(on)
+            val confirmed = awaitFlag(on, firstPollMs, pollStepMs, MANUAL_POLLS) == Read.CONFIRMED
             _view.update { it.copy(pending = false, wanted = null) }
             when {
                 confirmed && on -> onConfirmedOn(byUs = false, how = "manual")
@@ -207,8 +225,13 @@ class GuardAutomaton(
                     log("guard: manual off confirmed")
                 }
                 else -> {
-                    status("Not confirmed by the car within ${totalPollMs() / 1000} s · read again later")
+                    status("Not confirmed by the car within ${manualPollMs() / 1000} s · still checking")
                     log("guard: manual ${if (on) "on" else "off"} not confirmed")
+                    // 0.4.8: the car may still follow; watch it a while longer without bothering the owner.
+                    if (awaitFlag(on, lateStepMs, lateStepMs, MANUAL_LATE_POLLS) == Read.CONFIRMED) {
+                        log("guard: manual ${if (on) "on" else "off"} confirmed late")
+                        if (on) onConfirmedOn(byUs = false, how = "manual late") else { believedOn = false; status("Off") }
+                    }
                 }
             }
         }
@@ -273,7 +296,7 @@ class GuardAutomaton(
                 parked && !ownerOffThisEpisode && episodeJob == null -> {
                     zoneSkippedThisEpisode = false
                     status("Auto · switching on…")
-                    episodeJob = scope.launch { hold(true); try { arm() } finally { hold(false) } }
+                    episodeJob = scope.launch { try { awaitParked(); hold(true); arm() } finally { hold(false) } }
                 }
                 parked -> status("Off by hand until the next lock")
                 else -> status("Auto · from the next lock on")
@@ -355,37 +378,60 @@ class GuardAutomaton(
     private suspend fun switchOn() {
         _view.update { it.copy(pending = true) }
         status("Auto · switching on…")
-        var confirmed = false
-        for (attempt in 1..2) {
-            val ok = io.send(true)
-            log("guard: on sent (attempt $attempt)")
-            if (!ok) { log("guard: on refused"); break }
-            confirmed = awaitFlag(true)
-            if (confirmed) break
-            log("guard: not confirmed after ${totalPollMs() / 1000} s")
-        }
-        _view.update { it.copy(pending = false) }
-        if (confirmed) { onConfirmedOn(byUs = true, how = "confirmed"); return }
-        believedOn = false
-        status("Auto · not confirmed by the car · switch it on by hand or check the car")
-        io.notify("Sentry guard not confirmed", "The car did not confirm the guard. Switch it on by hand or check the car.")
-        log("guard: not confirmed -> notified")
+        val ok1 = io.send(true)
+        log("guard: on sent (attempt 1)")
+        if (!ok1) { log("guard: on refused"); giveUp(unreadable = false); return }
+        val first = awaitFlag(true, firstPollMs, pollStepMs, CONFIRM_POLLS)
+        if (first == Read.CONFIRMED) { _view.update { it.copy(pending = false) }; onConfirmedOn(byUs = true, how = "confirmed"); return }
+        log("guard: not confirmed after ${confirmWindowMs() / 1000} s")
+        status("Auto · not confirmed yet · asking again")
+        val ok2 = io.send(true)
+        log("guard: on sent (attempt 2)")
+        val second = if (ok2) awaitFlag(true, lateStepMs, lateStepMs, FOLLOW_UP_POLLS) else Read.OFF
+        if (second == Read.CONFIRMED) { _view.update { it.copy(pending = false) }; onConfirmedOn(byUs = true, how = "confirmed late"); return }
+        giveUp(unreadable = first == Read.UNREADABLE && second == Read.UNREADABLE)
     }
 
-    /** Reads the flag after [firstPollMs], then every [pollStepMs], [CONFIRM_POLLS] times, until it equals [want]. */
-    private suspend fun awaitFlag(want: Boolean): Boolean {
-        var waited = 0L
-        repeat(CONFIRM_POLLS) { i ->
-            val step = if (i == 0) firstPollMs else pollStepMs
+    /** 0.4.8: after the two attempts: tell the owner (a read failure is told apart from a car that says "off"), then keep
+     *  watching; a late confirmation withdraws the notice. */
+    private suspend fun giveUp(unreadable: Boolean) {
+        _view.update { it.copy(pending = false) }
+        believedOn = false
+        if (unreadable) {
+            status("Auto · the car's guard state could not be read · it may well be on")
+            io.notify("Sentry guard: state not readable", "The car's guard state could not be read. The guard may well be on; check the data connection or the car.")
+            log("guard: flag unreadable -> notified")
+        } else {
+            status("Auto · not confirmed by the car · switch it on by hand or check the car")
+            io.notify("Sentry guard not confirmed", "The car did not confirm the guard. Switch it on by hand or check the car.")
+            log("guard: not confirmed -> notified")
+        }
+        if (awaitFlag(true, lateStepMs, lateStepMs, LATE_WATCH_POLLS) == Read.CONFIRMED) {
+            io.cancelNotice()
+            log("guard: on confirmed late")
+            onConfirmedOn(byUs = true, how = "late")
+        }
+    }
+
+    private enum class Read { CONFIRMED, OFF, UNREADABLE }
+
+    /** Reads the flag after [firstMs], then every [stepMs], [polls] times, until it equals [want]; UNREADABLE when more
+     *  than half of the reads failed. */
+    private suspend fun awaitFlag(want: Boolean, firstMs: Long, stepMs: Long, polls: Int): Read {
+        var waited = 0L; var failed = 0
+        repeat(polls) { i ->
+            val step = if (i == 0) firstMs else stepMs
             delay(step); waited += step
             val f = io.readFlag()
+            if (f == null) failed++
             _view.update { it.copy(flag = f ?: it.flag, flagReadAtMs = clock()) }
-            if (f == want) { log("guard: ${if (want) "on" else "off"} confirmed after ${waited / 1000} s"); return true }
+            if (f == want) { log("guard: ${if (want) "on" else "off"} confirmed after ${waited / 1000} s"); return Read.CONFIRMED }
         }
-        return false
+        return if (failed * 2 > polls) Read.UNREADABLE else Read.OFF
     }
 
-    private fun totalPollMs(): Long = firstPollMs + (CONFIRM_POLLS - 1) * pollStepMs
+    private fun confirmWindowMs(): Long = firstPollMs + (CONFIRM_POLLS - 1) * pollStepMs
+    private fun manualPollMs(): Long = firstPollMs + (MANUAL_POLLS - 1) * pollStepMs
 
     private fun onConfirmedOn(byUs: Boolean, how: String) {
         believedOn = true; lowSocOff = false
@@ -489,10 +535,18 @@ class GuardAutomaton(
 
     companion object {
         const val ARM_DELAY_MS = 120_000L
-        /** 0.4.6: the car is polled after 10 s, then every 20 s, five times (90 s in all). */
+        /** 0.4.6/0.4.8: the car is polled after 10 s, then every 20 s - 15 times (about 5 min) for the automaton, 5 times
+         *  (90 s) for the switch; then every minute: a second attempt for 5 min, a late watch for 10 min (5 for the switch). */
         const val FIRST_POLL_MS = 10_000L
         const val POLL_STEP_MS = 20_000L
-        const val CONFIRM_POLLS = 5
+        const val CONFIRM_POLLS = 15
+        const val MANUAL_POLLS = 5
+        const val LATE_STEP_MS = 60_000L
+        const val FOLLOW_UP_POLLS = 5
+        const val LATE_WATCH_POLLS = 10
+        const val MANUAL_LATE_POLLS = 5
+        /** 0.4.8: while the phone is in or at the car after a lock, look again this often. */
+        const val AT_CAR_POLL_MS = 30_000L
         const val SOC_CHECK_MS = 3_600_000L
         const val HYSTERESIS_PCT = 5
         const val MAX_ZONES = 3

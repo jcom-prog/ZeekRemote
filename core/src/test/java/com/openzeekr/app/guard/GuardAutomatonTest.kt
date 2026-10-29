@@ -29,7 +29,12 @@ class GuardAutomatonTest {
         val actions = mutableListOf<GuardAction?>()
         var closes = 0
         var held = false
+        /** 0.4.8 */
+        var atCar: Boolean? = false
+        var unreadable = false
+        var cancels = 0
         override suspend fun readFlag(): Boolean? {
+            if (unreadable) return null
             pendingWant?.let { want ->
                 readsSincePending++
                 if (readsSincePending > confirmAfterReads) { flag = want; pendingWant = null }
@@ -43,6 +48,8 @@ class GuardAutomatonTest {
             return accept
         }
         override suspend fun closeWindows(): Boolean { closes++; return true }
+        override fun atCar(): Boolean? = atCar
+        override fun cancelNotice() { cancels++ }
         override fun notify(title: String, text: String, action: GuardAction?) { notes += title; actions += action }
         override fun hold(active: Boolean) { held = active }
     }
@@ -179,11 +186,53 @@ class GuardAutomatonTest {
         val io = FakeIo(); io.confirmAfterReads = 99
         val a = automaton(io)
         a.onLockConfirmed("key")
-        advanceTimeBy(121_000 + 6 * 31_000); runCurrent()
+        // 0.4.8: 2 min delay, 5 min of polls, a second attempt with 5 min of minute-polls, then the notice.
+        advanceTimeBy(121_000 + 290_000); runCurrent()
         assertEquals(listOf(true, true), io.sends)
+        assertTrue(io.notes.isEmpty())
+        advanceTimeBy(301_000); runCurrent()
         assertEquals(listOf("Sentry guard not confirmed"), io.notes)
         assertTrue(log.contains("guard: not confirmed -> notified"))
         assertFalse(a.view.value.pending)
+        // The car follows after all: the notice is withdrawn and the row says on.
+        io.flag = true
+        advanceTimeBy(61_000); runCurrent()
+        assertEquals(1, io.cancels)
+        assertTrue(log.contains("guard: on confirmed late"))
+        assertTrue(a.view.value.status, a.view.value.status.startsWith("Auto · on since"))
+    }
+
+    @Test fun aReadFailureIsToldApartFromACarThatSaysOff() = runTest {
+        val io = FakeIo(); io.unreadable = true
+        val a = automaton(io)
+        a.onLockConfirmed("key")
+        advanceTimeBy(121_000 + 290_000 + 301_000); runCurrent()
+        assertEquals(listOf("Sentry guard: state not readable"), io.notes)
+        assertTrue(log.contains("guard: flag unreadable -> notified"))
+    }
+
+    @Test fun aLockWithThePhoneStillInTheCarWaitsUntilTheOwnerHasLeft() = runTest {
+        // 0.4.8 (field 29/10): the doors lock at drive-off; the automaton must not ask for the guard while driving.
+        val io = FakeIo(); io.atCar = true
+        val a = automaton(io)
+        a.onLockConfirmed("car self-lock")
+        advanceTimeBy(10 * 60_000); runCurrent()
+        assertTrue(io.sends.isEmpty())
+        assertTrue(log.contains("guard: waiting (phone at the car)"))
+        assertTrue(a.view.value.status, a.view.value.status.contains("waiting until the car is parked"))
+        assertFalse("no wakelock while riding", io.held)
+        // Arrival: the door opens (the episode ends); nothing is sent afterwards either.
+        a.onUnlockConfirmed("car reopened"); io.atCar = false
+        advanceTimeBy(10 * 60_000); runCurrent()
+        assertTrue(io.sends.isEmpty())
+        // The walk-away lock with the phone away arms as before; a lock at the car that is then left arms 2 min after leaving.
+        io.atCar = true; a.onLockConfirmed("key")
+        advanceTimeBy(5 * 60_000); runCurrent()
+        assertTrue(io.sends.isEmpty())
+        io.atCar = false
+        advanceTimeBy(31_000 + 121_000 + 11_000); runCurrent()
+        assertEquals(listOf(true), io.sends)
+        assertTrue(log.contains("guard: phone away -> arm delay"))
     }
 
     @Test fun manualAndOffModesNeverSendByThemselves() = runTest {
