@@ -118,6 +118,8 @@ class ProximityController internal constructor(
         object : ProximityAlerts {
             override fun show(event: LockAlertPolicy.Event, bleDepartureRouteActive: Boolean): Boolean =
                 port.show(event, bleDepartureRouteActive).also { if (LockAlertPolicy.audible(event)) startAlarmCloudWatch() }
+            override fun showWithDetail(event: LockAlertPolicy.Event, detail: String): Boolean =
+                port.showWithDetail(event, detail).also { if (LockAlertPolicy.audible(event)) startAlarmCloudWatch() }
             override fun clear() = port.clear()
             override fun silenceAlarm() = port.silenceAlarm()
             override fun newAlarmEpisode() = port.newAlarmEpisode()
@@ -917,6 +919,7 @@ class ProximityController internal constructor(
         if (!restored) {
             alerts.clear()
             ble.noteUnlockConfirmed()
+            lockRetryJob?.cancel(); lockRetryJob = null; lockRetryUsed = false   // 0.4.10: a new parking episode
         }
         carSelfLock.onUnlockConfirmed(unlockElapsed)
         stationaryFar.reset()
@@ -1441,6 +1444,7 @@ class ProximityController internal constructor(
     private fun recordReading(rssi: Int) {
         val now = clock.wallMs()
         recentReadings.addLast(now to rssi)
+        noteReflect(now, rssi)
         val mark = returnToCar.observe(now, rssi, gattEma, config().sensitivityLockRssi, armedUnlocked)
         if (mark != ReturnToCarWatch.Mark.NONE) {
             if (mark == ReturnToCarWatch.Mark.RETURN)
@@ -1678,10 +1682,13 @@ class ProximityController internal constructor(
                 _state.value = _state.value.copy(lastAction = "Cloud Lock · vehicle reports locked ✓")
                 Logx.d("prox", "manual cloud Lock verified (cloud=$lockedByCloud key=$lockedByKey)")
             } else {
-                val posted = alerts.show(LockAlertPolicy.Event.LOCK_NOT_EXECUTED)
+                // 0.4.10 (G2): record what the car reports, say why, try again when it clears, and treat the car as what
+                // it is - still open.
+                val snap = runCatching { cloudLockSnapshot() }.getOrNull()
+                val posted = onLockRefused(LockAlertPolicy.Event.LOCK_NOT_EXECUTED, "manual", snap)
                 unverifiedLockAlertRaised = true
-                _state.value = _state.value.copy(lastAction = "Lock NOT executed ✗ · car still open; check doors")
                 Logx.w("prox", "manual Lock not executed: no fresh locked report; alarm posted=$posted")
+                reArmAfterRefusedLock()
             }
         }
     }
@@ -2975,7 +2982,9 @@ class ProximityController internal constructor(
                     Logx.w("prox", "$reason: Lock withheld, user back at the car (strong signal) -> no alarm")
                     _state.value = _state.value.copy(lastAction = "$reason · back at the car; not locked")
                 } else {
-                    val posted = alerts.show(LockAlertPolicy.Event.AUTO_LOCK_UNCONFIRMED)
+                    // 0.4.10 (G2): the warning carries what the car reports, and one retry is armed.
+                    val snap = runCatching { cloudLockSnapshot() }.getOrNull()
+                    val posted = onLockRefused(LockAlertPolicy.Event.AUTO_LOCK_UNCONFIRMED, reason, snap)
                     unverifiedLockAlertRaised = true
                     Logx.w("prox", "$reason: BLE lock unconfirmed; cloud status locked=$cloudStatusLocked; notification posted=$posted")
                     _state.value = _state.value.copy(lastAction =
@@ -3016,6 +3025,76 @@ class ProximityController internal constructor(
 
     /** Set by [verifyCloudLock]: no cloud Lock was sent because the departure no longer held. */
     private var cloudLockWithheldUnverified = false
+
+    // ---- 0.4.10 (G2, field 29/10 parking garage): a Lock the car refused or did not confirm ----
+    private var lockRetryJob: Job? = null
+    /** One retry per parking episode (reset by the next confirmed unlock). */
+    private var lockRetryUsed = false
+    private var reflectWindowStartMs = 0L; private var reflectReadings = 0; private var reflectStrong = 0
+    private var reflectRun = 0; private var reflectLongestRun = 0
+
+    /**
+     * Records what the car reports about its openings (raw codes, content-free), shows the warning for [event] with the
+     * reason, and arms one retry: while the owner is away the status is read every [LOCK_RETRY_POLL_MS] for up to
+     * [LOCK_RETRY_WINDOW_MS]; the moment the car reports the openings closed (or, with no reason reported, after
+     * [LOCK_RETRY_UNKNOWN_DELAY_MS]) the Lock goes out once more through the normal lock loop. Returns whether the
+     * warning was posted.
+     */
+    private fun onLockRefused(event: LockAlertPolicy.Event, source: String, snapshot: CloudLockSnapshot?): Boolean {
+        val openings = snapshot?.openings
+        Logx.w("prox", "lock refused: ${openings ?: "status unavailable"} ($source)")
+        val blocker = LockRefusal.blocker(openings)
+        val posted = alerts.showWithDetail(event, LockRefusal.noticeText(blocker, openings != null))
+        _state.value = _state.value.copy(lastAction = "Lock refused ✗ · " +
+            (blocker?.let { "the car reports $it open" } ?: if (openings != null) "reason not reported by the car" else "status not read"))
+        if (lockRetryUsed || lockRetryJob?.isActive == true) return posted
+        lockRetryJob = scope.launch {
+            val startedAt = clock.wallMs()
+            var last = openings
+            while (clock.wallMs() - startedAt < LOCK_RETRY_WINDOW_MS && _state.value.running && config().proximityEnabled) {
+                delay(LOCK_RETRY_POLL_MS)
+                val s = runCatching { cloudLockSnapshot() }.getOrNull() ?: continue
+                if (s.locked) { Logx.d("prox", "lock retry: the car reports locked"); break }
+                val closed = LockRefusal.allClosed(s.openings)
+                val cleared = closed && (!LockRefusal.allClosed(last) || clock.wallMs() - startedAt >= LOCK_RETRY_UNKNOWN_DELAY_MS)
+                last = s.openings
+                if (!cleared) continue
+                val away = ble.state.value != DkBleManager.State.SESSION_READY || lockVeto(null) == null
+                if (!away) { Logx.d("prox", "lock retry: openings closed but the owner is at the car -> no Lock"); continue }
+                lockRetryUsed = true
+                Logx.d("prox", "lock retry: openings closed -> sending Lock again")
+                startLockLoop("lock-retry")
+                return@launch
+            }
+            if (!lockRetryUsed) Logx.d("prox", "lock retry: window over without a chance")
+        }
+        return posted
+    }
+
+    /** A refused manual Lock left the engine believing in a Lock while the car is open (field 29/10: the walk back read
+     *  as a return after a Lock and tried to open). The car is still open: the departure watch is re-armed, the warning
+     *  stays, the guard's parking episode ends. */
+    private fun reArmAfterRefusedLock() {
+        if (armedUnlocked || !_state.value.running || !config().proximityEnabled) return
+        Logx.d("prox", "lock refused -> the car is still open; departure watch re-armed")
+        runCatching { lockEvents?.invoke(false, "lock refused") }
+        recordUnlockConfirmed("lock refused", restored = true)
+    }
+
+    /** 0.4.10: reflections while walking away from the open car - per minute the strong readings and the longest run of
+     *  them (study G1: the simulator's garage model is guessed; this line calibrates it). Numbers only. */
+    private fun noteReflect(now: Long, rssi: Int) {
+        if (!armedUnlocked || motion.state.value != MotionMonitor.Motion.MOVING) { if (reflectReadings > 0) flushReflect(); return }
+        if (reflectWindowStartMs == 0L) reflectWindowStartMs = now
+        reflectReadings++
+        if (rssi >= STRONG_NEAR_DIAGNOSTIC_RSSI) { reflectRun++; reflectStrong++; reflectLongestRun = maxOf(reflectLongestRun, reflectRun) }
+        else reflectRun = 0
+        if (now - reflectWindowStartMs >= REFLECT_WINDOW_MS) flushReflect()
+    }
+    private fun flushReflect() {
+        if (reflectReadings >= 10) Logx.d("prox", "reflect: strong $reflectStrong of $reflectReadings readings, longest run $reflectLongestRun")
+        reflectWindowStartMs = 0L; reflectReadings = 0; reflectStrong = 0; reflectRun = 0; reflectLongestRun = 0
+    }
 
     /** A live key session reading strong-near right now (not a stale value). */
     private suspend fun userBackAtCar(): Boolean {
@@ -3411,6 +3490,11 @@ class ProximityController internal constructor(
         private const val LOCK_VETO_RISE_FROM_MS = 4_000L
         private const val LOCK_VETO_RISE_TO_MS = 8_000L
         private const val RECENT_READINGS_MS = 15_000L
+        /** 0.4.10 (G2): the refused-Lock retry - the status every 20 s for 10 min; with no reason reported, one try after a minute. */
+        private const val LOCK_RETRY_WINDOW_MS = 600_000L
+        private const val LOCK_RETRY_POLL_MS = 20_000L
+        private const val LOCK_RETRY_UNKNOWN_DELAY_MS = 60_000L
+        private const val REFLECT_WINDOW_MS = 60_000L
         /** Plan K6: an unlock loop gives up after this long (a retry needs fresh near evidence anyway). */
         private const val UNLOCK_LOOP_MAX_MS = 20_000L
         /** A persisted "car open" record older than this is not restored (the car may be anywhere). */

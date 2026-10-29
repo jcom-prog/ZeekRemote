@@ -46,15 +46,17 @@ internal object UnverifiedLockNotifier {
         "Neither Bluetooth nor the cloud could lock the car. Tap Lock to try again, or lock at the car."
 
     private const val NOT_CONFIRMED_TITLE = "Vehicle lock not confirmed"
+    /** 0.4.10 */
+    private const val REFUSED_TITLE = "Car NOT locked"
     private const val NOT_CONFIRMED_TEXT = "ZeekRemote cannot confirm the car is locked. Lock manually and check the car."
     private const val POSSIBLE_DEPARTURE_TITLE = "Possible departure: lock manually"
     private const val POSSIBLE_DEPARTURE_TEXT =
         "Departure could not be verified. The car may still be unlocked. Lock manually and check the car."
 
     /** Posts the warning for [event]; true when a notification was posted. */
-    fun show(context: Context, event: Event, bleDepartureRouteActive: Boolean = false): Boolean {
+    fun show(context: Context, event: Event, bleDepartureRouteActive: Boolean = false, detail: String? = null): Boolean {
         if (!LockAlertPolicy.shouldPost(event, bleDepartureRouteActive)) return false
-        val (title, message) = when (event) {
+        val (baseTitle, baseMessage) = when (event) {
             Event.AUTO_LOCK_UNCONFIRMED, Event.AUTO_LOCK_STATE_UNVERIFIED, Event.LINK_LOST_WHILE_UNLOCKED,
             Event.LINK_LOST_STATIONARY,
             Event.MANUAL_CLOUD_LOCK_UNVERIFIED -> NOT_CONFIRMED_TITLE to NOT_CONFIRMED_TEXT
@@ -69,6 +71,9 @@ internal object UnverifiedLockNotifier {
             Event.DEPARTURE_PROOF_PENDING -> "Leaving? The car is still unlocked" to
                 "The automatic Lock is still checking your departure. Lock now if you are leaving."
         }
+        // 0.4.10 (G2): a refused Lock says what the car reports (the reason), under one title.
+        val title = if (detail != null) REFUSED_TITLE else baseTitle
+        val message = detail ?: baseMessage
         val lockButton = LockAlertPolicy.offersLock(event)
         val posted = post(context, CHANNEL_ID, NOTIFICATION_ID, title, message, alarm = false, lockButton = lockButton)
         if (LockAlertPolicy.audible(event)) {

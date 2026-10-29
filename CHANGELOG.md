@@ -2,6 +2,13 @@
 
 Wat je per versie merkt, in gewone taal. ZeekRemote is een privé-afsplitsing van [OpenZeekr](https://github.com/borconi/openzeekr) (splitpunt: OpenZeekr 0.1.4) voor één telefoon en één auto; de nadruk ligt op betrouwbaar openen bij het naderen en sluiten bij het weglopen, met een simulator en een regressiepoort als bewaker. Dit logboek bevat geen meetwaarden, tijden, plaatsen of persoonsgegevens; technische details staan in de commits.
 
+## 0.4.10 (alleen telefoon)
+
+- **Geweigerde Lock: wat de auto zegt.** Weigert de auto een Lock (handmatig of automatisch), dan legt de app vast wat de auto zelf over deuren, motorkap, achterklep en laadklep meldt (alleen codes, niets dat de auto herkenbaar maakt) en zegt de melding waarom: "Car NOT locked" met "The car reports the tailgate open. Close it; ZeekRemote sends the Lock again when the car reports it closed." of "The car reports no open door, bonnet or tailgate. ZeekRemote sends the Lock again shortly."
+- **Zelf opnieuw.** Zolang je weg bent kijkt de app tot tien minuten elke twintig seconden naar de status; meldt de auto alles dicht (of noemde hij geen reden), dan stuurt hij de Lock één keer opnieuw en controleert hij.
+- **Teruglopen na een geweigerde Lock.** De app weet dan dat de auto nog open is; teruglopen is geen terugkeer na een Lock meer en geeft geen openpoging.
+- **Meetregel reflecties.** Tijdens het weglopen telt de app per minuut de sterke lezingen en de langste reeks ervan (alleen getallen), om het garagemodel van de simulator te ijken. De horloge-app blijft 0.4.3.
+
 ## 0.4.9 (alleen telefoon)
 
 - **Sentry-tegel.** Op het tabblad Vehicle staat naast "Trunk" een tegel die de stand van de Sentry guard toont zoals de auto die het laatst meldde: groen "Sentry on", oranje "Sentry off", grijs "Sentry" zolang nog niets gelezen is. Tikken is niet nodig: zolang de app open is, wordt de stand elke minuut opnieuw gelezen, en de automaat werkt hem bij bij elke stap. Schakelen blijft op het tabblad Security.

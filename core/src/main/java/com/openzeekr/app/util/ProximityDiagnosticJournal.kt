@@ -25,7 +25,10 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
         private val nearAnchor = Regex("departure near anchor outcome=([a-z_]+)")
         // Whitelisted categorical values only; anything else is not journaled.
         private val autoLockConfirmed = Regex(
-            "auto lock confirmed \\((ble-departure|verified-link-departure|walk-away-lock|idle-far-lock)\\): the car reports locked")
+            "auto lock confirmed \\((ble-departure|verified-link-departure|walk-away-lock|idle-far-lock|lock-retry)\\): the car reports locked")
+        // 0.4.10 (G2): the car's opening codes at a refused Lock (raw codes only) and the retry; the reflection line.
+        private val lockRefused = Regex("^lock refused: (doors=[0-9?-]{4} bonnet=[0-9?-] tailgate=[0-9?-] port=[0-9?-]{2}|status unavailable) \\(([a-z -]{1,30})\\)$")
+        private val reflect = Regex("^reflect: strong ([0-9]{1,4}) of ([0-9]{1,4}) readings, longest run ([0-9]{1,4})$")
         private val unlockArm = Regex("^approach-unlock ARM \\(rssi=(-[0-9]{2,3}) .* route=(presence|approach|door|still|" +
             "deep_return|deep_window|manual_return|at_car|away_return|away_return_steps|self_lock_return|walk_back|none)" +
             "(?: screen=(true|false|\\?))?\\)")
@@ -242,7 +245,14 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                         "LOCK_VETOED ${m.groupValues[1]} $why"
                     }
                     message.startsWith("manual Lock not executed:") -> "MANUAL_LOCK_NOT_EXECUTED"
-                    Regex("(ble-departure|verified-link-departure|walk-away-lock|idle-far-lock|far-no-motion): " +
+                    lockRefused.matches(message) -> lockRefused.matchEntire(message)!!.let { "LOCK_REFUSED ${it.groupValues[1]} ${it.groupValues[2]}" }
+                    message == "lock retry: the car reports locked" -> "LOCK_RETRY car locked"
+                    message == "lock retry: openings closed -> sending Lock again" -> "LOCK_RETRY sent"
+                    message == "lock retry: openings closed but the owner is at the car -> no Lock" -> "LOCK_RETRY at car"
+                    message == "lock retry: window over without a chance" -> "LOCK_RETRY none"
+                    message == "lock refused -> the car is still open; departure watch re-armed" -> "LOCK_REFUSED_REARMED"
+                    reflect.matches(message) -> reflect.matchEntire(message)!!.let { "REFLECT strong=${it.groupValues[1]} of=${it.groupValues[2]} longest=${it.groupValues[3]}" }
+                    Regex("(ble-departure|verified-link-departure|walk-away-lock|idle-far-lock|far-no-motion|lock-retry): " +
                         "locked via cloud; a newer cloud report confirms it").matches(message) -> "AUTO_LOCK_CLOUD_VERIFIED"
                     Regex("(ble-departure): cloud Lock backed by a fresh BLE departure proof").matches(message) ->
                         "CLOUD_LOCK_BLE_BACKED"

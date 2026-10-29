@@ -129,7 +129,15 @@ class Deps(context: Context) {
                 val state = status.additionalVehicleStatus?.drivingSafetyStatus?.centralLockingStatus
                 if (state != "1" && state != "0") null
                 else com.openzeekr.app.ble.CloudLockSnapshot(
-                    locked = state == "1", updatedAtMs = status.updateTime)
+                    locked = state == "1", updatedAtMs = status.updateTime,
+                    // 0.4.10 (G2): what the car reports about its openings, raw codes only.
+                    openings = status.additionalVehicleStatus?.let { a ->
+                        val s = a.drivingSafetyStatus; val e = a.electricVehicleStatus
+                        com.openzeekr.app.ble.LockRefusal.openings(
+                            doors = listOf(s?.doorOpenStatusDriver, s?.doorOpenStatusPassenger, s?.doorOpenStatusDriverRear, s?.doorOpenStatusPassengerRear),
+                            bonnet = s?.engineHoodOpenStatus, tailgate = s?.trunkOpenStatus,
+                            port = listOf(e?.chargeLidAcStatus, e?.chargeLidDcAcStatus))
+                    })
             }
         },
     )

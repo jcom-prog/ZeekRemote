@@ -107,6 +107,19 @@ class ProximityDiagnosticJournalTest {
             "control 0x02: received, but no locked status within 3000 ms -> NOT_EXECUTED"))
         assertEquals("MANUAL_LOCK_NOT_EXECUTED", ProximityDiagnosticJournal.event("prox",
             "manual Lock not executed: no fresh locked report; alarm posted=true"))
+        // 0.4.10 (G2): raw opening codes, the retry steps and the reflection line; nothing else of these lines.
+        assertEquals("LOCK_REFUSED doors=0000 bonnet=0 tailgate=1 port=10 manual", ProximityDiagnosticJournal.event("prox",
+            "lock refused: doors=0000 bonnet=0 tailgate=1 port=10 (manual)"))
+        assertEquals("LOCK_REFUSED status unavailable ble-departure", ProximityDiagnosticJournal.event("prox",
+            "lock refused: status unavailable (ble-departure)"))
+        assertEquals("LOCK_RETRY sent", ProximityDiagnosticJournal.event("prox", "lock retry: openings closed -> sending Lock again"))
+        assertEquals("LOCK_RETRY car locked", ProximityDiagnosticJournal.event("prox", "lock retry: the car reports locked"))
+        assertEquals("LOCK_REFUSED_REARMED", ProximityDiagnosticJournal.event("prox",
+            "lock refused -> the car is still open; departure watch re-armed"))
+        assertEquals("AUTO_LOCK_CONFIRMED lock-retry", ProximityDiagnosticJournal.event("prox",
+            "auto lock confirmed (lock-retry): the car reports locked"))
+        assertEquals("REFLECT strong=5 of=58 longest=3", ProximityDiagnosticJournal.event("prox",
+            "reflect: strong 5 of 58 readings, longest run 3"))
         assertEquals("AUTO_LOCK_CLOUD_VERIFIED", ProximityDiagnosticJournal.event("prox",
             "ble-departure: locked via cloud; a newer cloud report confirms it"))
         assertEquals("CLOUD_LOCK_BLE_BACKED", ProximityDiagnosticJournal.event("prox",

@@ -71,6 +71,8 @@ interface ProximityMotion {
 /** Lock warnings and alarms (implemented by [UnverifiedLockNotifier]). */
 internal interface ProximityAlerts {
     fun show(event: LockAlertPolicy.Event, bleDepartureRouteActive: Boolean = false): Boolean
+    /** 0.4.10: the same warning with a one-sentence reason from the car's status ([LockRefusal.noticeText]). */
+    fun showWithDetail(event: LockAlertPolicy.Event, detail: String): Boolean = show(event)
     fun clear()
     fun silenceAlarm()
     /**
@@ -85,6 +87,8 @@ internal interface ProximityAlerts {
 internal class AndroidProximityAlerts(private val context: android.content.Context) : ProximityAlerts {
     override fun show(event: LockAlertPolicy.Event, bleDepartureRouteActive: Boolean): Boolean =
         UnverifiedLockNotifier.show(context, event, bleDepartureRouteActive)
+    override fun showWithDetail(event: LockAlertPolicy.Event, detail: String): Boolean =
+        UnverifiedLockNotifier.show(context, event, false, detail)
     override fun clear() = UnverifiedLockNotifier.clear(context)
     override fun silenceAlarm() = UnverifiedLockNotifier.silenceAlarm(context)
     override fun newAlarmEpisode() = UnverifiedLockNotifier.newAlarmEpisode()

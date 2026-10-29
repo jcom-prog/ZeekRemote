@@ -1,7 +1,9 @@
 package com.openzeekr.app.ble
 
 /** A cloud lock observation, including the car's update time rather than the HTTP response time. */
-data class CloudLockSnapshot(val locked: Boolean, val updatedAtMs: Long?)
+data class CloudLockSnapshot(val locked: Boolean, val updatedAtMs: Long?,
+                             /** 0.4.10: the car's opening codes, content-free ([LockRefusal.openings]); null when not read. */
+                             val openings: String? = null)
 
 /** Never rearm an unlock merely because GATT dropped or a weak RSSI estimate looked distant. */
 internal object RelockRecoveryEvidence {
