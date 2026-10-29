@@ -2,6 +2,11 @@
 
 Wat je per versie merkt, in gewone taal. ZeekRemote is een privé-afsplitsing van [OpenZeekr](https://github.com/borconi/openzeekr) (splitpunt: OpenZeekr 0.1.4) voor één telefoon en één auto; de nadruk ligt op betrouwbaar openen bij het naderen en sluiten bij het weglopen, met een simulator en een regressiepoort als bewaker. Dit logboek bevat geen meetwaarden, tijden, plaatsen of persoonsgegevens; technische details staan in de commits.
 
+## 0.4.9 (alleen telefoon)
+
+- **Sentry-tegel.** Op het tabblad Vehicle staat naast "Trunk" een tegel die de stand van de Sentry guard toont zoals de auto die het laatst meldde: groen "Sentry on", oranje "Sentry off", grijs "Sentry" zolang nog niets gelezen is. Tikken is niet nodig: zolang de app open is, wordt de stand elke minuut opnieuw gelezen, en de automaat werkt hem bij bij elke stap. Schakelen blijft op het tabblad Security.
+- **Cursor.** De invoervelden op het tabblad Security (accudrempel, zones, dagelijkse controle) sluiten af met de toets Gereed op het toetsenbord; een tik op lege ruimte haalt de cursor ook uit het veld. De horloge-app blijft 0.4.3.
+
 ## 0.4.8b (alleen telefoon, meetstap)
 
 - **Eigen regels live.** De eigen stappenteller, de positiepoort en de positieroute beslissen nu zelf; tot nu toe draaiden ze alleen mee in de schaduw. Nieuw daarbij: de positieroute opent ook als het signaal nog net onder de band zit terwijl de positie zegt dat je bij de auto bent en loopt (de "diepe route" uit de studie), en de onthouden autopositie is de mediaan van twintig seconden fixes in plaats van de eerste fix. Doel: eerder openen bij een nadering met de telefoon in de voorzak. Dit is een meetstap: na een week export wordt beoordeeld of dit blijft. Geen zichtbare teksten veranderd; de horloge-app blijft 0.4.3.

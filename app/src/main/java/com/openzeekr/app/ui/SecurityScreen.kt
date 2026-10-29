@@ -52,7 +52,12 @@ import java.util.Date
 import java.util.Locale
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import com.openzeekr.app.Deps
 import com.openzeekr.app.remote.CallResult
@@ -119,7 +124,10 @@ fun SecurityScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = 
         }
     }
 
-    Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
+    // 0.4.9: a tap on empty space takes the cursor out of a field (the fields also close on the Done key).
+    val focus = LocalFocusManager.current
+    Column(modifier.fillMaxWidth().pointerInput(Unit) { detectTapGestures(onTap = { focus.clearFocus() }) }
+        .verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
         Label("Security & access")
         Column(Modifier.padding(horizontal = 20.dp)) {
             // 0.4.5: the switch shows the car's flag; the automaton sends the command and polls the car until it
@@ -188,6 +196,7 @@ private fun GuardSettingsRows(deps: Deps, cfg: com.openzeekr.app.config.SecretsC
     val dailyHour = cfg.guardDailyCheckHour
     var daily by remember(dailyHour) { mutableStateOf(if (dailyHour in 0..23) dailyHour.toString() else "") }
     var adding by remember { mutableStateOf(false) }
+    val focus = LocalFocusManager.current   // 0.4.9: the Done key
     fun change(transform: (com.openzeekr.app.config.SecretsConfig) -> com.openzeekr.app.config.SecretsConfig) {
         deps.config.update(transform); deps.guard.onSettingsChanged()
     }
@@ -212,7 +221,8 @@ private fun GuardSettingsRows(deps: Deps, cfg: com.openzeekr.app.config.SecretsC
                 },
                 label = { Text("Battery threshold (%)") },
                 singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
                 modifier = Modifier.fillMaxWidth(),
             )
             Text("Auto: ${GuardAutomaton.ARM_DELAY_MS / 60_000} min after a lock, with every door, the bonnet and the tailgate " +
@@ -241,6 +251,8 @@ private fun GuardSettingsRows(deps: Deps, cfg: com.openzeekr.app.config.SecretsC
                             }
                         },
                         label = { Text("Zone ${i + 1}") }, singleLine = true, modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
                     )
                     OutlinedTextField(
                         value = radius,
@@ -253,7 +265,8 @@ private fun GuardSettingsRows(deps: Deps, cfg: com.openzeekr.app.config.SecretsC
                             }
                         },
                         label = { Text("m") }, singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
                         modifier = Modifier.width(84.dp),
                     )
                     TextButton(onClick = { change { c -> c.copy(guardZones = c.guardZones.filterIndexed { j, _ -> j != i }) } }) { Text("Clear") }
@@ -291,7 +304,8 @@ private fun GuardSettingsRows(deps: Deps, cfg: com.openzeekr.app.config.SecretsC
                 }
             },
             label = { Text("Daily check at (hour 0-23, empty = off)") }, singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
             modifier = Modifier.fillMaxWidth(),
         )
         Row(verticalAlignment = Alignment.CenterVertically) {

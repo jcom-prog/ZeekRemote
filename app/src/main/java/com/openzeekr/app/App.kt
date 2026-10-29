@@ -32,6 +32,7 @@ class App : Application(), DepsHolder {
      */
     private fun startHeartbeat() {
         deps.vehicleState.start()   // live status polling follows the foreground too
+        deps.guard.onForeground(true)   // 0.4.9: the Sentry tile's minute reads follow the foreground too
         if (heartbeatJob?.isActive == true) return
         heartbeatJob = deps.appScope.launch {
             while (isActive) {
@@ -48,6 +49,7 @@ class App : Application(), DepsHolder {
     private fun stopHeartbeat() {
         heartbeatJob?.cancel(); heartbeatJob = null
         deps.vehicleState.stop()
+        deps.guard.onForeground(false)
     }
 
     /** Counts started activities to derive a reliable foreground/background flag. */

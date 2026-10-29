@@ -616,6 +616,13 @@ jobs:
           grep -Fq 'val anchorAvgMs' core/src/main/java/com/openzeekr/app/ble/OwnRules.kt
           grep -Fq 'departure near anchor median' core/src/main/java/com/openzeekr/app/ble/DepartureLocationSource.kt
           grep -Fq 'zeekremote.ownRulesMode' core/build.gradle.kts
+          # 0.4.9: the Sentry tile on the Vehicle tab (no tap; the flag re-read every minute in the foreground), the Done key on the guard fields
+          grep -Fq '## 0.4.9' CHANGELOG.md
+          grep -Fq 'fun tileLabel(flag: Boolean?)' core/src/main/java/com/openzeekr/app/guard/GuardAutomaton.kt
+          grep -Fq 'fun onForeground(active: Boolean)' core/src/main/java/com/openzeekr/app/guard/GuardAutomaton.kt
+          grep -Fq 'GuardAutomaton.tileLabel(guard.flag)' app/src/main/java/com/openzeekr/app/ui/VehicleScreen.kt
+          grep -Fq 'deps.guard.onForeground(true)' app/src/main/java/com/openzeekr/app/App.kt
+          grep -Fq 'KeyboardActions(onDone = { focus.clearFocus() })' app/src/main/java/com/openzeekr/app/ui/SecurityScreen.kt
           grep -Fq 'fun atCar(): Boolean?' core/src/main/java/com/openzeekr/app/guard/GuardAutomaton.kt
           grep -Fq 'waiting until the car is parked and you have left' core/src/main/java/com/openzeekr/app/guard/GuardAutomaton.kt
           grep -Fq 'guard: on confirmed late' core/src/main/java/com/openzeekr/app/guard/GuardAutomaton.kt
@@ -668,7 +675,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='172' versionName='0.4.8b-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='173' versionName='0.4.9-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

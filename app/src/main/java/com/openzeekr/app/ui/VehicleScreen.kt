@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Luggage
 import androidx.compose.material.icons.filled.Power
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material.icons.filled.Window
 import androidx.compose.material3.Button
@@ -86,6 +87,7 @@ import androidx.compose.ui.unit.sp
 import com.openzeekr.app.Deps
 import com.openzeekr.app.ble.DkBleManager
 import com.openzeekr.app.config.Units
+import com.openzeekr.app.guard.GuardAutomaton
 import com.openzeekr.app.net.model.ClimateStatusVo
 import com.openzeekr.app.net.model.ElectricStatusVo
 import com.openzeekr.app.net.model.ServiceParameter
@@ -117,6 +119,7 @@ fun VehicleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = M
     val keyLockEvent by com.openzeekr.app.remote.LocalLockEvidence.latest.collectAsState()
     val cfg by deps.config.config.collectAsState()
     val caps by deps.capabilities.state.collectAsState()
+    val guard by deps.guard.view.collectAsState()   // 0.4.9: the Sentry tile
     var info by remember { mutableStateOf<VehicleInfo?>(null) }
     var traffic by remember { mutableStateOf<com.openzeekr.app.net.model.TrafficReport?>(null) }
     LaunchedEffect(Unit) {
@@ -288,7 +291,11 @@ fun VehicleScreen(deps: Deps, snackbar: (String) -> Unit, modifier: Modifier = M
                 Ctl(Icons.Filled.Luggage, if (trunkOpen) "Open" else "Trunk", tint = Brand.energy, active = trunkOpen, modifier = Modifier.weight(1f)) { showTrunk = true }
                 // Frunk tile removed on user request (03/10): on this 7GT the frunk is opened by hand
                 // from the car. The 0x04 key command stays in the protocol layer.
-                Spacer(Modifier.weight(1f))
+                // 0.4.9 (owner 29/10): the Sentry guard as the car last reported it - green "Sentry on", amber "Sentry off",
+                // idle "Sentry" before the first read. No tap needed and none wired: the flag is re-read every minute while
+                // the app is open and at every step of the automaton; switching stays on the Security tab.
+                StateTile(Icons.Filled.Shield, GuardAutomaton.tileLabel(guard.flag),
+                    tint = if (guard.flag == true) Brand.good else Brand.energy, active = guard.flag != null, modifier = Modifier.weight(1f))
             }
         }
 
@@ -437,6 +444,19 @@ private fun Ctl(icon: ImageVector, label: String, tint: Color = MaterialTheme.co
                 active: Boolean = false, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Column(modifier.clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Box(Modifier.size(60.dp).clip(CircleShape)
+            .background(if (active) tint.copy(alpha = .16f) else Brand.surface2)
+            .border(1.dp, if (active) tint else Brand.line, CircleShape), contentAlignment = Alignment.Center) {
+            Icon(icon, label, tint = if (active) tint else MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(24.dp))
+        }
+        Text(label, color = Brand.muted, fontSize = 11.sp, textAlign = TextAlign.Center)
+    }
+}
+
+/** 0.4.9: a tile that only shows a state (no tap) - the same look as [Ctl]. */
+@Composable
+private fun StateTile(icon: ImageVector, label: String, tint: Color, active: Boolean, modifier: Modifier = Modifier) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Box(Modifier.size(60.dp).clip(CircleShape)
             .background(if (active) tint.copy(alpha = .16f) else Brand.surface2)
             .border(1.dp, if (active) tint else Brand.line, CircleShape), contentAlignment = Alignment.Center) {

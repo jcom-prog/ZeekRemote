@@ -33,7 +33,10 @@ class GuardAutomatonTest {
         var atCar: Boolean? = false
         var unreadable = false
         var cancels = 0
+        /** 0.4.9 */
+        var reads = 0
         override suspend fun readFlag(): Boolean? {
+            reads++
             if (unreadable) return null
             pendingWant?.let { want ->
                 readsSincePending++
@@ -209,6 +212,31 @@ class GuardAutomatonTest {
         advanceTimeBy(121_000 + 290_000 + 301_000); runCurrent()
         assertEquals(listOf("Sentry guard: state not readable"), io.notes)
         assertTrue(log.contains("guard: flag unreadable -> notified"))
+    }
+
+    @Test fun inTheForegroundTheFlagIsReadEveryMinuteWithoutATap() = runTest {
+        // 0.4.9 (owner 29/10): the Sentry tile on the Vehicle tab follows the car while the app is open; nothing in the background.
+        val io = FakeIo(); io.flag = true
+        val a = automaton(io)
+        assertEquals("Sentry", GuardAutomaton.tileLabel(a.view.value.flag))
+        a.onForeground(true); runCurrent()
+        assertEquals(1, io.reads)
+        assertEquals("Sentry on", GuardAutomaton.tileLabel(a.view.value.flag))
+        advanceTimeBy(60_000); runCurrent()
+        assertEquals(2, io.reads)
+        io.flag = false
+        advanceTimeBy(60_000); runCurrent()
+        assertEquals(3, io.reads)
+        assertEquals("Sentry off", GuardAutomaton.tileLabel(a.view.value.flag))
+        assertTrue(log.contains("guard: off detected"))
+        io.unreadable = true
+        advanceTimeBy(60_000); runCurrent()
+        assertEquals("a failed read keeps the last state", false, a.view.value.flag)
+        assertFalse(log.contains("guard: flag read failed"))
+        a.onForeground(false)
+        advanceTimeBy(10 * 60_000); runCurrent()
+        assertEquals("no reads in the background", 4, io.reads)
+        assertTrue(io.sends.isEmpty())
     }
 
     @Test fun aLockWithThePhoneStillInTheCarWaitsUntilTheOwnerHasLeft() = runTest {

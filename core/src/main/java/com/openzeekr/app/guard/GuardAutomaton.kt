@@ -124,6 +124,8 @@ class GuardAutomaton(
     private val atCarPollMs: Long = AT_CAR_POLL_MS,
     private val lateStepMs: Long = LATE_STEP_MS,
     private val socCheckMs: Long = SOC_CHECK_MS,
+    /** 0.4.9: how often the flag is re-read while the app is in the foreground (the Sentry tile, the "Car says" line). */
+    private val foregroundReadMs: Long = FOREGROUND_READ_MS,
     /** The next moment (wall ms) the daily check runs, given now and the owner's hour; default = local clock. */
     private val nextDaily: (nowMs: Long, hour: Int) -> Long = ::nextLocalHour,
 ) {
@@ -151,6 +153,7 @@ class GuardAutomaton(
     private var commandJob: Job? = null
     private var dailyJob: Job? = null
     private var windowsJob: Job? = null
+    private var foregroundJob: Job? = null
     private var episodeHold = false
     private var dailyHold = false
     private var ioHeld = false
@@ -260,6 +263,22 @@ class GuardAutomaton(
 
     /** Re-read the flag (the Security tab coming to the front). */
     fun refresh() { scope.launch { onFlagRead(io.readFlag()) } }
+
+    /**
+     * 0.4.9: while the app is in the foreground the flag is read at once and then every [foregroundReadMs], so the Sentry
+     * tile on the Vehicle tab and the "Car says" line follow the car without a tap. A failed read is skipped quietly (the
+     * tile keeps the last state; the line shows when it was read); nothing runs in the background.
+     */
+    fun onForeground(active: Boolean) {
+        foregroundJob?.cancel(); foregroundJob = null
+        if (!active) return
+        foregroundJob = scope.launch {
+            while (true) {
+                io.readFlag()?.let { onFlagRead(it) }
+                delay(foregroundReadMs)
+            }
+        }
+    }
 
     /** A cheap hint from the service's keep-alive round: the hourly battery check and the daily check when due. */
     fun onKeepAliveRound() {
@@ -548,10 +567,15 @@ class GuardAutomaton(
         /** 0.4.8: while the phone is in or at the car after a lock, look again this often. */
         const val AT_CAR_POLL_MS = 30_000L
         const val SOC_CHECK_MS = 3_600_000L
+        /** 0.4.9 */
+        const val FOREGROUND_READ_MS = 60_000L
         const val HYSTERESIS_PCT = 5
         const val MAX_ZONES = 3
         const val WINDOWS_CHECK_MS = 20_000L
         const val DAY_MS = 24 * 3_600_000L
+
+        /** 0.4.9: the Sentry tile on the Vehicle tab - the car's flag as last read; null = never read. */
+        fun tileLabel(flag: Boolean?): String = when (flag) { true -> "Sentry on"; false -> "Sentry off"; null -> "Sentry" }
 
         fun initialStatus(mode: GuardMode): String = when (mode) {
             GuardMode.OFF -> "Off · the app leaves the guard alone"
