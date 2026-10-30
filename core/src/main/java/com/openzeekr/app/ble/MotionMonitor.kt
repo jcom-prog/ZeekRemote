@@ -193,6 +193,18 @@ class MotionMonitor(context: Context) : ProximityMotion {
     // timeout runs on the main looper — while moving the caller holds a wakelock so it fires on time; a
     // stop lets the CPU sleep and it fires on the next wake, which is fine (we just linger MOVING a bit).
     private val stillHandler = Handler(Looper.getMainLooper())
+    /**
+     * 0.4.12 (study D round 2): an own step counts as walking for the motion state, like an Android detector step, while the
+     * own rules decide (LIVE). The simulator assumed this since 0.4.0b; the app did not do it - the own tracker only logged.
+     * Under the app's real behaviour the full gate lost 474 approaches (221 -> 695 without an unlock); with this rule it is
+     * back at 221. The drive flag is not cleared here: that stays with the step detector and Activity Recognition (study J).
+     */
+    private fun onOwnStep() {
+        if (!running || !OwnRules.live) return
+        setMoving()
+        stillHandler.removeCallbacks(stepStillRunnable)
+        stillHandler.postDelayed(stepStillRunnable, STEP_STILL_TIMEOUT_MS)
+    }
     private val stepStillRunnable = Runnable {
         if (running && (source == Source.STEP || source == Source.ACTIVITY)) setStill()
     }
@@ -245,6 +257,7 @@ class MotionMonitor(context: Context) : ProximityMotion {
     override fun start() {
         if (running) return
         running = true
+        ownTracker.onStep = { onOwnStep() }   // 0.4.12
         stepCounterActive = stepCounter?.let {
             runCatching { sensors?.registerListener(onStepCounter, it, SensorManager.SENSOR_DELAY_NORMAL) == true }
                 .getOrDefault(false)

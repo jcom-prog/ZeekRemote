@@ -2,6 +2,14 @@
 
 Wat je per versie merkt, in gewone taal. ZeekRemote is een privé-afsplitsing van [OpenZeekr](https://github.com/borconi/openzeekr) (splitpunt: OpenZeekr 0.1.4) voor één telefoon en één auto; de nadruk ligt op betrouwbaar openen bij het naderen en sluiten bij het weglopen, met een simulator en een regressiepoort als bewaker. Dit logboek bevat geen meetwaarden, tijden, plaatsen of persoonsgegevens; technische details staan in de commits.
 
+## 0.4.12 (alleen telefoon)
+
+- **Autopositie blijft staan na het parkeren.** De positie die de app bij het parkeren onthoudt, werd tot nu toe vaak binnen een seconde weer gewist doordat de rij-vlag van de telefoon nog even bleef hangen. Een rit wist de positie nu alleen als die vlag ná het parkeren opnieuw is gaan staan; een nieuwe parkeerplek vervangt de oude ankers.
+- **Geen overdracht bij een veto.** Houdt een verse meting bij de auto de sleutel-Lock tegen, dan wordt de cloud-Lock geannuleerd en kijkt de app verder, zoals in 0.4.10; de directe waarschuwing van 0.4.11 in dat geval vervalt.
+- **Eigen stappen tellen als beweging.** Een stap van de eigen stappenteller zet de bewegingsstand op lopen, zoals een stap van de telefoonsensor dat doet; de rij-vlag blijft daarbij staan.
+- **Vertrekplannen: meer in het dagboek.** Per plan ook de looptijden van de stoelverwarming en -ventilatie, en twee minuten na elke ingeschakelde plantijd één keer de stoelverwarmingsstanden en de klimaatstand van de auto. Alleen getallen; geen namen of tijden.
+- **Simulator.** Een rit zet de rij-vlag nu in alle werelden, eigen stappen gedragen zich als in de app, een scenario met terugkomst na het parkeren, nieuwe basislijn.
+
 ## 0.4.11 (alleen telefoon)
 
 - **Sneller dicht als de auto de sleutel-Lock niet uitvoert.** Zodra het vertrek via Bluetooth bewezen is, stuurt de app de Lock ook via de cloud, naast de sleutel; wie het eerst bevestigt, wint. De cloud-Lock houdt zijn eigen controles (verse lezing, nabijheidsveto). Zolang die loopt, meldt de sleutelroute niet zelf "geen Lock gestuurd" maar wacht zij de uitkomst af.

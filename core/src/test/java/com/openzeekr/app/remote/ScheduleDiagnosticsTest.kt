@@ -66,8 +66,9 @@ class ScheduleDiagnosticsTest {
         val slot = empty.copy(heatSettings = (1..8).map { com.openzeekr.app.net.model.TravelSeatSetting(15, 1, it, 0) })
         val sent = Departures.fromSlot(slot, DepartureDraft("Test", "04:00:00", setOf(7), tempC = 21.0, seats = mapOf(1 to 1, 2 to 2, 3 to 3)))
         val line = ScheduleDiagnostics.seatsLine("create", sent, listOf(used, slot))
-        assertEquals("schedule seats at=create sent=2:1=1+/2=2+/3=3+/4=1-/5=1-/6=1-/7=1-/8=1- " +
-            "slots=1:none,2:1=1-/2=1-/3=1-/4=1-/5=1-/6=1-/7=1-/8=1-", line)
+        // 0.4.12: each entry ends with its duration in minutes (the slot's entries carry 15).
+        assertEquals("schedule seats at=create sent=2:1=1+15/2=2+15/3=3+15/4=1-15/5=1-15/6=1-15/7=1-15/8=1-15 " +
+            "slots=1:none,2:1=1-15/2=1-15/3=1-15/4=1-15/5=1-15/6=1-15/7=1-15/8=1-15", line)
         for (privateValue in listOf("Plan A", "Test", "06:40", "04:00", "21.0", Departures.PLACEHOLDER_TIME))
             assertFalse(privateValue, line.contains(privateValue))
         assertEquals("SCHEDULE_SEATS " + line.removePrefix("schedule seats "), ProximityDiagnosticJournal.event("sched", line))
@@ -82,9 +83,13 @@ class ScheduleDiagnosticsTest {
         val slot = empty.copy(heatSettings = listOf(com.openzeekr.app.net.model.TravelSeatSetting(15, 255, 1, 0),
             com.openzeekr.app.net.model.TravelSeatSetting(15, 3, 2, 1)))
         val line = ScheduleDiagnostics.seatsLine("load", null, listOf(slot))
-        assertEquals("schedule seats at=load sent=- slots=2:1=255-/2=3+", line)
+        assertEquals("schedule seats at=load sent=- slots=2:1=255-15/2=3+15", line)
         assertEquals("SCHEDULE_SEATS " + line.removePrefix("schedule seats "), ProximityDiagnosticJournal.event("sched", line))
         assertNull("four digits", ProximityDiagnosticJournal.event("sched", line.replace("255", "2550")))
+        // 0.4.12: the ventilation entries the same way; this slot has none.
+        val vents = ScheduleDiagnostics.ventsLine("load", null, listOf(slot))
+        assertEquals("schedule vents at=load sent=- slots=2:none", vents)
+        assertEquals("SCHEDULE_VENTS at=load sent=- slots=2:none", ProximityDiagnosticJournal.event("sched", vents))
     }
 
     @Test fun theShapeLineShowsFlagsAndCountsOnly() {

@@ -6,9 +6,11 @@ import org.junit.Test
 /**
  * 0.4.11 (study A, field 29/10): home by car, a few metres to the garden gate, standing there, through it (the gate closes
  * between phone and car), on to the back door. Pinned runs of the study (front pocket, world "good"): the cloud Lock runs
- * beside the key Lock the car does not execute (G2b), the key loop hands over to it instead of warning (G2b, stress world),
- * and without a gate the departure alarm waits for the walk route's window instead of sounding seconds before its Lock
- * (G2d). The unit tests run the own rules in SHADOW (core/build.gradle.kts); the seeds were checked in that mode.
+ * beside the key Lock the car does not execute (G2b), and without a gate the departure alarm waits for the walk route's
+ * window instead of sounding seconds before its Lock (G2d). 0.4.12 (study D, 30/10): a vetoed key Lock cancels the pending
+ * cloud Lock and the route keeps watching (G2b, world field-like) instead of handing over, which suspended the route and
+ * warned at once. The unit tests run the own rules in SHADOW (core/build.gradle.kts); the seeds were checked in that mode
+ * under the 0.4.12 simulator model (the drive flag lingers 20-450 s after every drive).
  */
 class SimBehindTheGateTest {
     private fun play(suite: String, family: String, carry: Carry, motion: String, seed: Long): SimWorld {
@@ -34,17 +36,22 @@ class SimBehindTheGateTest {
         assertTrue("no alarm before the Lock: $codes", world.events.none { it.kind == "ALARM" && it.atMs < lock.atMs })
     }
 
-    @Test fun aVetoHandsOverToThePendingCloudLockWhichJudgesOnItsOwn() {
-        // In SHADOW the own counter is not live, so the K1 step veto fires here while the user is 22 m away: 0.4.10 posted
-        // the silent "user at the car" notice and the alarm came 40 s later with the lost link; now the key loop hands over
-        // and the cloud path, vetoed too, raises the "not locked" warning at once. The car stays open in both (link lost).
-        val world = play("stress", "G2b", Carry.FRONT_POCKET, "s24-off", -60602551085L)
+    @Test fun aVetoCancelsThePendingCloudLockAndTheRouteKeepsWatching() {
+        // 0.4.12 (B''). In SHADOW the own counter is not live, so the K1 step veto fires at the car (9 steps, 6 m) while the
+        // cloud Lock already runs beside the key Lock. 0.4.11 handed over to that cloud Lock, which suspended the BLE route and
+        // warned at once (field 29/10). Now the key loop cancels the pending cloud Lock, posts the silent 0.4.10 notice and keeps
+        // watching: 45 s later the next proof locks the car (cloud), without an alarm.
+        val world = play("field-like", "G2b", Carry.FRONT_POCKET, "good", -61063980107L)
         val codes = SimOracle.check(world).map { it.code }
         val log = log(world)
-        assertTrue("the key loop handed over", "key loop hands over to the pending cloud Lock (vetoed" in log)
-        assertTrue("no warning from the key loop itself", "; user at the car; NO LOCK SENT" !in log)
-        assertTrue("the cloud path judged on its own", "cloud Lock vetoed" in log)
-        assertTrue("the warning is the cloud path's: $codes", world.events.any { it.kind == "NOTIFY" && it.detail == "AUTO_LOCK_UNCONFIRMED" })
+        assertTrue("the cloud Lock ran beside the key Lock", "cloud Lock in parallel with the key Lock" in log)
+        assertTrue("the pending cloud Lock was cancelled", "Lock vetoed - the pending cloud Lock is cancelled; the route keeps watching" in log)
+        assertTrue("no hand-over on the veto", "hands over to the pending cloud Lock (vetoed" !in log)
+        assertTrue("the 0.4.10 path: the silent notice", world.events.any { it.kind == "NOTIFY" && it.detail == "PROXIMITY_RECOVERED_BEFORE_LOCK" })
+        assertTrue("no warning at the veto: $codes", world.events.none { it.kind == "NOTIFY" && it.detail == "AUTO_LOCK_UNCONFIRMED" })
+        val lock = world.events.firstOrNull { it.kind == "CAR_LOCKED" }
+        assertTrue("locked by the app afterwards: $codes", lock != null && (lock.detail == "key" || lock.detail == "cloud"))
+        assertTrue("no alarm before the Lock: $codes", world.events.none { it.kind == "ALARM" && it.atMs < lock!!.atMs })
         assertTrue("no safety finding: $codes", codes.none { it in SimOracle.SAFETY })
     }
 

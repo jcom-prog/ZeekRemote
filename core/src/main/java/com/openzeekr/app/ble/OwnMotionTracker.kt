@@ -60,6 +60,8 @@ internal class OwnMotionTracker(
     }
     /** The latest observed turn (elapsed ms) in the open window; null: none. */
     val lastTurnAtMs: Long? get() = logic.lastTurnAtMs
+    /** 0.4.12: called for every counted step, on the sensor thread (MotionMonitor feeds the motion state from it). */
+    @Volatile var onStep: (() -> Unit)? = null
 
     private val secondTick = object : Runnable {
         override fun run() {
@@ -114,7 +116,9 @@ internal class OwnMotionTracker(
                 val x = event.values[0].toDouble()
                 val y = event.values[1].toDouble()
                 val z = event.values[2].toDouble()
+                val before = logic.steps
                 logic.onAccel(tMs, sqrt(x * x + y * y + z * z))
+                if (logic.steps > before) onStep?.invoke()
             }
             Sensor.TYPE_GAME_ROTATION_VECTOR -> {
                 runCatching {

@@ -85,9 +85,14 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
             "slots=(?:none|$SCHEDULE_SHAPE(?:,$SCHEDULE_SHAPE){0,9}))")
         // The seat heating per plan (0.3.17): seat codes, levels and on/off only.
         // 0.3.18: the level as the car stores it, up to three digits (an off seat is stored outside I-III).
-        private const val SCHEDULE_SEATS = "[0-9]{1,2}:(?:none|[0-9]{1,2}=[0-9]{1,3}[+-](?:/[0-9]{1,2}=[0-9]{1,3}[+-]){0,8})"
+        // 0.4.12: each entry may carry its duration in minutes ("1=3+15"); the ventilation entries use the same form.
+        private const val SCHEDULE_SEATS = "[0-9]{1,2}:(?:none|[0-9]{1,2}=[0-9]{1,3}[+-][0-9]{0,3}(?:/[0-9]{1,2}=[0-9]{1,3}[+-][0-9]{0,3}){0,8})"
         private val scheduleSeats = Regex("schedule seats (at=(?:load|create|edit|switch|delete) sent=(?:-|$SCHEDULE_SEATS) " +
             "slots=(?:none|$SCHEDULE_SEATS(?:,$SCHEDULE_SEATS){0,9}))")
+        private val scheduleVents = Regex("schedule vents (at=(?:load|create|edit|switch|delete) sent=(?:-|$SCHEDULE_SEATS) " +
+            "slots=(?:none|$SCHEDULE_SEATS(?:,$SCHEDULE_SEATS){0,9}))")
+        // 0.4.12: the status read two minutes after a plan's time - seat levels and the climate flag only.
+        private val planRun = Regex("plan run check (slot=[0-9]{1,2} status=(?:unavailable|read seats=[0-9]/[0-9]/[0-9]/[0-9] climate=(?:on|off|\\?)))")
         // One read of the departure list (0.3.18): counts or a failure category only.
         private val scheduleList = Regex("schedule list (read=(?:ok plans=[0-9]{1,2} filled=[0-9]{1,2} unreadable=[0-9]{1,2}|" +
             "failed reason=(?:http|network|parse|refused|other)))")
@@ -118,7 +123,7 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
         private val gnssOpen = Regex("open approach_gnss at (-[0-9]{2,3}) dBm: ([0-9]{1,5}) m acc ([0-9]{1,4}) trend (-?[0-9]{1,4}\\.[0-9]) " +
             "after ([0-9]{1,3}) fixes \\(([0-9]{1,3}) readings\\)")
         private val gnssCarPosition = Regex("^(shadow: )?gnss: car position (?:remembered \\(([1-9]) anchors, acc ([0-9]{1,4})\\)|" +
-            "forgotten \\(the phone rides in the car\\))$")
+            "forgotten \\(the phone rides in the car\\)|kept \\(the drive flag is older than the parking\\))$")
         private val gnssFixWatch = Regex("^(shadow: )?gnss: fix watch (?:starts \\((doubt|in band)\\)|over)$")
 
         // 0.4.3: the engine's stand-down, the fail-safe reclaim, an ignored (stale) report or resume, the key push/purge.
@@ -193,8 +198,9 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                 }
                 // 0.4.0c: the car's remembered position (a count and an accuracy), the fix watch and the gate's decisions.
                 gnssCarPosition.matchEntire(message)?.let { m ->
-                    return "GNSS_CAR_POSITION " + (if (m.groupValues[2].isEmpty()) "forgotten"
-                        else "remembered anchors=${m.groupValues[2]} acc=${m.groupValues[3]}") + (if (m.groupValues[1].isEmpty()) "" else " shadow")
+                    // 0.4.12: "kept" - the drive flag was older than the parking (study D).
+                    return "GNSS_CAR_POSITION " + (if (m.groupValues[2].isNotEmpty()) "remembered anchors=${m.groupValues[2]} acc=${m.groupValues[3]}"
+                        else if (message.contains(" kept ")) "kept" else "forgotten") + (if (m.groupValues[1].isEmpty()) "" else " shadow")
                 }
                 gnssFixWatch.matchEntire(message)?.let { m ->
                     return "GNSS_FIX_WATCH " + m.groupValues[2].ifEmpty { "over" }.replace(' ', '_') + (if (m.groupValues[1].isEmpty()) "" else " shadow")
@@ -281,6 +287,8 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                     // 0.4.11 (study A): the alarm also waits for the walk route's window; the cloud Lock beside the key Lock.
                     message.startsWith("departure alarm held: a walk-away proof is under way") -> "LOCK_ALARM_HELD walk"
                     message == "ble-departure: cloud Lock in parallel with the key Lock" -> "CLOUD_LOCK_PARALLEL"
+                    // 0.4.12: a veto cancels the pending cloud Lock; the route keeps watching (no hand-over).
+                    message.endsWith("Lock vetoed - the pending cloud Lock is cancelled; the route keeps watching") -> "CLOUD_LOCK_CANCELLED veto"
                     message == "ble-departure: the parallel cloud Lock verified the car locked -> Lock confirmed" -> "AUTO_LOCK_CLOUD_VERIFIED parallel"
                     message.startsWith("ble-departure: key loop hands over to the pending cloud Lock (") -> "LOCK_HANDOVER " + when {
                         message.endsWith("(proof expired)") -> "expired"; message.contains("(vetoed") -> "vetoed"; else -> "unproven" }
@@ -335,6 +343,8 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
             if (area == "sched") return scheduleWrite.matchEntire(message)?.let { "SCHEDULE_WRITE ${it.groupValues[1]}" }
                 ?: scheduleShape.matchEntire(message)?.let { "SCHEDULE_SHAPE ${it.groupValues[1]}" }
                 ?: scheduleSeats.matchEntire(message)?.let { "SCHEDULE_SEATS ${it.groupValues[1]}" }
+                ?: scheduleVents.matchEntire(message)?.let { "SCHEDULE_VENTS ${it.groupValues[1]}" }
+                ?: planRun.matchEntire(message)?.let { "PLAN_RUN ${it.groupValues[1]}" }
                 ?: scheduleList.matchEntire(message)?.let { "SCHEDULE_LIST ${it.groupValues[1]}" }
             if (area == "ctl") return Regex("(LOCK|UNLOCK): cloud request failed \\(key link ([A-Z_]{1,20})\\)")
                 .matchEntire(message)?.let { "CLOUD_${it.groupValues[1]}_FAILED ${it.groupValues[2]}" }

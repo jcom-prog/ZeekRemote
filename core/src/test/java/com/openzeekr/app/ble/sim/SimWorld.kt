@@ -563,7 +563,9 @@ internal class SimWorld(
                     repeat((ownTotal - ownSeen).toInt().coerceAtMost(50)) { ownStepWalls.addLast(wall) }
                     while (ownStepWalls.size > 200) ownStepWalls.removeFirst()
                     ownSeen = ownTotal; ownSeenStepWallMs = wall
-                    if (OWN_MOTION) { vehicleMotion = false; lastStepMs = now(); setMoving() }
+                    // 0.4.12: own steps and the motion state as the app does it (see OWN_MOTION_MODE).
+                    if (OWN_MOTION_MODE == 1 || OWN_MOTION_MODE == 2) vehicleMotion = false
+                    if (OWN_MOTION_MODE == 1 || OWN_MOTION_MODE == 3) { lastStepMs = now(); setMoving() }
                 }
             }
         }
@@ -596,17 +598,26 @@ internal class SimWorld(
         private val vehicleMoving get() = driving || now() < vehicleMovingUntilMs
 
         fun driveStarted() {
-            if (physics.afterDriveReleaseMaxMs <= 0) return
-            driving = true; driveHold = true; driveWalkMs = 0L; driveStopMs = 0L; heldHub = 0.0; heldDetector = 0L
-            vehicleMotion = true
-            driveReleaseMs = rHub.uniform(physics.afterDriveReleaseMinMs.toDouble(), physics.afterDriveReleaseMaxMs.toDouble()).toLong()
+            // 0.4.12 (study D): every drive sets the flag (field: AR "vehicle enter" at every drive); the S24 profiles then also
+            // hold their steps as study J measured (12-25 s of walking, half the drives dropped).
+            val holdSteps = physics.afterDriveReleaseMaxMs > 0 || (DRIVE_FLAG && motionProfile.name.startsWith("s24"))
+            if (!DRIVE_FLAG && physics.afterDriveReleaseMaxMs <= 0) return
+            driving = true; vehicleMotion = true
+            if (holdSteps) {
+                driveHold = true; driveWalkMs = 0L; driveStopMs = 0L; heldHub = 0.0; heldDetector = 0L
+                val lo = if (physics.afterDriveReleaseMaxMs > 0) physics.afterDriveReleaseMinMs else 12_000L
+                val hi = if (physics.afterDriveReleaseMaxMs > 0) physics.afterDriveReleaseMaxMs else 25_000L
+                driveReleaseMs = rHub.uniform(lo.toDouble(), hi.toDouble()).toLong()
+            }
             setMoving()
         }
 
         fun driveEnded() {
             if (!driving) return
             driving = false
-            vehicleMovingUntilMs = now() + rMotion.uniform(physics.afterDriveMovingMinMs.toDouble(), physics.afterDriveMovingMaxMs.toDouble()).toLong()
+            val lo = if (DRIVE_FLAG) AR_DRIVE_MIN_MS else physics.afterDriveMovingMinMs
+            val hi = if (DRIVE_FLAG) AR_DRIVE_MAX_MS else physics.afterDriveMovingMaxMs
+            vehicleMovingUntilMs = now() + rMotion.uniform(lo.toDouble(), hi.toDouble()).toLong()
         }
 
         fun tick(dtMs: Long, cpuAwake: Boolean) {
@@ -1657,7 +1668,17 @@ internal class SimWorld(
         /** 0.4.0 study: the app's own step counter exists (SIM_OWN=1), with its field-calibrated parameters (23/10). */
         val OWN = OwnRules.enabled
         /** Own steps feed the motion state (step assist -> MOVING), as the hub detector's steps do. */
-        val OWN_MOTION = (System.getenv("SIM_OWN_MOTION") ?: (if (OwnRules.live) "1" else "0")) == "1"
+        /** 0.4.12: own steps and the motion state - 0 = nothing (OFF/SHADOW: the app's own tracker only logs), 3 = they set MOVING
+         *  (LIVE, as MotionMonitor does since 0.4.12; the drive flag stays), 1 = MOVING and the drive flag cleared (the simulator's
+         *  assumption of 0.4.0b-0.4.11, kept for comparisons), 2 = the flag cleared only. */
+        val OWN_MOTION_MODE = (System.getenv("SIM_OWN_MOTION") ?: (if (OwnRules.live) "3" else "0")).toInt()
+        /** 0.4.12 (study D): the drive sets the motion flag in every world (field: AR "vehicle enter" at every drive). After the
+         *  parking Activity Recognition keeps reporting the drive for [AR_DRIVE_MIN_MS]..[AR_DRIVE_MAX_MS] (field 29/10: 24 s; 19/10:
+         *  minutes), and the S24 profiles hold their steps for 12-25 s of walking, half the drives for good (study J). Before 0.4.12
+         *  only the world "steps-after-drive" had the flag. SIM_DRIVE_FLAG=0 gives the old simulator. */
+        val DRIVE_FLAG = System.getenv("SIM_DRIVE_FLAG") != "0"
+        val AR_DRIVE_MIN_MS = (System.getenv("SIM_AR_DRIVE_MIN_S") ?: "20").toLong() * 1_000L
+        val AR_DRIVE_MAX_MS = (System.getenv("SIM_AR_DRIVE_MAX_S") ?: "450").toLong() * 1_000L
         /** The app holds the CPU while the counter runs. */
         val OWN_HOLD = System.getenv("SIM_OWN_HOLD") != "0"
         val OWN_LAG_MS = (System.getenv("SIM_OWN_LAG_MS") ?: "1000").toLong()

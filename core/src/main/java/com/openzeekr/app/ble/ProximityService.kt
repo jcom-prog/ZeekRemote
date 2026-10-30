@@ -375,6 +375,12 @@ class ProximityService : Service() {
             // the meter itself rate-bounds to one per minute.
             runCatching { deps.batteryMeter.sample("keep-alive") }
             runCatching { deps.guard.onKeepAliveRound() }   // 0.4.5: the guard's hourly battery check, when due
+            // 0.4.12: two minutes after a departure plan's time, one status read for the journal (seat heating, climate).
+            runCatching {
+                com.openzeekr.app.remote.PlanRunWatch.tick(System.currentTimeMillis(), { deps.schedule.departures() }) {
+                    (deps.control.status() as? com.openzeekr.app.remote.CallResult.Ok)?.value
+                }
+            }
             if (deps.ble.hasCredential && deps.ble.bluetoothAvailable) {
                 val offload = deps.config.config.value.presenceOffloadEnabled
                 when (deps.ble.state.value) {

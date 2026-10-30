@@ -22,6 +22,9 @@ internal class CarPositionMemory(saved: List<DoubleArray> = emptyList()) {
     val count: Int get() = fixes.size
 
     fun remember(anchor: DepartureFix) {
+        // 0.4.12 (study D): a new parking place replaces the kept anchors - a position the drive did not wipe must never join
+        // the median with the new place's anchor.
+        position?.let { p -> if (DepartureSafetyEvidence.distanceM(p, anchor) > NEW_PLACE_M) fixes.clear() }
         fixes += anchor
         while (fixes.size > KEPT) fixes.removeAt(0)
         position = median(fixes)
@@ -37,7 +40,11 @@ internal class CarPositionMemory(saved: List<DoubleArray> = emptyList()) {
             med(list.map { it.accuracyM.toDouble() }).toFloat(), 0L)
     }
 
-    companion object { const val KEPT = 5 }
+    companion object {
+        const val KEPT = 5
+        /** 0.4.12: an anchor farther than this from the kept position is a new parking place. */
+        const val NEW_PLACE_M = 50.0
+    }
 }
 
 internal class LockedFixFilter {

@@ -638,6 +638,17 @@ jobs:
           grep -Fq 'fun walkProofRunningMs(nowMs: Long): Long?' core/src/main/java/com/openzeekr/app/ble/BleDepartureEvidence.kt
           grep -Fq 'data class Obstacle(val db: Double) : Leg()' core/src/test/java/com/openzeekr/app/ble/sim/SimWorld.kt
           grep -Fq 'Scenario("G2a drive home' core/src/test/java/com/openzeekr/app/ble/sim/SimScenarios.kt
+          # 0.4.12 (study D): no hand-over on a veto, own steps as walking (LIVE), the car's position and the drive flag, the plan-run check, the drive flag in every simulated world
+          grep -Fq '## 0.4.12' CHANGELOG.md
+          grep -Fq 'the pending cloud Lock is cancelled; the route keeps watching' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'private fun onOwnStep()' core/src/main/java/com/openzeekr/app/ble/MotionMonitor.kt
+          grep -Fq 'car position kept (the drive flag is older than the parking)' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'const val NEW_PLACE_M = 50.0' core/src/main/java/com/openzeekr/app/ble/GnssGateSupport.kt
+          grep -Fq 'object PlanRunWatch' core/src/main/java/com/openzeekr/app/remote/PlanRunWatch.kt
+          grep -Fq 'val DRIVE_FLAG = System.getenv("SIM_DRIVE_FLAG") != "0"' core/src/test/java/com/openzeekr/app/ble/sim/SimWorld.kt
+          grep -Fq 'Scenario("G3 drive home' core/src/test/java/com/openzeekr/app/ble/sim/SimScenarios.kt
+          grep -Fq 'fun aVetoCancelsThePendingCloudLockAndTheRouteKeepsWatching' core/src/test/java/com/openzeekr/app/ble/sim/SimBehindTheGateTest.kt
+          grep -Fq 'class SimParkedPositionTest' core/src/test/java/com/openzeekr/app/ble/sim/SimParkedPositionTest.kt
           grep -Fq 'class SimBehindTheGateTest' core/src/test/java/com/openzeekr/app/ble/sim/SimBehindTheGateTest.kt
           grep -Fq 'fun atCar(): Boolean?' core/src/main/java/com/openzeekr/app/guard/GuardAutomaton.kt
           grep -Fq 'waiting until the car is parked and you have left' core/src/main/java/com/openzeekr/app/guard/GuardAutomaton.kt
@@ -691,7 +702,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='175' versionName='0.4.11-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='176' versionName='0.4.12-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

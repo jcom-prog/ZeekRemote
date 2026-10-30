@@ -27,6 +27,20 @@ class GnssGateSupportTest {
         assertEquals(7f, memory.position!!.accuracyM, 1e-6f)
     }
 
+    @Test fun aNewParkingPlaceReplacesTheKeptAnchors() {
+        // 0.4.12 (study D): a position the drive did not wipe must not join the median with the new place's anchor.
+        val memory = CarPositionMemory()
+        memory.remember(DepartureFix(52.00000, 4.00000, 5f, 1L))
+        memory.remember(DepartureFix(52.00001, 4.00001, 6f, 2L))
+        memory.remember(DepartureFix(52.00002, 4.00000, 5f, 3L))
+        assertEquals(3, memory.count)
+        memory.remember(DepartureFix(52.00090, 4.00000, 4f, 4L))   // ~100 m north: another parking place
+        assertEquals("the kept anchors are replaced", 1, memory.count)
+        assertEquals(52.00090, memory.position!!.latitude, 1e-9)
+        memory.remember(DepartureFix(52.00091, 4.00001, 4f, 5L))   // the next visit at the new place joins
+        assertEquals(2, memory.count)
+    }
+
     @Test fun theCarPositionSurvivesARestartThroughTheSavedListAndIsForgottenInTheCar() {
         val memory = CarPositionMemory()
         memory.remember(DepartureFix(52.0, 4.0, 5f, 1L))

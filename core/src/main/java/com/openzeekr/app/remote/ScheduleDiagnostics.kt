@@ -90,8 +90,13 @@ internal object ScheduleDiagnostics {
      * Seat codes and levels only. Shows which code the car uses for which seat (field test 0.3.17). 0.3.18: the level as
      * the car stores it, up to 999 (field 18/10: an off seat is stored with a level outside I-III).
      */
-    fun seats(p: BookingTravelSetting): String =
-        p.heatSettings.take(9).joinToString("/") { "${it.location.coerceIn(0, 99)}=${it.level.coerceIn(0, 999)}${if (it.sts == 1) "+" else "-"}" }
+    fun seats(p: BookingTravelSetting): String = entries(p.heatSettings)
+    /** 0.4.12: the ventilation entries the same way (field 30/10: a plan with seat heating did not heat; the car may read the
+     *  ventilation and heat entries of one seat together). */
+    fun vents(p: BookingTravelSetting): String = entries(p.ventiSettings)
+    /** 0.4.12: each entry also carries its duration in minutes, e.g. "1=3+15" (seat 1, level III, on, 15 min). */
+    private fun entries(l: List<com.openzeekr.app.net.model.TravelSeatSetting>): String =
+        l.take(9).joinToString("/") { "${it.location.coerceIn(0, 99)}=${it.level.coerceIn(0, 999)}${if (it.sts == 1) "+" else "-"}${it.duration.coerceIn(0, 999)}" }
             .ifEmpty { "none" }
 
     /**
@@ -113,6 +118,10 @@ internal object ScheduleDiagnostics {
     fun seatsLine(at: String, sent: BookingTravelSetting?, plans: List<BookingTravelSetting>?): String =
         "schedule seats at=$at sent=${sent?.let { "${it.btId.coerceIn(0, 99)}:${seats(it)}" } ?: "-"} slots=" +
             (if (plans.isNullOrEmpty()) "none" else plans.take(10).joinToString(",") { "${it.btId.coerceIn(0, 99)}:${seats(it)}" })
+    /** 0.4.12: the ventilation entries per plan, as [seatsLine]. */
+    fun ventsLine(at: String, sent: BookingTravelSetting?, plans: List<BookingTravelSetting>?): String =
+        "schedule vents at=$at sent=${sent?.let { "${it.btId.coerceIn(0, 99)}:${vents(it)}" } ?: "-"} slots=" +
+            (if (plans.isNullOrEmpty()) "none" else plans.take(10).joinToString(",") { "${it.btId.coerceIn(0, 99)}:${vents(it)}" })
 
     /** The charging plan's read-back: its command and who wrote it last, as categories. */
     fun charge(command: String?, dataSource: String?): String =

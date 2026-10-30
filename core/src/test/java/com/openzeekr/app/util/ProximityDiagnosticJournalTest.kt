@@ -228,6 +228,22 @@ class ProximityDiagnosticJournalTest {
             ProximityDiagnosticJournal.event("prox", "very-deep proof held: MOVING from the drive only (no step or walk since)"))
     }
 
+    @Test fun theDriveFlagRuleTheCancelledCloudLockAndThePlanMeasurementsAreJournaledAsCategories() {
+        // 0.4.12.
+        assertEquals("GNSS_CAR_POSITION kept", ProximityDiagnosticJournal.event("prox", "gnss: car position kept (the drive flag is older than the parking)"))
+        assertEquals("GNSS_CAR_POSITION kept shadow", ProximityDiagnosticJournal.event("prox", "shadow: gnss: car position kept (the drive flag is older than the parking)"))
+        assertEquals("CLOUD_LOCK_CANCELLED veto",
+            ProximityDiagnosticJournal.event("prox", "ble-departure: Lock vetoed - the pending cloud Lock is cancelled; the route keeps watching"))
+        assertEquals("SCHEDULE_SEATS at=create sent=5:1=3+15/2=10-15 slots=5:1=3+15/2=10-15",
+            ProximityDiagnosticJournal.event("sched", "schedule seats at=create sent=5:1=3+15/2=10-15 slots=5:1=3+15/2=10-15"))
+        assertEquals("SCHEDULE_VENTS at=load sent=- slots=1:1=10-15/2=10-15",
+            ProximityDiagnosticJournal.event("sched", "schedule vents at=load sent=- slots=1:1=10-15/2=10-15"))
+        assertEquals("PLAN_RUN slot=5 status=read seats=3/0/0/0 climate=on",
+            ProximityDiagnosticJournal.event("sched", "plan run check slot=5 status=read seats=3/0/0/0 climate=on"))
+        assertEquals("PLAN_RUN slot=1 status=unavailable", ProximityDiagnosticJournal.event("sched", "plan run check slot=1 status=unavailable"))
+        assertNull(ProximityDiagnosticJournal.event("sched", "plan run check slot=5 status=read seats=3/0/0/0 climate=on name=private"))
+    }
+
     @Test fun theParallelCloudLockAndTheWalkHoldAreJournaledAsCategories() {
         // 0.4.11 (study A).
         assertEquals("LOCK_ALARM_HELD walk",

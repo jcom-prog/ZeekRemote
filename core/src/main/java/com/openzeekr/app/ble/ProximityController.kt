@@ -289,6 +289,7 @@ class ProximityController internal constructor(
     /** The anchor of this visit joins the car's position (median of the last five); null forgets it (a drive). */
     private fun rememberCarPosition(anchor: DepartureFix?) {
         if (anchor == null) carPosition.forget() else carPosition.remember(anchor)
+        carPositionRememberedAtMs = if (anchor == null) 0L else clock.wallMs()   // 0.4.12 (study D)
         runCatching { stateStore.saveCarFixes(carPosition.toSaved()) }
         Logx.d("prox", "$gnssTag: car position " + if (anchor == null) "forgotten (the phone rides in the car)"
             else "remembered (${carPosition.count} anchors, acc %.0f)".format(carPosition.position?.accuracyM ?: 0f))
@@ -299,7 +300,20 @@ class ProximityController internal constructor(
      *  distances from the car's last position for the policies, or null without a usable fix. */
     private fun observeLockedSideGnss(now: Long, smoothed: Int, unlockThresh: Int): GnssReading? {
         if (!OwnRules.enabled || !OwnRules.gnssRules || OwnRules.gnssFarM <= 0.0) return null
-        if (motion.vehicleMotion && carPosition.position != null) rememberCarPosition(null)
+        // 0.4.12 (study D, field 29/10): the position remembered at the parking was wiped 0.18 s later by the drive's
+        // lingering IN_VEHICLE flag, which only Android steps or an Activity Recognition transition clear (nine of 21 times in
+        // the field). A drive wipes the position only when its flag came up AFTER the position was remembered; the flag of the
+        // drive that ended at this parking does not. A new parking place replaces the kept anchors (CarPositionMemory).
+        val vm = motion.vehicleMotion
+        if (vm && vehicleMotionSinceMs == 0L) vehicleMotionSinceMs = now
+        if (!vm) { vehicleMotionSinceMs = 0L; carPositionKeptLogged = false }
+        if (vm && carPosition.position != null) {
+            if (vehicleMotionSinceMs > carPositionRememberedAtMs) rememberCarPosition(null)
+            else if (!carPositionKeptLogged) {
+                carPositionKeptLogged = true
+                Logx.d("prox", "$gnssTag: car position kept (the drive flag is older than the parking)")
+            }
+        }
         val car = carPosition.position ?: return null
         if (!armedUnlocked && smoothed >= unlockThresh - OWN_BAND_DB) {
             if (now - lastInBandAtMs > 10_000L) inBandWatchFromMs = now   // a new in-band episode: a fresh budget
@@ -1628,6 +1642,10 @@ class ProximityController internal constructor(
     /** 0.4.11 (study A): the deep and walk holds granted this unlock, in ms (bounded by [DEPARTURE_ALARM_DEEP_HOLD_TOTAL_MS]). */
     private var departureAlarmDeepHoldMs = 0L
     private var driveMotionLogged = false
+    // 0.4.12 (study D, field 29/10): since when the drive flag reads true, and when the car's position was remembered.
+    private var vehicleMotionSinceMs = 0L
+    private var carPositionRememberedAtMs = 0L
+    private var carPositionKeptLogged = false
 
     /**
      * Walked away without any motion or step signal (S24+ screen off): once the link shows a
@@ -2891,16 +2909,18 @@ class ProximityController internal constructor(
                         if (fresh >= STRONG_NEAR_DIAGNOSTIC_RSSI) markStrongNear()
                     }
                 }
-                var handOver = false   // 0.4.11: a veto hands over to the pending cloud Lock (its own check sees the same reading)
                 lockVeto(lastFreshRssi.takeIf { ble.state.value == DkBleManager.State.SESSION_READY })?.let { why ->
                     spendBleProof(lastFreshRssi)
-                    if (parallelCloud != null) { Logx.d("prox", "$reason: key loop hands over to the pending cloud Lock (vetoed: $why)"); handOver = true; return@let }
+                    // 0.4.12 (study D round 2): a veto says the user may be at the car. 0.4.11 handed over to the pending cloud Lock,
+                    // whose own check saw the same veto, warned at once and suspended the BLE route for the epoch; with the drive
+                    // flag in every simulated world the gate case then locked 13 instead of 20 of 24 runs. The pending cloud Lock is
+                    // cancelled and the loop ends as in 0.4.10: a silent notice, the proof spent, the route keeps watching.
+                    if (parallelCloud != null) { parallelCloud.cancel(); Logx.d("prox", "$reason: Lock vetoed - the pending cloud Lock is cancelled; the route keeps watching") }
                     val posted = alerts.show(LockAlertPolicy.Event.PROXIMITY_RECOVERED_BEFORE_LOCK)
                     Logx.w("prox", "$reason: Lock vetoed - $why; user at the car; NO LOCK SENT; reminderPosted=$posted")
                     lockJob = null
                     return@launch
                 }
-                if (handOver) break
                 // The 5 s grace only applies to GNSS-started loops: a BLE-route Lock needs the
                 // fresh confirming reading on EVERY attempt, including the first one.
                 if ((reason == "ble-departure" || lastStrongNearAtMs > departureProofAtMs ||

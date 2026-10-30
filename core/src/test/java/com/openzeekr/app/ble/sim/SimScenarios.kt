@@ -282,6 +282,12 @@ internal object SimScenarios {
             listOf(Mark("-"), PhoneInCar(60_000), CarUnlocksItself, OpenDoor, Stand(3_000), Shuffle(5_000), Mark("expect-lock"),
                 Walk(6.0, 0.8), Stand(40000, Facing.AWAY, -2.0), Leg.Obstacle(10.0), Walk(7.0, 0.8),
                 Stand(25000, Facing.AWAY), Walk(27.0, 1.2), Stand(150_000, Facing.AWAY, -4.0, indoor = true)), carRefusesKeyLock = true),
+        // 0.4.12 (study D): home by car, a while inside, then back to the car - does the car's position survive the parking (the
+        // drive's lingering IN_VEHICLE flag wiped it in the field, 29/10) and does the next approach still open in time?
+        Scenario("G3 drive home, 25 m inside 3 min, back to the car", "drive; parked; 5 s; 25 m inside; 3 min; back to the car; open", 2.0,
+            listOf(Mark("-"), PhoneInCar(60_000), CarUnlocksItself, OpenDoor, Stand(3_000), Shuffle(5_000), Mark("expect-lock"),
+                Walk(25.0, 1.2), Stand(180_000, Facing.AWAY, -4.0, indoor = true), Mark("expect-unlock"), Walk(1.0, 1.3),
+                Stand(4_000), OpenDoor, Stand(20_000, shadowDb = -6.0))),
     )
 
     /** W2 (24/10): the watch companion's hand-overs, on the phone side (the watch's own key acts; the phone stands down

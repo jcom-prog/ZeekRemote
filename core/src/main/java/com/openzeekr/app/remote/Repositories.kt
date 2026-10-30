@@ -728,6 +728,9 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
                     com.openzeekr.app.util.Logx.d("sched", ScheduleDiagnostics.shapeLine("load", null, plans))
                     // 0.3.17: the seat heating per plan (seat codes and levels only).
                     com.openzeekr.app.util.Logx.d("sched", ScheduleDiagnostics.seatsLine("load", null, plans))
+                    // 0.4.12: the ventilation entries too, and the plan moments for the status read after each plan's time.
+                    com.openzeekr.app.util.Logx.d("sched", ScheduleDiagnostics.ventsLine("load", null, plans))
+                    PlanRunWatch.update(plans)
                 }
             }
         }
@@ -828,6 +831,8 @@ class ScheduleRepository(private val store: ConfigStore, private val client: Api
                         // 0.3.14: the plan sent and the car's last read-back, as flags and counts only.
                         com.openzeekr.app.util.Logx.d("sched", ScheduleDiagnostics.shapeLine(kind.name.lowercase(), setting, last))
                         com.openzeekr.app.util.Logx.d("sched", ScheduleDiagnostics.seatsLine(kind.name.lowercase(), setting, last))
+                        com.openzeekr.app.util.Logx.d("sched", ScheduleDiagnostics.ventsLine(kind.name.lowercase(), setting, last))   // 0.4.12
+                        last?.let { PlanRunWatch.update(it) }
                     }
                 } ?: error(ScheduleWrites.BUSY)
             }
