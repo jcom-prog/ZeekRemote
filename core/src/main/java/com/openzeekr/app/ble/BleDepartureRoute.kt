@@ -31,6 +31,7 @@ internal class BleDepartureRoute private constructor(lockThreshold: Int) {
 
     /** 0.3.20: see [BleDepartureEvidence.deepProofRunningMs]. */
     fun deepProofRunningMs(nowMs: Long): Long? = evidence.deepProofRunningMs(nowMs)
+    fun walkProofRunningMs(nowMs: Long): Long? = evidence.walkProofRunningMs(nowMs)   // 0.4.11
 
     /** 0.3.20: see [BleDepartureEvidence.driveMotionHeld]. */
     val driveMotionHeld: Boolean get() = evidence.driveMotionHeld

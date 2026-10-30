@@ -392,6 +392,16 @@ class BleDepartureEvidenceTest {
         assertNull("a shallower reading ends it", f.e.deepProofRunningMs(f.t))
     }
 
+    @Test fun aWalkProofSaysHowLongItsWindowHasRun() {
+        // 0.4.11 (study A): the departure alarm holds while this window runs.
+        val f = arrivedFeed()
+        assertNull(f.e.walkProofRunningMs(f.t))
+        f.run(3_000, { -88 })
+        assertTrue(f.e.walkProofRunningMs(f.t)!! in 2_600L..3_000L)
+        f.run(400, { -78 })
+        assertNull("a reading above the lock level ends it", f.e.walkProofRunningMs(f.t))
+    }
+
     // ---- 0.3.1: a proven arrival (steps + rise) as the at-the-car anchor ----
 
     @Test fun aBackPocketDepartureNeedsAProvenArrivalAndThenRecedesFromIt() {

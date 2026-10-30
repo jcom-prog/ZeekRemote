@@ -267,6 +267,9 @@ internal sealed class Leg {
     data class WalkPeak(val ms: Long, val boostDb: Double, val speedMps: Double = 1.3) : Leg()
     /** Busy on the spot while moving (locking a door or a gate): Activity Recognition sees walking. */
     data class Fidget(val ms: Long, val shadowDb: Double = 0.0) : Leg()
+    /** 0.4.11 (study A, field 29/10): a gate, wall or door closes between phone and car from here on: [db] extra loss
+     *  until the next Obstacle (0.0 clears it). Field: about -85 at the garden gate, 15-20 dB more behind it. */
+    data class Obstacle(val db: Double) : Leg()
     object OpenDoor : Leg()
     /** The car is opened without the phone key (inside handle, card, stock app). */
     object ReopenByOther : Leg()
@@ -400,6 +403,7 @@ internal class SimWorld(
     var walking = false; private set
     var walkSpeed = 0.0; private set
     private var extraShadowDb = 0.0
+    private var obstacleDb = 0.0   // 0.4.11: Leg.Obstacle, persists across legs
     var indoor = false; private set
     /** Screen on? The field phone is in a pocket (off); a stress world may use it while walking. */
     private val screenOnWhileWalking = SimRandom(seed * 7 + 0x5C2EE7L).chance(physics.screenOnWhileWalkingP)
@@ -419,7 +423,7 @@ internal class SimWorld(
         val d = max(distanceM, 0.7)
         // Fitted on the field pocket readings: ~-79 at 2.5 m, -83 at 5 m, -85 at 7 m (approach ARM),
         // -87 at 10 m, -88..-90 facing at 15 m, -92..-98 walking away at 15-20 m (field logs).
-        trueRssi = -71.0 - physics.pathSlope * log10(d) + carryNow.db + facing.db + extraShadowDb + fade + physics.phoneOffsetDb
+        trueRssi = -71.0 - physics.pathSlope * log10(d) + carryNow.db + facing.db + extraShadowDb - obstacleDb + fade + physics.phoneOffsetDb
         // 0.3.11 worst case: the strong spot (front door) while the user stands there.
         if (physics.spotDb != 0.0 && (!walking || physics.spotWhileWalking) &&
             distanceM in SimPhysics.SPOT_FROM_M..SimPhysics.SPOT_TO_M) trueRssi += physics.spotDb
@@ -1543,7 +1547,7 @@ internal class SimWorld(
         if (appAlive) killApp()
         savedState = null
         if (!btOn) btOn = true
-        walking = false; facing = Facing.TOWARD; extraShadowDb = 0.0; indoor = false
+        walking = false; facing = Facing.TOWARD; extraShadowDb = 0.0; indoor = false; obstacleDb = 0.0
         distanceM = startM
         run(4_000L)
         startApp()
@@ -1592,6 +1596,7 @@ internal class SimWorld(
                     extraShadowDb = leg.shadowDb
                     run(leg.ms); walking = false; extraShadowDb = 0.0
                 }
+                is Leg.Obstacle -> { obstacleDb = leg.db; record("OBSTACLE", "%.0f dB".format(leg.db)); run(100) }
                 Leg.OpenDoor -> { car.openDoor(); run(100) }
                 is Leg.PhoneInCar -> {
                     // In the cabin, no body loss: the outdoor path-loss fit reads ~-69 at 0.7 m.

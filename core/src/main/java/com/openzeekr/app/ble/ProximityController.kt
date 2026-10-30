@@ -905,6 +905,7 @@ class ProximityController internal constructor(
         linkDepartureJob?.cancel(); linkDepartureJob = null
         farNoMotionCheck?.cancel(); farNoMotionCheck = null; farNoMotionCheckAtMs = 0L
         farNoMotionAttempts = 0; departureAlarmHolds = 0; departureAlarmDeepHolds = 0; driveMotionLogged = false
+        departureAlarmDeepHoldMs = 0L
         departureProofAtMs = 0L
         gnssWindowsThisEpoch = 0; gnssBudgetLogged = false
         bleRoute = BleDepartureRoute.forLockThreshold(config().sensitivityLockRssi)
@@ -1624,6 +1625,8 @@ class ProximityController internal constructor(
     private var departureAlarmHolds = 0
     // 0.3.20: the departure alarm waited for a step-free very-deep proof under way (once per unlock).
     private var departureAlarmDeepHolds = 0
+    /** 0.4.11 (study A): the deep and walk holds granted this unlock, in ms (bounded by [DEPARTURE_ALARM_DEEP_HOLD_TOTAL_MS]). */
+    private var departureAlarmDeepHoldMs = 0L
     private var driveMotionLogged = false
 
     /**
@@ -1825,12 +1828,31 @@ class ProximityController internal constructor(
             }
             // 0.3.20 (study J, field 19/10): a step-free very-deep proof under way owns the next seconds - the alarm
             // sounded 0.8 s before such a Lock. Once per unlock, bounded by what is left of that proof.
-            if (departureAlarmDeepHolds < 1) {
+            // 0.4.11 (study A, field 29/10): the one hold ran out 1.2 s before the very-deep proof confirmed - up to
+            // [DEPARTURE_ALARM_MAX_DEEP_HOLDS] holds while a proof still runs, together at most [DEPARTURE_ALARM_DEEP_HOLD_TOTAL_MS].
+            if (departureAlarmDeepHolds < DEPARTURE_ALARM_MAX_DEEP_HOLDS &&
+                (departureAlarmDeepHolds == 0 || departureAlarmDeepHoldMs < DEPARTURE_ALARM_DEEP_HOLD_TOTAL_MS)) {
                 val runMs = bleRoute?.deepProofRunningMs(clock.elapsedMs())
                 if (runMs != null && runMs >= DEEP_PROOF_HOLD_MIN_RUN_MS) {
                     departureAlarmDeepHolds++
                     val waitMs = (BleDepartureEvidence.VERY_DEEP_MS - runMs).coerceAtLeast(0L) + DEEP_PROOF_HOLD_SLACK_MS
+                    departureAlarmDeepHoldMs += waitMs
                     Logx.d("prox", "departure alarm held: a very-deep proof is under way (${runMs / 1000}s); re-checking in ${waitMs / 1000}s")
+                    departureAlarmJob = null
+                    armDepartureAlarm(waitMs)
+                    return@launch
+                }
+            }
+            // 0.4.11 (study A): the walk route's deep-far window under way owns the next seconds too, within the same
+            // bounds (the control without a gate sounded the alarm 4 s before that route's Lock in 24 of 24 runs).
+            if (departureAlarmDeepHolds < DEPARTURE_ALARM_MAX_DEEP_HOLDS &&
+                (departureAlarmDeepHolds == 0 || departureAlarmDeepHoldMs < DEPARTURE_ALARM_DEEP_HOLD_TOTAL_MS)) {
+                val runMs = bleRoute?.walkProofRunningMs(clock.elapsedMs())
+                if (runMs != null && runMs >= DEEP_PROOF_HOLD_MIN_RUN_MS) {
+                    departureAlarmDeepHolds++
+                    val waitMs = (BleDepartureEvidence.MIN_WEAK_MS - runMs).coerceAtLeast(0L) + DEEP_PROOF_HOLD_SLACK_MS
+                    departureAlarmDeepHoldMs += waitMs
+                    Logx.d("prox", "departure alarm held: a walk-away proof is under way (${runMs / 1000}s); re-checking in ${waitMs / 1000}s")
                     departureAlarmJob = null
                     armDepartureAlarm(waitMs)
                     return@launch
@@ -2798,17 +2820,37 @@ class ProximityController internal constructor(
             var attempt = 0
             var notExecuted = 0
             var lastFreshRssi: Int? = null
+            // 0.4.11 (study A; field 29/10, two incidents: 12 of 12 key Locks "received, not executed", the cloud locked): on
+            // a BLE departure proof the cloud Lock runs beside the key Lock from the start. It keeps its own departure check
+            // (fresh reading, K1 veto, the fresh-proof window); whichever confirms first ends the loop, and while it is pending
+            // the key loop never raises its own "no Lock sent" warning but hands over to its outcome (the cloud path verifies
+            // and warns itself). The watch's hand-over (T1) cancels it like the rest of the loop.
+            var parallelCloud: kotlinx.coroutines.Deferred<Boolean>? = null
+            var parallelCloudResult: Boolean? = null
+            if (reason == "ble-departure") {
+                Logx.d("prox", "ble-departure: cloud Lock in parallel with the key Lock")
+                parallelCloud = async { verifyCloudLock(reason, bleProofAtMs = departureProofAtMs).also { parallelCloudResult = it } }
+            }
             val maxAttempts = if (ble.state.value == DkBleManager.State.SESSION_READY)
                 MAX_LOCK_ATTEMPTS else 1 // a lost radio should reach the cloud fallback promptly
             while (isActive && attempt < maxAttempts) {
                 // 0.4.3 (T1): a hand-over that starts mid-attempt: no reconnect kick, no Lock, no cloud fallback.
                 if (com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value) {
                     Logx.w("prox", "watch: link stood down (lock loop $reason)")
+                    parallelCloud?.cancel()   // 0.4.11: the watch's report decides, never a cloud Lock of ours (T1)
                     lockJob = null
                     return@launch
                 }
                 // Plan H5: the car reported locked since this Lock started (its own push, a fob, a
                 // manual Lock): that is the confirmation, not a reason to retry or alarm.
+                if (parallelCloudResult == true) {   // 0.4.11: the parallel cloud Lock verified the car locked
+                    confirmed = true
+                    Logx.d("prox", "$reason: the parallel cloud Lock verified the car locked -> Lock confirmed")
+                    policies("onAutomaticLockProvenDeparture") { it.onAutomaticLockProvenDeparture(clock.wallMs()) }
+                    departureAlarmJob?.cancel(); departureAlarmJob = null
+                    alerts.silenceAlarm()
+                    break
+                }
                 if (lastCarLockedReportAtMs >= lockStartedAtMs) {
                     confirmed = true
                     Logx.d("prox", "$reason: the car reports locked (status push) -> Lock confirmed")
@@ -2819,6 +2861,7 @@ class ProximityController internal constructor(
                 }
                 if (clock.wallMs() - departureProofAtMs > 5_000L &&
                     !bleLockAuthorized() && !confirmPhysicalDeparture()) {
+                    if (parallelCloud != null) { Logx.d("prox", "$reason: key loop hands over to the pending cloud Lock (proof expired)"); break }
                     val posted = alerts.show(LockAlertPolicy.Event.DEPARTURE_UNVERIFIED)
                     Logx.w("prox", "$reason: departure proof expired before BLE Lock; " +
                         "NO LOCK SENT; reminderPosted=$posted")
@@ -2848,18 +2891,22 @@ class ProximityController internal constructor(
                         if (fresh >= STRONG_NEAR_DIAGNOSTIC_RSSI) markStrongNear()
                     }
                 }
+                var handOver = false   // 0.4.11: a veto hands over to the pending cloud Lock (its own check sees the same reading)
                 lockVeto(lastFreshRssi.takeIf { ble.state.value == DkBleManager.State.SESSION_READY })?.let { why ->
                     spendBleProof(lastFreshRssi)
+                    if (parallelCloud != null) { Logx.d("prox", "$reason: key loop hands over to the pending cloud Lock (vetoed: $why)"); handOver = true; return@let }
                     val posted = alerts.show(LockAlertPolicy.Event.PROXIMITY_RECOVERED_BEFORE_LOCK)
                     Logx.w("prox", "$reason: Lock vetoed - $why; user at the car; NO LOCK SENT; reminderPosted=$posted")
                     lockJob = null
                     return@launch
                 }
+                if (handOver) break
                 // The 5 s grace only applies to GNSS-started loops: a BLE-route Lock needs the
                 // fresh confirming reading on EVERY attempt, including the first one.
                 if ((reason == "ble-departure" || lastStrongNearAtMs > departureProofAtMs ||
                     clock.wallMs() - departureProofAtMs > 5_000L) &&
                     !bleProofFresh && !confirmPhysicalDeparture()) {
+                    if (parallelCloud != null) { Logx.d("prox", "$reason: key loop hands over to the pending cloud Lock (no fresh proof)"); break }
                     // Back at the car: inform silently. Otherwise the departure is unverified and
                     // the car is still open while the user leaves: sound the alarm.
                     val posted = alerts.show(
@@ -2914,9 +2961,11 @@ class ProximityController internal constructor(
             if (!confirmed && com.openzeekr.app.wear.WearLinkArbiter.linkSuspended.value) {
                 // 0.4.3 (T1): the watch took the car meanwhile - its own report decides, never a cloud Lock of ours.
                 Logx.w("prox", "watch: link stood down (no cloud lock $reason)")
+                parallelCloud?.cancel()   // 0.4.11
                 lockJob = null
                 return@launch
             }
+            if (confirmed) parallelCloud?.cancel()   // 0.4.11: the key Lock confirmed first
             if (!confirmed) {
                 // The user may have returned while a BLE reconnect was failing. A position that
                 // proved departure before those retries cannot authorize a later cloud command;
@@ -2928,8 +2977,8 @@ class ProximityController internal constructor(
                 // A fresh BLE departure proof backs the cloud Lock when the key link failed right
                 // after it (field: proof at -104, the Lock write failed and the link
                 // dropped; GNSS could not confirm, so nothing locked the car).
-                val cloudStatusLocked = verifyCloudLock(reason,
-                    bleProofAtMs = if (reason == "ble-departure") departureProofAtMs else 0L)
+                val cloudStatusLocked = parallelCloud?.let { pc -> runCatching { pc.await() }.getOrDefault(false) }   // 0.4.11: its outcome
+                    ?: verifyCloudLock(reason, bleProofAtMs = if (reason == "ble-departure") departureProofAtMs else 0L)
                 // Plan H5: the user's manual Lock (or the car's own, handled there) ended this epoch
                 // meanwhile: nothing left to warn about.
                 if (!armedUnlocked) {
@@ -3383,6 +3432,9 @@ class ProximityController internal constructor(
         /** 0.3.20: a very-deep proof running this long holds the departure alarm until it can complete, plus this slack. */
         private const val DEEP_PROOF_HOLD_MIN_RUN_MS = 3_000L
         private const val DEEP_PROOF_HOLD_SLACK_MS = 3_000L
+        /** 0.4.11 (study A): deep and walk holds of the departure alarm per unlock, and their total. */
+        private const val DEPARTURE_ALARM_MAX_DEEP_HOLDS = 2
+        private const val DEPARTURE_ALARM_DEEP_HOLD_TOTAL_MS = 20_000L
         private const val SHADOW_REARM_MS = 15_000L
         private const val STRONG_NEAR_DIAGNOSTIC_RSSI = -78
         private const val CLOUD_LOCK_MAX_REQUESTS = 2

@@ -278,6 +278,12 @@ internal class ProximityDiagnosticJournal(private val file: File, private val ma
                     message == "ble departure confirmed" -> "BLE_DEPARTURE_CONFIRMED"
                     // 0.3.20 (study J): the alarm waited for a very-deep proof; the drive's motion held one back.
                     message.startsWith("departure alarm held: a very-deep proof is under way") -> "LOCK_ALARM_HELD very_deep"
+                    // 0.4.11 (study A): the alarm also waits for the walk route's window; the cloud Lock beside the key Lock.
+                    message.startsWith("departure alarm held: a walk-away proof is under way") -> "LOCK_ALARM_HELD walk"
+                    message == "ble-departure: cloud Lock in parallel with the key Lock" -> "CLOUD_LOCK_PARALLEL"
+                    message == "ble-departure: the parallel cloud Lock verified the car locked -> Lock confirmed" -> "AUTO_LOCK_CLOUD_VERIFIED parallel"
+                    message.startsWith("ble-departure: key loop hands over to the pending cloud Lock (") -> "LOCK_HANDOVER " + when {
+                        message.endsWith("(proof expired)") -> "expired"; message.contains("(vetoed") -> "vetoed"; else -> "unproven" }
                     message.startsWith("very-deep proof held: MOVING from the drive only") -> "BLE_DEPARTURE_HELD drive_motion"
                     message.startsWith("lock alarm ") -> lockAlarm.matchEntire(message)
                         ?.let { "LOCK_ALARM ${it.groupValues[1]} ${it.groupValues[2]}" }

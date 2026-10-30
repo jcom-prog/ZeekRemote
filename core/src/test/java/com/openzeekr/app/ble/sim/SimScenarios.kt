@@ -255,6 +255,33 @@ internal object SimScenarios {
             approachAndOpen() + listOf(Mark("expect-lock"), Walk(22.0), Stand(15_000, Facing.AWAY), Mark("-"), Walk(10.0, 1.0),
                 Mark("expect-stay-locked"), Stand(20_000, Facing.AWAY, -4.0), Stand(130_000, Facing.TOWARD, 5.0),
                 Mark("expect-locked-by-end"), Walk(40.0), Stand(60_000, Facing.AWAY))),
+        // 0.4.11 (study A, field 29/10): home by car; out; a few metres to the garden gate; standing there unlocking it (body
+        // between phone and car); through it; the gate closes between phone and car (15-20 dB); locking it; to the back door;
+        // inside. The car locked well behind the gate (idle sampling, the 12 s very-deep window, two key Locks the car did
+        // not execute) and the departure alarm sounded a second before the proof confirmed.
+        Scenario("G2a drive home, gate 6 m 25 s, behind the gate 12 s, 20 m, inside", "drive; parked; 6 m; 25 s at the gate; gate closes (10 dB); 12 s; 20 m; inside", 2.0,
+            listOf(Mark("-"), PhoneInCar(60_000), CarUnlocksItself, OpenDoor, Stand(3_000), Shuffle(5_000), Mark("expect-lock"),
+                Walk(6.0, 0.8), Stand(25000, Facing.AWAY, -2.0), Leg.Obstacle(10.0), Walk(7.0, 0.8),
+                Stand(12000, Facing.AWAY), Walk(27.0, 1.2), Stand(150_000, Facing.AWAY, -4.0, indoor = true))),
+        Scenario("G2b gate, the car ignores key Locks", "G2a; every key Lock 'received, not executed' (field 29/10: all of them)", 2.0,
+            listOf(Mark("-"), PhoneInCar(60_000), CarUnlocksItself, OpenDoor, Stand(3_000), Shuffle(5_000), Mark("expect-lock"),
+                Walk(6.0, 0.8), Stand(25000, Facing.AWAY, -2.0), Leg.Obstacle(10.0), Walk(7.0, 0.8),
+                Stand(12000, Facing.AWAY), Walk(27.0, 1.2), Stand(150_000, Facing.AWAY, -4.0, indoor = true)), carRefusesKeyLock = true),
+        Scenario("G2c heavy gate 16 dB", "G2a with a heavier gate (the link at its edge behind it)", 2.0,
+            listOf(Mark("-"), PhoneInCar(60_000), CarUnlocksItself, OpenDoor, Stand(3_000), Shuffle(5_000), Mark("expect-lock"),
+                Walk(6.0, 0.8), Stand(25000, Facing.AWAY, -2.0), Leg.Obstacle(16.0), Walk(7.0, 0.8),
+                Stand(12000, Facing.AWAY), Walk(27.0, 1.2), Stand(150_000, Facing.AWAY, -4.0, indoor = true))),
+        Scenario("G2d no gate: 6 m, 25 s, 20 m, inside", "control: the same walk and stops without a gate", 2.0,
+            listOf(Mark("-"), PhoneInCar(60_000), CarUnlocksItself, OpenDoor, Stand(3_000), Shuffle(5_000), Mark("expect-lock"),
+                Walk(6.0, 0.8), Stand(25000, Facing.AWAY, -2.0), Walk(27.0, 1.2), Stand(150_000, Facing.AWAY, -4.0, indoor = true))),
+        Scenario("G2e gate at 9 m", "G2a with the gate at 9 m (the signal in the band while standing)", 2.0,
+            listOf(Mark("-"), PhoneInCar(60_000), CarUnlocksItself, OpenDoor, Stand(3_000), Shuffle(5_000), Mark("expect-lock"),
+                Walk(9.0, 0.8), Stand(25000, Facing.AWAY, -2.0), Leg.Obstacle(10.0), Walk(10.0, 0.8),
+                Stand(12000, Facing.AWAY), Walk(30.0, 1.2), Stand(150_000, Facing.AWAY, -4.0, indoor = true))),
+        Scenario("G2f gate 40 s, behind it 25 s, car ignores key Locks", "the owner's sketch at its longest; key Locks not executed", 2.0,
+            listOf(Mark("-"), PhoneInCar(60_000), CarUnlocksItself, OpenDoor, Stand(3_000), Shuffle(5_000), Mark("expect-lock"),
+                Walk(6.0, 0.8), Stand(40000, Facing.AWAY, -2.0), Leg.Obstacle(10.0), Walk(7.0, 0.8),
+                Stand(25000, Facing.AWAY), Walk(27.0, 1.2), Stand(150_000, Facing.AWAY, -4.0, indoor = true)), carRefusesKeyLock = true),
     )
 
     /** W2 (24/10): the watch companion's hand-overs, on the phone side (the watch's own key acts; the phone stands down
@@ -330,6 +357,7 @@ internal object SimScenarios {
         FieldCase("#33 20/10 0.3.20", "no open on approach: 133 at the edge, then 24 s without a scan (scan-start ration)", listOf("F53", "F07", "F17"),
             "world edge-133"),
         FieldCase("#34 22/10 0.3.24", "auto-Lock, then standing 8-10 m away: the signal return reopened the car behind a motionless phone", listOf("F54", "F14", "F03")),
+        FieldCase("#35 29/10 0.4.10", "home by car; standing at the garden gate; the gate closes between phone and car: a late Lock behind it, the alarm just before the proof", listOf("G2b", "G2a", "G2d")),
     )
 
     /**

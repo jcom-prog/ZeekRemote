@@ -107,6 +107,8 @@ internal class BleDepartureEvidence(
     /** 0.3.20: how long a step-free very-deep proof has been running (the longer of its two windows), or null. */
     fun deepProofRunningMs(nowMs: Long): Long? =
         listOf(veryDeepSinceMs, stillDeepSinceMs).filter { it != UNSET }.maxOfOrNull { nowMs - it }
+    /** 0.4.11 (study A): how long the walk route's deep-far window has been running, or null (the alarm holds for it). */
+    fun walkProofRunningMs(nowMs: Long): Long? = if (weakSinceMs != UNSET) nowMs - weakSinceMs else null
 
     /**
      * @param nowMs monotonic receipt time of a *fresh* GATT reading (never a cached value)

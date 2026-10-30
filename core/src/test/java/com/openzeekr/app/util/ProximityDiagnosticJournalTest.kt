@@ -228,6 +228,21 @@ class ProximityDiagnosticJournalTest {
             ProximityDiagnosticJournal.event("prox", "very-deep proof held: MOVING from the drive only (no step or walk since)"))
     }
 
+    @Test fun theParallelCloudLockAndTheWalkHoldAreJournaledAsCategories() {
+        // 0.4.11 (study A).
+        assertEquals("LOCK_ALARM_HELD walk",
+            ProximityDiagnosticJournal.event("prox", "departure alarm held: a walk-away proof is under way (4s); re-checking in 6s"))
+        assertEquals("CLOUD_LOCK_PARALLEL", ProximityDiagnosticJournal.event("prox", "ble-departure: cloud Lock in parallel with the key Lock"))
+        assertEquals("AUTO_LOCK_CLOUD_VERIFIED parallel",
+            ProximityDiagnosticJournal.event("prox", "ble-departure: the parallel cloud Lock verified the car locked -> Lock confirmed"))
+        assertEquals("LOCK_HANDOVER expired",
+            ProximityDiagnosticJournal.event("prox", "ble-departure: key loop hands over to the pending cloud Lock (proof expired)"))
+        assertEquals("LOCK_HANDOVER vetoed",
+            ProximityDiagnosticJournal.event("prox", "ble-departure: key loop hands over to the pending cloud Lock (vetoed: fresh reading -63 at the car)"))
+        assertEquals("LOCK_HANDOVER unproven",
+            ProximityDiagnosticJournal.event("prox", "ble-departure: key loop hands over to the pending cloud Lock (no fresh proof)"))
+    }
+
     @Test fun cloudLockFailureAndReopenAreJournaledAsCategoriesOnly() {
         assertEquals("CLOUD_LOCK_FAILED IDLE",
             ProximityDiagnosticJournal.event("ctl", "LOCK: cloud request failed (key link IDLE)"))

@@ -630,6 +630,15 @@ jobs:
           grep -Fq 'startLockLoop("lock-retry")' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
           grep -Fq 'fun showWithDetail(event: LockAlertPolicy.Event, detail: String)' core/src/main/java/com/openzeekr/app/ble/ProximityPorts.kt
           grep -Fq 'REFLECT strong=' core/src/main/java/com/openzeekr/app/util/ProximityDiagnosticJournal.kt
+          # 0.4.11 (study A): the cloud Lock beside the key Lock on a BLE departure proof (with hand-over), the alarm hold for the walk window, the gate scenarios
+          grep -Fq '## 0.4.11' CHANGELOG.md
+          grep -Fq 'cloud Lock in parallel with the key Lock' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'hands over to the pending cloud Lock' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'a walk-away proof is under way' core/src/main/java/com/openzeekr/app/ble/ProximityController.kt
+          grep -Fq 'fun walkProofRunningMs(nowMs: Long): Long?' core/src/main/java/com/openzeekr/app/ble/BleDepartureEvidence.kt
+          grep -Fq 'data class Obstacle(val db: Double) : Leg()' core/src/test/java/com/openzeekr/app/ble/sim/SimWorld.kt
+          grep -Fq 'Scenario("G2a drive home' core/src/test/java/com/openzeekr/app/ble/sim/SimScenarios.kt
+          grep -Fq 'class SimBehindTheGateTest' core/src/test/java/com/openzeekr/app/ble/sim/SimBehindTheGateTest.kt
           grep -Fq 'fun atCar(): Boolean?' core/src/main/java/com/openzeekr/app/guard/GuardAutomaton.kt
           grep -Fq 'waiting until the car is parked and you have left' core/src/main/java/com/openzeekr/app/guard/GuardAutomaton.kt
           grep -Fq 'guard: on confirmed late' core/src/main/java/com/openzeekr/app/guard/GuardAutomaton.kt
@@ -682,7 +691,7 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           BADGING=$("$AAPT" dump badging "$APK")
-          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='174' versionName='0.4.10-work'"
+          printf '%s\n' "$BADGING" | grep -F "package: name='com.openzeekr.app.test' versionCode='175' versionName='0.4.11-work'"
           printf '%s\n' "$BADGING" | grep -E "^application: label='ZeekRemote' icon='[^']*ic_launcher_profiel[^']*'"
           printf '%s\n' "$BADGING" | grep -Fx "sdkVersion:'26'"
           printf '%s\n' "$BADGING" | grep -Fx "targetSdkVersion:'34'"

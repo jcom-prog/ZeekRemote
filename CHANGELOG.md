@@ -2,6 +2,12 @@
 
 Wat je per versie merkt, in gewone taal. ZeekRemote is een privé-afsplitsing van [OpenZeekr](https://github.com/borconi/openzeekr) (splitpunt: OpenZeekr 0.1.4) voor één telefoon en één auto; de nadruk ligt op betrouwbaar openen bij het naderen en sluiten bij het weglopen, met een simulator en een regressiepoort als bewaker. Dit logboek bevat geen meetwaarden, tijden, plaatsen of persoonsgegevens; technische details staan in de commits.
 
+## 0.4.11 (alleen telefoon)
+
+- **Sneller dicht als de auto de sleutel-Lock niet uitvoert.** Zodra het vertrek via Bluetooth bewezen is, stuurt de app de Lock ook via de cloud, naast de sleutel; wie het eerst bevestigt, wint. De cloud-Lock houdt zijn eigen controles (verse lezing, nabijheidsveto). Zolang die loopt, meldt de sleutelroute niet zelf "geen Lock gestuurd" maar wacht zij de uitkomst af.
+- **Geen alarm vlak voor een Lock.** Het vertrekalarm wacht ook als het loopbewijs van de gewone route nog loopt: ten hoogste twee keer en samen hoogstens twintig seconden.
+- **Simulator.** Een poort of muur die zich tussen telefoon en auto sluit, zes scenario's naar een veldgeval (uitstappen, stilstaan bij een poort, erdoor, naar binnen), vaste toetsen daarop en een nieuwe poort-baseline. De horloge-app blijft 0.4.3.
+
 ## 0.4.10 (alleen telefoon)
 
 - **Geweigerde Lock: wat de auto zegt.** Weigert de auto een Lock (handmatig of automatisch), dan legt de app vast wat de auto zelf over deuren, motorkap, achterklep en laadklep meldt (alleen codes, niets dat de auto herkenbaar maakt) en zegt de melding waarom: "Car NOT locked" met "The car reports the tailgate open. Close it; ZeekRemote sends the Lock again when the car reports it closed." of "The car reports no open door, bonnet or tailgate. ZeekRemote sends the Lock again shortly."
